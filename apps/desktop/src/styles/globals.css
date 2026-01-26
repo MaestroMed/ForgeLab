@@ -76,6 +76,60 @@
   --glass-border: rgba(255, 255, 255, 0.08);
 }
 
+/* WESTWORLD LAB Theme - Delos Laboratories aesthetic */
+.westworld {
+  /* Backgrounds - Deep space noir */
+  --bg-primary: #0a0e14;
+  --bg-secondary: #0d1219;
+  --bg-tertiary: #111820;
+  --bg-card: #0f151d;
+  
+  /* Typography - High contrast */
+  --text-primary: #e8f4ff;
+  --text-secondary: #8ba4bd;
+  --text-muted: #4a6278;
+  
+  /* Borders - Subtle glow */
+  --border-color: #1a2a3a;
+  --border-color-hover: rgba(0, 212, 255, 0.25);
+  
+  /* Accent - Cyan glacier signature */
+  --accent: #00d4ff;
+  --accent-hover: #00e5ff;
+  --accent-color: #00d4ff;
+  
+  /* Westworld specific effects */
+  --westworld-glow: 0 0 30px rgba(0, 212, 255, 0.15);
+  --westworld-glow-strong: 0 0 50px rgba(0, 212, 255, 0.25);
+  --westworld-grid: rgba(0, 212, 255, 0.03);
+  --westworld-scan: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(0, 212, 255, 0.05) 50%,
+    transparent 100%
+  );
+  
+  /* Gradients */
+  --gradient-viral: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
+  --gradient-danger: linear-gradient(135deg, #ff3366 0%, #ff6699 100%);
+  --gradient-purple: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+  
+  /* Glow effects */
+  --glow-viral: 0 0 20px rgba(0, 212, 255, 0.3);
+  --glow-danger: 0 0 20px rgba(255, 51, 102, 0.3);
+  --glow-accent: 0 0 20px rgba(0, 212, 255, 0.3);
+  
+  /* Buttons */
+  --btn-primary-bg: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
+  --btn-primary-text: #0a0e14;
+  --btn-secondary-bg: #1a2a3a;
+  --btn-secondary-text: #e8f4ff;
+  
+  /* Glass effect */
+  --glass-bg: rgba(10, 14, 20, 0.9);
+  --glass-border: rgba(0, 212, 255, 0.1);
+}
+
 body {
   background-color: var(--bg-primary);
   color: var(--text-primary);

@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     
     # Server
     HOST: str = "127.0.0.1"
-    PORT: int = 7860
+    PORT: int = 8420
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
     
     # Paths
@@ -30,10 +30,21 @@ class Settings(BaseSettings):
     FFPROBE_PATH: str = "ffprobe"
     FORCE_CPU: bool = False
     
-    # Whisper - large-v3 for best quality (slower but ~10GB VRAM)
-    WHISPER_MODEL: str = "large-v3"
-    WHISPER_DEVICE: str = "cuda"  # GPU activé - CUDA 12 installé
-    WHISPER_COMPUTE_TYPE: str = "float16"  # float16, int8, float32
+    # Performance optimizations
+    SKIP_PROXY_IF_NVENC: bool = True  # Skip proxy creation if NVENC available (faster final render)
+    USE_HWACCEL: bool = True  # Use GPU hardware acceleration for decode/encode
+    FFMPEG_NVENC_PRESET: str = "p4"  # NVENC preset (p1=fastest, p7=best quality)
+    FFMPEG_PROXY_PRESET: str = "p1"  # Ultra-fast for proxy
+    
+    # Whisper TURBO - Auto-optimized based on GPU VRAM
+    WHISPER_MODEL: str = "large-v3"  # Best quality (or "distil-large-v3" for speed)
+    WHISPER_DEVICE: str = "cuda"  # GPU enabled
+    WHISPER_COMPUTE_TYPE: str = "int8_float16"  # INT8 quantization (faster + less VRAM)
+    WHISPER_LANGUAGE: str = "fr"  # Default language (FR for streaming content)
+    WHISPER_NUM_WORKERS: int = 2  # Default, auto-detected based on VRAM
+    WHISPER_BATCH_SIZE: int = 16  # Default, auto-detected based on VRAM
+    WHISPER_TURBO_MODE: bool = True  # Enable batched inference for maximum speed
+    WHISPER_AUTO_OPTIMIZE: bool = True  # Auto-detect optimal batch_size/workers from VRAM
     
     # Processing
     PROXY_WIDTH: int = 1280
@@ -44,6 +55,10 @@ class Settings(BaseSettings):
     # Job queue
     MAX_CONCURRENT_JOBS: int = 2
     JOB_TIMEOUT: int = 3600  # 1 hour
+    
+    # Parallel downloads (quick win for 1Gbps connection)
+    MAX_PARALLEL_DOWNLOADS: int = 4  # 4-6 simultaneous downloads
+    DOWNLOAD_CHUNK_CONNECTIONS: int = 8  # yt-dlp aria2c connections per download
     
     # Output
     OUTPUT_WIDTH: int = 1080

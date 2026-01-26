@@ -20,28 +20,164 @@ class ViralityScorer:
         "rhythm": 10,
     }
     
-    # Hook detection patterns
+    # Hook detection patterns - enriched for FR streaming + Esport
     HOOK_PATTERNS = [
         # Questions
         (r"\?$", 3, "ends_with_question"),
-        # French exclamations
-        (r"\b(non mais|attends?|regarde|wesh|putain|bordel|oh mon dieu|c'est pas possible)\b", 2, "french_exclamation"),
+        # French exclamations (classic)
+        (r"\b(non mais|attends?|regarde[zs]?|wesh|wsh|putain|bordel|oh mon dieu|c'est pas possible)\b", 2, "french_exclamation"),
+        # French streaming slang
+        (r"\b(frère|frérot|gars|mec|wallah|sur ma vie|je te jure|jsuis|j'suis)\b", 2, "french_streaming"),
+        # French reactions
+        (r"\b(oh|waouh|naan|nan|ah ouais|c'est chaud|trop bien|genre|tranquille|oklm)\b", 2, "french_reaction"),
         # English exclamations
-        (r"\b(wait|oh my god|holy|no way|what the|insane|crazy)\b", 2, "english_exclamation"),
+        (r"\b(wait|oh my god|holy|no way|what the|insane|crazy|bruh|bro)\b", 2, "english_exclamation"),
         # Direct address
-        (r"\b(tu sais|vous savez|écoute|listen|check this|watch this)\b", 2, "direct_address"),
+        (r"\b(tu sais|vous savez|écoute|listen|check this|watch this|vas-?y|allez)\b", 2, "direct_address"),
         # Setup phrases
-        (r"\b(alors|donc|en fait|basically|so basically)\b", 1, "setup_phrase"),
+        (r"\b(alors|donc|en fait|basically|so basically|du coup|en mode)\b", 1, "setup_phrase"),
+        # Intensifiers FR
+        (r"\b(trop|vraiment|grave|carrément|clairement|littéralement)\b", 1, "intensifier"),
+        # Esport hype phrases
+        (r"\b(c'est fini|c'est gagné|c'est perdu|on a win|on a perdu|ça passe|ça passe pas)\b", 2, "esport_hype"),
+        (r"\b(il est chaud|ils sont chauds|trop clutch|le outplay|la diff)\b", 2, "esport_hype"),
     ]
     
-    # Content tags
+    # Content tags - enriched for FR streaming/gaming + Esport LoL + Karmine Corp
     CONTENT_PATTERNS = [
-        (r"\b(mdr|lol|ptdr|haha|😂|🤣)\b", "humour"),
-        (r"\b(incroyable|dingue|ouf|insane|crazy|unbelievable)\b", "surprise"),
-        (r"\b(rage|énervé|angry|pissed|furieux)\b", "rage"),
-        (r"\b(clutch|win|gg|let's go|victory)\b", "clutch"),
-        (r"\b(débat|argument|versus|vs|contre)\b", "debate"),
-        (r"\b(fail|rip|mort|dead|f in chat)\b", "fail"),
+        # Humour
+        (r"\b(mdr|lol|ptdr|haha|mort de rire|jpp|j'en peux plus|😂|🤣)\b", "humour"),
+        (r"\b(trop fort|trop drôle|je suis mort|jsuis mort)\b", "humour"),
+        # Surprise/Hype
+        (r"\b(incroyable|dingue|ouf|insane|crazy|unbelievable|chaud|énorme)\b", "surprise"),
+        (r"\b(what|quoi|sérieux|c'est quoi ça|wtf)\b", "surprise"),
+        # Rage/Frustration
+        (r"\b(rage|énervé|angry|pissed|furieux|ragequit|tilté|la haine)\b", "rage"),
+        # Clutch/Victory
+        (r"\b(clutch|win|gg|let's go|victory|on l'a|gagné|ez|easy)\b", "clutch"),
+        # Debate/Discussion
+        (r"\b(débat|argument|versus|vs|contre|par contre|mais non)\b", "debate"),
+        # Fail/Death
+        (r"\b(fail|rip|mort|dead|f in chat|miskine|aie|argh)\b", "fail"),
+        # Gaming specific
+        (r"\b(tryhard|nolife|no life|carried|boost|smurf|one shot|headshot)\b", "gaming"),
+        # Streamer specific
+        (r"\b(sub|abonne|follow|prime|donate|don|bits)\b", "streamer"),
+        
+        # ========== KARMINE CORP ==========
+        # Team names & variations
+        (r"\b(Karmine|Karmine Corp|KC|KCorp|K Corp|la Karmine|les bleus)\b", "karmine"),
+        (r"\b(KCORP|#KCWIN|KC WIN|ALLEZ KC|KC GO|KCBLUE|KC BLUE)\b", "karmine"),
+        # KC 2025-2026 Roster LoL
+        (r"\b(Cabochard|Cabo|Gaboche)\b", "karmine_player"),  # Top
+        (r"\b(Cinkrof|Cinkr)\b", "karmine_player"),  # Jungle
+        (r"\b(Saken|Sak)\b", "karmine_player"),  # Mid
+        (r"\b(Caliste|Cal)\b", "karmine_player"),  # ADC
+        (r"\b(Targamas|Targa)\b", "karmine_player"),  # Support
+        # KC Staff & Org
+        (r"\b(Kameto|Kamel|Prime)\b", "karmine_org"),
+        (r"\b(Kotei|Shaunz)\b", "karmine_staff"),
+        # KC Historic players
+        (r"\b(Rekkles|Rekk)\b", "karmine_player"),
+        (r"\b(Upset|Hylissang|Hylli)\b", "karmine_player"),
+        (r"\b(113|Hantera|Matty)\b", "karmine_player"),
+        (r"\b(SLT|Scarlet|Adam)\b", "karmine_player"),
+        
+        # ========== LEAGUE OF LEGENDS TERMS ==========
+        # Roles
+        (r"\b(top lane|toplane|top|toplaner)\b", "lol_role"),
+        (r"\b(jungle|jungler|jgl|jng)\b", "lol_role"),
+        (r"\b(mid lane|midlane|mid|midlaner)\b", "lol_role"),
+        (r"\b(adc|ad carry|bot lane|botlane|marksman)\b", "lol_role"),
+        (r"\b(support|supp|sup)\b", "lol_role"),
+        # Actions LoL
+        (r"\b(gank|ganker|gankée?)\b", "lol_action"),
+        (r"\b(dive|tower dive|plonge|plongée)\b", "lol_action"),
+        (r"\b(roam|roaming|rotate|rotation)\b", "lol_action"),
+        (r"\b(split|splitpush|split push)\b", "lol_action"),
+        (r"\b(flash|ignite|tp|teleport|smite|exha|exhaust)\b", "lol_action"),
+        (r"\b(poke|all-?in|trade|harass)\b", "lol_action"),
+        (r"\b(kite|kiter|kiting)\b", "lol_action"),
+        (r"\b(peel|peeler|engage|engager|disengage)\b", "lol_action"),
+        # Objectives LoL
+        (r"\b(drake|dragon|drag|infernal|mountain|ocean|cloud|hextech|chemtech|elder)\b", "lol_objective"),
+        (r"\b(baron|nashor|nash|baron nashor)\b", "lol_objective"),
+        (r"\b(herald|héraut|rift herald)\b", "lol_objective"),
+        (r"\b(inhib|inhibiteur|inhibitor|nexus)\b", "lol_objective"),
+        (r"\b(tower|tour|turret|tier 1|tier 2|tier 3|t1|t2|t3)\b", "lol_objective"),
+        (r"\b(grubs|voidgrubs|void grubs)\b", "lol_objective"),
+        # Game states
+        (r"\b(early game|early|mid game|late game|late)\b", "lol_state"),
+        (r"\b(teamfight|team fight|tf|fight|bagarre)\b", "lol_state"),
+        (r"\b(ace|aced|pentakill|penta|quadra|triple kill|double kill)\b", "lol_state"),
+        (r"\b(throw|thrower|comeback|reverse sweep)\b", "lol_state"),
+        (r"\b(stomp|stomped|snowball|fed|feeder|feeding)\b", "lol_state"),
+        (r"\b(outplay|outplayed|diff|gapped|gap)\b", "lol_state"),
+        (r"\b(first blood|fb|first tower|first drake)\b", "lol_state"),
+        # Items & economy
+        (r"\b(item|stuff|gold|gold diff|cs|farm|wave|minion)\b", "lol_item"),
+        (r"\b(mythique|légendaire|complet|full build|build)\b", "lol_item"),
+        
+        # ========== CHAMPIONS POPULAIRES ==========
+        # Top lane
+        (r"\b(Aatrox|Camille|Darius|Fiora|Gnar|Gragas|Gwen|Irelia|Jax|Jayce)\b", "lol_champ"),
+        (r"\b(K'Santé|K'Sante|Ksante|Kennen|Malphite|Mordekaiser|Ornn|Renekton|Riven|Rumble)\b", "lol_champ"),
+        (r"\b(Sett|Shen|Sion|Teemo|Tryndamere|Urgot|Volibear|Yasuo|Yone)\b", "lol_champ"),
+        # Jungle
+        (r"\b(Ambessa|Bel'?Veth|Briar|Diana|Elise|Evelynn|Graves|Hecarim|Ivern)\b", "lol_champ"),
+        (r"\b(Jarvan|J4|Karthus|Kayn|Kha'?Zix|Kindred|Lee Sin|Lee|Lillia|Maokai)\b", "lol_champ"),
+        (r"\b(Master Yi|Nidalee|Nocturne|Nunu|Olaf|Rek'?Sai|Rengar|Sejuani|Shaco)\b", "lol_champ"),
+        (r"\b(Skarner|Sylas|Taliyah|Udyr|Viego|Vi|Warwick|Wukong|Xin Zhao|Zac)\b", "lol_champ"),
+        # Mid lane
+        (r"\b(Ahri|Akali|Akshan|Anivia|Annie|Aurelion Sol|Asol|Aurora|Azir|Cassiopeia)\b", "lol_champ"),
+        (r"\b(Corki|Ekko|Fizz|Galio|Hwei|Kassadin|Katarina|Kata|LeBlanc|Lissandra)\b", "lol_champ"),
+        (r"\b(Lux|Malzahar|Naafiri|Neeko|Orianna|Ori|Qiyana|Ryze|Smolder|Syndra)\b", "lol_champ"),
+        (r"\b(Talon|Tristana|Twisted Fate|TF|Veigar|Vel'?Koz|Vex|Viktor|Vladimir|Vlad)\b", "lol_champ"),
+        (r"\b(Xerath|Zed|Ziggs|Zoe)\b", "lol_champ"),
+        # ADC
+        (r"\b(Aphelios|Ashe|Caitlyn|Cait|Draven|Ezreal|Ez|Jhin|Jinx|Kai'?Sa|Kaisa)\b", "lol_champ"),
+        (r"\b(Kalista|Kog'?Maw|Lucian|Miss Fortune|MF|Nilah|Samira|Senna|Sivir)\b", "lol_champ"),
+        (r"\b(Twitch|Varus|Vayne|Xayah|Zeri)\b", "lol_champ"),
+        # Support
+        (r"\b(Alistar|Bard|Blitzcrank|Blitz|Braum|Janna|Karma|Leona|Lulu|Milio)\b", "lol_champ"),
+        (r"\b(Morgana|Nami|Nautilus|Naut|Pyke|Rakan|Rell|Renata|Seraphine|Sona)\b", "lol_champ"),
+        (r"\b(Soraka|Tahm Kench|TK|Taric|Thresh|Yuumi|Zilean|Zyra)\b", "lol_champ"),
+        
+        # ========== ESPORT LEC / LFL / INTERNATIONAL ==========
+        # Ligues
+        (r"\b(LEC|LFL|LCS|LCK|LPL|Worlds|MSI|All-?Star)\b", "esport_league"),
+        (r"\b(playoffs|playoff|finale|demi-?finale|quart de finale|phase de groupe)\b", "esport_league"),
+        # Équipes LEC 2026
+        (r"\b(G2|G2 Esports|Fnatic|FNC|Fnatic|Team Vitality|Vitality|VIT)\b", "esport_team"),
+        (r"\b(MAD Lions|MAD|Team BDS|BDS|SK Gaming|SK|Rogue|RGE)\b", "esport_team"),
+        (r"\b(Excel|XL|Astralis|AST|Team Heretics|Heretics|TH)\b", "esport_team"),
+        # Équipes LFL 2026
+        (r"\b(LDLC|LDLC OL|Vitality\.Bee|VIT Bee|Solary|SLY|Gentle Mates|Gentlemates|GM)\b", "esport_team"),
+        (r"\b(GameWard|GW|Aegis|Aegis Esport|BK ROG|BKROG|Mandatory|MDY)\b", "esport_team"),
+        (r"\b(Team du Sud|TDS|Oplon|Zerance)\b", "esport_team"),
+        # Joueurs LEC/LFL stars 2026
+        (r"\b(Caps|Perkz|Jankos|Mikyx|BrokenBlade|BB|Odoamne|Wunder)\b", "esport_player"),
+        (r"\b(Hans Sama|Hans|Vetheo|Elyoya|Razork|Humanoid|Larssen)\b", "esport_player"),
+        (r"\b(Yike|Noah|Trymbi|Advienne|Crownie|Labrov|Jun|Nisqy)\b", "esport_player"),
+        (r"\b(Canna|Zeus|Chovy|Showmaker|Faker|Gumayusi|Keria|Canyon|Oner)\b", "esport_player"),
+        # Casters FR
+        (r"\b(Chips|Noi|Chipsetnoi|Laure|Laure Valée|Valée|Rivenzi|Domingo)\b", "caster_fr"),
+        (r"\b(Trasjk|Zaboutine|Zab|Tweekz|7ckingMad|Ceb)\b", "caster_fr"),
+        
+        # ========== EXPRESSIONS ESPORT ==========
+        # Casting expressions
+        (r"\b(c'est énorme|il le fait|il l'a fait|magnifique|sublime|incroyable)\b", "esport_cast"),
+        (r"\b(et ça passe|ça ne passe pas|c'est fini|the nexus|the base)\b", "esport_cast"),
+        (r"\b(baron steal|steal|volé|il le vole|dragon soul|soul|âme)\b", "esport_cast"),
+        (r"\b(game point|match point|élimination|bracket|seeding)\b", "esport_cast"),
+        # Community expressions
+        (r"\b(banger|banger game|game of the year|goty|classique|classic)\b", "esport_community"),
+        (r"\b(GOAT|goat|greatest|the best|le meilleur|meilleur joueur)\b", "esport_community"),
+        (r"\b(MVP|mvp|player of the game|potg|player of the match)\b", "esport_community"),
+        (r"\b(draft diff|draft kingdom|draft gap|pick ban|ban|pick)\b", "esport_community"),
+        (r"\b(mental boom|mental|tilted|ego|ego diff|coaching diff)\b", "esport_community"),
+        (r"\b(script|scripté|scripted|plot armor|remontada|comeback)\b", "esport_community"),
+        (r"\b(blue side|red side|side selection|avantage)\b", "esport_community"),
     ]
     
     def __init__(self):
@@ -219,11 +355,14 @@ class ViralityScorer:
                 payoff_score += 5
                 reasons.append("Strong conclusion")
         
-        # Duration bonus for optimal length
-        duration = segment.get("duration", 30)
-        if 25 <= duration <= 35:
+        # Duration bonus for optimal TikTok length (45-90s is sweet spot)
+        duration = segment.get("duration", 60)
+        if 45 <= duration <= 90:
             payoff_score += 5
-            reasons.append("Optimal duration")
+            reasons.append("Optimal duration (45-90s)")
+        elif 60 <= duration <= 120:
+            payoff_score += 3
+            reasons.append("Good duration (60-120s)")
         
         # Last segment energy
         if transcript_segs and len(transcript_segs) > 1:
@@ -406,7 +545,7 @@ class ViralityScorer:
         self,
         segments: List[Dict[str, Any]],
         iou_threshold: float = 0.5,
-        max_segments: int = 20
+        max_segments: int = 500
     ) -> List[Dict[str, Any]]:
         """Remove overlapping segments, keeping higher scored ones."""
         if not segments:

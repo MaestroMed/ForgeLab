@@ -220,34 +220,65 @@ class IntroEngine:
         return f"drawtext={':'.join(base_params)}"
     
     def _get_font_path(self, font_name: str) -> str:
-        """Get font path for FFmpeg.
+        """Get font path for FFmpeg with robust fallback detection.
         
         On Windows, we need to provide full path to font files.
         Falls back to a common system font if not found.
         """
         import platform
+        import os
         
+        # Map font names to possible file names
         font_map = {
-            "Inter": "Inter-Bold.ttf",
-            "Montserrat": "Montserrat-Bold.ttf",
-            "Space Grotesk": "SpaceGrotesk-Bold.ttf",
-            "Playfair Display": "PlayfairDisplay-Bold.ttf",
-            "Oswald": "Oswald-Bold.ttf",
-            "Bebas Neue": "BebasNeue-Regular.ttf",
+            "Inter": ["Inter-Bold.ttf", "Inter-SemiBold.ttf", "Inter-Medium.ttf", "Inter.ttf"],
+            "Montserrat": ["Montserrat-Bold.ttf", "Montserrat-SemiBold.ttf", "Montserrat-ExtraBold.ttf", "montserrat-bold.ttf"],
+            "Space Grotesk": ["SpaceGrotesk-Bold.ttf", "SpaceGrotesk-SemiBold.ttf", "Space Grotesk Bold.ttf"],
+            "Playfair Display": ["PlayfairDisplay-Bold.ttf", "Playfair Display Bold.ttf"],
+            "Oswald": ["Oswald-Bold.ttf", "Oswald-SemiBold.ttf", "oswald-bold.ttf"],
+            "Bebas Neue": ["BebasNeue-Regular.ttf", "BebasNeue-Bold.ttf", "Bebas Neue.ttf"],
+            "Arial": ["arial.ttf", "Arial.ttf", "arialbd.ttf"],
+            "Impact": ["impact.ttf", "Impact.ttf"],
         }
         
+        # Generate additional variations
+        base_name = font_name.replace(" ", "")
+        variations = font_map.get(font_name, [
+            f"{base_name}-Bold.ttf",
+            f"{base_name}-SemiBold.ttf",
+            f"{base_name}-ExtraBold.ttf",
+            f"{base_name}-Regular.ttf",
+            f"{base_name}.ttf",
+            f"{font_name.lower().replace(' ', '-')}-bold.ttf",
+        ])
+        
         if platform.system() == "Windows":
-            # Windows fonts directory
-            fonts_dir = Path("C:/Windows/Fonts")
+            # Search directories (in order of priority)
+            search_dirs = [
+                Path("C:/Windows/Fonts"),
+                Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft/Windows/Fonts",
+                Path(os.environ.get("USERPROFILE", "")) / "AppData/Local/Microsoft/Windows/Fonts",
+            ]
             
-            # Try to find the font
-            font_file = font_map.get(font_name, f"{font_name.replace(' ', '')}-Bold.ttf")
-            font_path = fonts_dir / font_file
+            # Try each variation in each directory
+            for fonts_dir in search_dirs:
+                if not fonts_dir.exists():
+                    continue
+                    
+                for font_file in variations:
+                    font_path = fonts_dir / font_file
+                    if font_path.exists():
+                        result = str(font_path).replace("\\", "/").replace(":", "\\\\:")
+                        logger.info(f"[Intro] Found font: {font_name} -> {font_path}")
+                        return result
             
-            if font_path.exists():
-                return str(font_path).replace("\\", "/").replace(":", "\\\\:")
+            # Fallback: try Impact (always available, good for titles)
+            impact_path = Path("C:/Windows/Fonts/impact.ttf")
+            if impact_path.exists():
+                logger.warning(f"[Intro] Font '{font_name}' not found, using Impact as fallback")
+                return "C\\\\:/Windows/Fonts/impact.ttf"
             
-            # Fallback to Arial which is always available on Windows
+            # Final fallback to Arial
+            logger.warning(f"[Intro] Font '{font_name}' not found, using Arial as fallback")
             return "C\\\\:/Windows/Fonts/arial.ttf"
         else:
             # On Linux/Mac, just return the font name and let fontconfig handle it
@@ -270,7 +301,7 @@ class IntroEngine:
         output_path: str,
         progress_callback: Optional[Callable[[float], None]] = None
     ) -> Dict[str, Any]:
-        """Concatenate intro with main clip."""
+        """Concatenate intro with main clip (deprecated - use apply_intro_overlay instead)."""
         output_path = Path(output_path)
         
         # Create concat file
@@ -314,4 +345,237 @@ class IntroEngine:
         return {
             "output_path": str(output_path),
         }
+    
+    async def apply_intro_overlay(
+        self,
+        clip_path: str,
+        output_path: str,
+        config: Dict[str, Any],
+        progress_callback: Optional[Callable[[float], None]] = None
+    ) -> Dict[str, Any]:
+        """
+        Apply intro as overlay on the beginning of an existing clip.
+        
+        The video plays from the start while the intro overlay fades out.
+        Audio is preserved throughout.
+        
+        Args:
+            clip_path: Path to the already-rendered clip
+            output_path: Path to save the final video with intro
+            config: Intro configuration with:
+                - duration: How long the intro overlay lasts
+                - title: Title text
+                - badgeText: Badge text
+                - backgroundBlur: Blur intensity for the intro section
+                - titleFont, titleSize, titleColor, badgeColor, animation
+        """
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Extract config values
+        intro_duration = config.get("duration", 2.5)
+        title = config.get("title", "")
+        badge_text = config.get("badgeText", "")
+        blur = config.get("backgroundBlur", 15)
+        title_font = config.get("titleFont", "Montserrat")
+        title_size = config.get("titleSize", 72)
+        title_color = self._hex_to_ffmpeg_color(config.get("titleColor", "#FFFFFF"))
+        badge_color = self._hex_to_ffmpeg_color(config.get("badgeColor", "#00FF88"))
+        animation = config.get("animation", "fade")
+        
+        # Calculate positions
+        title_y = int(self.output_height * 0.42)
+        badge_y = int(self.output_height * 0.52)
+        
+        # Animation timing
+        fade_in = 0.4
+        fade_out = 0.5
+        
+        # Build filter complex:
+        # 1. Split video into two streams
+        # 2. Apply blur to one stream for intro duration, then blend to clean
+        # 3. Overlay text on top
+        # 4. Keep audio unchanged
+        
+        filters = []
+        
+        # Split input video
+        filters.append("[0:v]split[blur_in][clean]")
+        
+        # Apply blur and create crossfade effect
+        # Blur fades out as we transition to clean video
+        filters.append(
+            f"[blur_in]boxblur={blur}:5,"
+            f"fade=t=out:st={intro_duration - fade_out}:d={fade_out}:alpha=1[blurred]"
+        )
+        
+        # Overlay blurred on clean - blurred fades away revealing clean
+        filters.append(
+            f"[clean][blurred]overlay=0:0:enable='lte(t,{intro_duration})'[bg_with_blur]"
+        )
+        
+        # Title text with animation
+        title_escaped = title.replace("'", "\\'").replace(":", "\\:")
+        title_filter = self._build_overlay_text_filter(
+            text=title_escaped,
+            font=title_font,
+            size=title_size,
+            color=title_color,
+            x="(w-text_w)/2",
+            y=str(title_y),
+            animation=animation,
+            intro_duration=intro_duration,
+            fade_in=fade_in,
+            fade_out=fade_out
+        )
+        filters.append(f"[bg_with_blur]{title_filter}[with_title]")
+        
+        # Badge text
+        if badge_text:
+            badge_escaped = badge_text.replace("'", "\\'").replace(":", "\\:")
+            badge_filter = self._build_overlay_text_filter(
+                text=badge_escaped,
+                font=title_font,
+                size=int(title_size * 0.45),
+                color=badge_color,
+                x="(w-text_w)/2",
+                y=str(badge_y),
+                animation=animation,
+                intro_duration=intro_duration,
+                fade_in=fade_in + 0.15,
+                fade_out=fade_out
+            )
+            filters.append(f"[with_title]{badge_filter}[final]")
+        else:
+            filters.append("[with_title]copy[final]")
+        
+        # Build video-only filter (swoosh audio disabled for stability)
+        filter_complex = ";".join(filters)
+        
+        # Build FFmpeg command - simple and reliable
+        cmd = [
+            str(self.ffmpeg.ffmpeg_path),
+            "-i", clip_path,
+            "-filter_complex", filter_complex,
+            "-map", "[final]",
+            "-map", "0:a",  # Keep original audio
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "18",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            "-y",
+            str(output_path)
+        ]
+        
+        logger.info(f"Applying intro overlay: {' '.join(cmd)}")
+        
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        stdout, stderr = await proc.communicate()
+        
+        if proc.returncode != 0:
+            logger.error(f"Intro overlay failed: {stderr.decode(errors='replace')[:1000]}")
+            raise RuntimeError(f"Intro overlay failed: {stderr.decode(errors='replace')[:500]}")
+        
+        if progress_callback:
+            progress_callback(100.0)
+        
+        return {
+            "output_path": str(output_path),
+        }
+    
+    def _build_overlay_text_filter(
+        self,
+        text: str,
+        font: str,
+        size: int,
+        color: str,
+        x: str,
+        y: str,
+        animation: str,
+        intro_duration: float,
+        fade_in: float,
+        fade_out: float
+    ) -> str:
+        """Build drawtext filter for overlay intro with GLOW effect (fades in then out)."""
+        
+        font_path = self._get_font_path(font)
+        visible_end = intro_duration
+        
+        # Alpha expression: fade in, stay, fade out
+        alpha_expr = (
+            f"if(lt(t,{fade_in}),t/{fade_in},"
+            f"if(lt(t,{visible_end - fade_out}),1,"
+            f"if(lt(t,{visible_end}),(({visible_end}-t)/{fade_out}),0)))"
+        )
+        
+        # Animation expressions
+        y_expr = y
+        scale_expr = str(size)
+        
+        if animation == "slide":
+            y_expr = f"{y}+40*(1-min(t/{fade_in},1))"
+        elif animation == "bounce":
+            y_expr = f"if(lt(t,{fade_in}),{y}+25*sin(t*14)*pow(0.5,t*6),{y})"
+        elif animation == "zoom":
+            # Zoom from 80% to 100%
+            scale_expr = f"{size}*(0.8+0.2*min(t/{fade_in},1))"
+        elif animation == "swoosh":
+            # Swoosh: slide from right with overshoot
+            x_offset = f"if(lt(t,{fade_in}),(w-text_w)/2+300*(1-min(t/{fade_in},1))*pow(0.3,t*3),(w-text_w)/2)"
+            y_expr = y
+        
+        # WORLD CLASS GLOW EFFECT - Multiple layers for depth
+        filters = []
+        
+        # Layer 1: Outer glow (larger, more transparent)
+        glow_color = self._get_glow_color(color)
+        glow_params = [
+            f"text='{text}'",
+            f"fontfile={font_path}",
+            f"fontsize={scale_expr}",
+            f"fontcolor={glow_color}@0.4",
+            f"x={x}" if animation != "swoosh" else f"x={x_offset}",
+            f"y={y_expr}",
+            f"borderw=12",
+            f"bordercolor={glow_color}@0.3",
+            f"alpha='{alpha_expr}'",
+            f"enable='lte(t,{visible_end})'"
+        ]
+        filters.append(f"drawtext={':'.join(glow_params)}")
+        
+        # Layer 2: Inner glow (tighter)
+        inner_glow_params = [
+            f"text='{text}'",
+            f"fontfile={font_path}",
+            f"fontsize={scale_expr}",
+            f"fontcolor={color}",
+            f"x={x}" if animation != "swoosh" else f"x={x_offset}",
+            f"y={y_expr}",
+            f"borderw=6",
+            f"bordercolor=black@0.8",
+            "shadowcolor=black@0.7",
+            "shadowx=4",
+            "shadowy=4",
+            f"alpha='{alpha_expr}'",
+            f"enable='lte(t,{visible_end})'"
+        ]
+        filters.append(f"drawtext={':'.join(inner_glow_params)}")
+        
+        # Combine filters with intermediate labels
+        return ",".join(filters)
+    
+    def _get_glow_color(self, base_color: str) -> str:
+        """Get a glow color based on the base color."""
+        # For white text, use cyan glow. For colored text, use the same color
+        if base_color.lower() in ["white", "0xffffff", "0xFFFFFF"]:
+            return "0x00FFFF"  # Cyan glow for white text
+        return base_color
 

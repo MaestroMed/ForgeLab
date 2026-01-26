@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useLayoutEditorStore, useSubtitleStyleStore } from '@/store';
 import { motion, useDragControls } from 'framer-motion';
 import { KaraokeSubtitles, WordTiming, parseTranscriptToWords } from './KaraokeSubtitles';
+import { useVideoSync, VideoSyncController } from '@/hooks/useVideoSync';
 
 interface Canvas9x16Props {
   videoSrc: string;
@@ -13,8 +14,10 @@ interface Canvas9x16Props {
   wordTimings?: WordTiming[];  // Word-level timing for karaoke subtitles
   clipStartTime?: number;      // Start time of clip in source video
   clipDuration?: number;       // Duration of the clip
+  fps?: number;                // Frame rate for sync
   onTimeUpdate?: (time: number) => void;
   onPlayPause?: () => void;
+  onControllerReady?: (controller: VideoSyncController) => void;
 }
 
 export function Canvas9x16({
@@ -27,38 +30,53 @@ export function Canvas9x16({
   wordTimings = [],
   clipStartTime = 0,
   clipDuration = 0,
+  fps = 30,
   onTimeUpdate,
   onPlayPause,
+  onControllerReady,
 }: Canvas9x16Props) {
-  const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const { zones, selectedZoneId, setSelectedZone, updateZone } = useLayoutEditorStore();
   const { style } = useSubtitleStyleStore();
   const [canvasRect, setCanvasRect] = useState<DOMRect | null>(null);
 
-  // Sync main video playback
-  useEffect(() => {
-    if (videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.play().catch(() => {});
-      } else {
-        videoRef.current.pause();
-      }
-    }
-  }, [isPlaying]);
+  // Use unified video sync controller
+  const controller = useVideoSync({
+    initialTime: currentTime,
+    clipStartTime,
+    clipEndTime: clipStartTime + clipDuration,
+    fps,
+    onTimeUpdate,
+    onEnded: () => {
+      // Loop back to start
+      controller.seek(clipStartTime);
+    },
+  });
 
-  // Sync main video time
-  useEffect(() => {
-    if (videoRef.current && Math.abs(videoRef.current.currentTime - currentTime) > 0.5) {
-      videoRef.current.currentTime = currentTime;
-    }
-  }, [currentTime]);
+  const { state, videoRef, play, pause, seek, syncVideo } = controller;
 
-  const handleTimeUpdate = () => {
-    if (videoRef.current && onTimeUpdate) {
-      onTimeUpdate(videoRef.current.currentTime);
+  // Notify parent of controller ready
+  useEffect(() => {
+    if (state.isLoaded && onControllerReady) {
+      onControllerReady(controller);
     }
-  };
+  }, [state.isLoaded, controller, onControllerReady]);
+
+  // Sync with parent isPlaying prop
+  useEffect(() => {
+    if (isPlaying && !state.isPlaying) {
+      play();
+    } else if (!isPlaying && state.isPlaying) {
+      pause();
+    }
+  }, [isPlaying, state.isPlaying, play, pause]);
+
+  // Sync with parent currentTime when it changes significantly (scrub/seek)
+  useEffect(() => {
+    if (Math.abs(state.currentTime - currentTime) > 0.1) {
+      seek(currentTime);
+    }
+  }, [currentTime, state.currentTime, seek]);
 
   // Update canvas dimensions on resize
   useEffect(() => {
@@ -73,30 +91,20 @@ export function Canvas9x16({
     return () => window.removeEventListener('resize', updateRect);
   }, []);
 
-  // Sync other video elements (zones)
-  const syncZoneVideos = useCallback(() => {
-    if (!videoRef.current) return;
-    const time = videoRef.current.currentTime;
-    
-    document.querySelectorAll('video.zone-video').forEach((el) => {
-      const v = el as HTMLVideoElement;
-      if (Math.abs(v.currentTime - time) > 0.1) {
-        v.currentTime = time;
-      }
-      if (isPlaying && v.paused) v.play().catch(() => {});
-      if (!isPlaying && !v.paused) v.pause();
-    });
-  }, [isPlaying]);
-
+  // Register zone videos for sync
   useEffect(() => {
-    let frameId: number;
-    const loop = () => {
-      syncZoneVideos();
-      frameId = requestAnimationFrame(loop);
+    const zoneVideos = document.querySelectorAll('video.zone-video');
+    const cleanups: (() => void)[] = [];
+    
+    zoneVideos.forEach((el) => {
+      const cleanup = syncVideo(el as HTMLVideoElement);
+      if (cleanup) cleanups.push(cleanup);
+    });
+    
+    return () => {
+      cleanups.forEach(fn => fn());
     };
-    loop();
-    return () => cancelAnimationFrame(frameId);
-  }, [syncZoneVideos]);
+  }, [syncVideo, zones]);
 
 
   const renderSubtitle = () => {
@@ -168,7 +176,6 @@ export function Canvas9x16({
         ref={videoRef}
         src={videoSrc}
         className="hidden"
-        onTimeUpdate={handleTimeUpdate}
         muted={false} // Main audio source
       />
 

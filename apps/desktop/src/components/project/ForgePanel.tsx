@@ -18,6 +18,9 @@ import {
   Layers,
   Check,
   AlertTriangle,
+  Rocket,
+  Loader2,
+  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { api } from '@/lib/api';
@@ -73,6 +76,11 @@ export default function ForgePanel({ project }: ForgePanelProps) {
   const [filter, setFilter] = useState<FilterMode>('all');
   const [sortBy, setSortBy] = useState<SortMode>('score');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  
+  // Batch export state
+  const [showBatchExportModal, setShowBatchExportModal] = useState(false);
+  const [batchExportLoading, setBatchExportLoading] = useState(false);
+  const [batchExportProgress, setBatchExportProgress] = useState<{ current: number; total: number; status: string } | null>(null);
 
   useEffect(() => {
     loadSegments();
@@ -147,6 +155,44 @@ export default function ForgePanel({ project }: ForgePanelProps) {
     }
   }, []);
 
+  // WORLD CLASS BATCH EXPORT - One click to export all high-scoring clips
+  const handleBatchExport = async () => {
+    setBatchExportLoading(true);
+    setBatchExportProgress({ current: 0, total: stats.highScore, status: 'Démarrage...' });
+    
+    try {
+      const response = await api.batchExportAll(project.id, {
+        minScore: 70,
+        maxClips: 500,
+        style: 'viral_pro',
+        platform: 'tiktok',
+        includeCaptions: true,
+        burnSubtitles: true,
+        includeCover: true,
+        includeMetadata: true,
+        useNvenc: true,
+      });
+      
+      if (response.success && response.data?.jobId) {
+        // Track progress via WebSocket or polling
+        setBatchExportProgress({ 
+          current: 0, 
+          total: response.data.willExport || stats.highScore, 
+          status: `Export de ${response.data.willExport} clips en cours...` 
+        });
+        
+        // The job will send updates via WebSocket
+        // For now, just show the modal
+        setShowBatchExportModal(false);
+      }
+    } catch (error) {
+      console.error('Batch export failed:', error);
+      setBatchExportProgress({ current: 0, total: 0, status: 'Erreur lors de l\'export' });
+    } finally {
+      setBatchExportLoading(false);
+    }
+  };
+
   // Update time display
   useEffect(() => {
     const video = videoRef.current;
@@ -208,7 +254,19 @@ export default function ForgePanel({ project }: ForgePanelProps) {
         <div className="p-4 border-b border-[var(--border-color)]">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-bold text-lg text-[var(--text-primary)]">Segments</h3>
-            <span className="text-xs text-[var(--text-muted)]">{filteredSegments.length} / {stats.total}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-[var(--text-muted)]">{filteredSegments.length} / {stats.total}</span>
+              {/* WORLD CLASS: One-click batch export button */}
+              <Button
+                size="sm"
+                onClick={() => setShowBatchExportModal(true)}
+                disabled={stats.highScore === 0}
+                className="flex items-center gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white text-xs px-2 py-1"
+              >
+                <Rocket className="w-3.5 h-3.5" />
+                Tout exporter
+              </Button>
+            </div>
           </div>
           
           {/* Filter pills */}
@@ -255,6 +313,113 @@ export default function ForgePanel({ project }: ForgePanelProps) {
           </div>
         </div>
 
+        {/* WORLD CLASS: Batch Export Modal */}
+        <AnimatePresence>
+          {showBatchExportModal && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center"
+              onClick={() => !batchExportLoading && setShowBatchExportModal(false)}
+            >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="bg-[var(--bg-card)] rounded-xl p-6 max-w-md w-full mx-4 shadow-2xl border border-[var(--border-color)]"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-gradient-to-br from-amber-500 to-orange-500 rounded-lg flex items-center justify-center">
+                      <Rocket className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-[var(--text-primary)]">Export World Class</h3>
+                      <p className="text-xs text-[var(--text-muted)]">One-click batch export</p>
+                    </div>
+                  </div>
+                  {!batchExportLoading && (
+                    <button
+                      onClick={() => setShowBatchExportModal(false)}
+                      className="p-1 rounded-lg hover:bg-[var(--bg-secondary)] transition-colors"
+                    >
+                      <X className="w-5 h-5 text-[var(--text-muted)]" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="bg-[var(--bg-secondary)] rounded-lg p-4 mb-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-[var(--text-secondary)]">Clips à exporter</span>
+                    <span className="text-lg font-bold text-green-500">{Math.min(stats.highScore, 20)}</span>
+                  </div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-[var(--text-secondary)]">Seuil de score</span>
+                    <span className="text-sm font-medium text-[var(--text-primary)]">≥ 70</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-[var(--text-secondary)]">Style</span>
+                    <span className="text-sm font-medium text-amber-500">VIRAL PRO</span>
+                  </div>
+                </div>
+
+                <p className="text-sm text-[var(--text-muted)] mb-4">
+                  Tous les clips seront exportés avec le style <strong className="text-amber-500">VIRAL PRO</strong> optimisé 
+                  pour TikTok, avec sous-titres, covers et metadata.
+                </p>
+
+                {batchExportProgress && (
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span className="text-[var(--text-muted)]">{batchExportProgress.status}</span>
+                      <span className="text-[var(--text-primary)]">
+                        {batchExportProgress.current}/{batchExportProgress.total}
+                      </span>
+                    </div>
+                    <div className="h-2 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
+                      <motion.div
+                        className="h-full bg-gradient-to-r from-amber-500 to-orange-500"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${(batchExportProgress.current / Math.max(1, batchExportProgress.total)) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-3">
+                  <Button
+                    variant="secondary"
+                    onClick={() => setShowBatchExportModal(false)}
+                    disabled={batchExportLoading}
+                    className="flex-1"
+                  >
+                    Annuler
+                  </Button>
+                  <Button
+                    onClick={handleBatchExport}
+                    disabled={batchExportLoading || stats.highScore === 0}
+                    className="flex-1 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white"
+                  >
+                    {batchExportLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Export en cours...
+                      </>
+                    ) : (
+                      <>
+                        <Rocket className="w-4 h-4 mr-2" />
+                        Lancer l'export
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Segment List */}
         <div className="flex-1 overflow-y-auto p-2 scrollbar-thin">
           {filteredSegments.length === 0 ? (
@@ -269,6 +434,7 @@ export default function ForgePanel({ project }: ForgePanelProps) {
                 <SegmentCardCompact
                   key={segment.id}
                   segment={segment}
+                  projectId={project.id}
                   isSelected={selectedSegment?.id === segment.id}
                   onSelect={() => handleSegmentSelect(segment)}
                   onPlay={() => handleSegmentPlay(segment)}
@@ -537,16 +703,19 @@ function FilterPill({ active, onClick, children }: { active: boolean; onClick: (
 
 function SegmentCardCompact({
   segment,
+  projectId,
   isSelected,
   onSelect,
   onPlay,
 }: {
   segment: Segment;
+  projectId: string;
   isSelected: boolean;
   onSelect: () => void;
   onPlay: () => void;
 }) {
   const isMonetizable = segment.duration >= 60;
+  const baseUrl = window.forge?.getApiUrl?.() || 'http://localhost:8420';
   
   return (
     <motion.div
@@ -560,7 +729,7 @@ function SegmentCardCompact({
       {/* Thumbnail */}
       <div className="aspect-video bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center relative">
         <img
-          src={`http://localhost:8420/v1/projects/${segment.id.split('-')[0]}/thumbnail?time=${segment.startTime + 1}&width=160&height=90`}
+          src={`${baseUrl}/v1/projects/${projectId}/thumbnail?time=${segment.startTime + 1}&width=160&height=90`}
           alt=""
           className="absolute inset-0 w-full h-full object-cover"
           onError={(e) => {

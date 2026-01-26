@@ -26,8 +26,11 @@ class FFmpegService:
         self.ffprobe_path = settings.FFPROBE_PATH
         self.version: Optional[str] = None
         self.has_nvenc: bool = False
+        self.has_nvdec: bool = False  # Hardware decoding
+        self.has_scale_npp: bool = False  # GPU scaling
         self.has_libass: bool = False
         self.available_encoders: List[str] = []
+        self.available_decoders: List[str] = []
     
     @classmethod
     def get_instance(cls) -> "FFmpegService":
@@ -76,7 +79,25 @@ class FFmpegService:
                     if len(parts) >= 2:
                         self.available_encoders.append(parts[1])
             
-            # Check filters for libass
+            # Check decoders for NVDEC (hardware decoding)
+            proc = await asyncio.create_subprocess_exec(
+                self.ffmpeg_path, "-decoders",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, _ = await proc.communicate()
+            decoders_output = stdout.decode()
+            
+            self.has_nvdec = "h264_cuvid" in decoders_output
+            self.available_decoders = []
+            
+            for line in decoders_output.split("\n"):
+                if line.strip().startswith("V"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        self.available_decoders.append(parts[1])
+            
+            # Check filters for libass and scale_npp (GPU scaling)
             proc = await asyncio.create_subprocess_exec(
                 self.ffmpeg_path, "-filters",
                 stdout=asyncio.subprocess.PIPE,
@@ -85,11 +106,12 @@ class FFmpegService:
             stdout, _ = await proc.communicate()
             filters_output = stdout.decode()
             self.has_libass = "ass" in filters_output
+            self.has_scale_npp = "scale_npp" in filters_output or "scale_cuda" in filters_output
             
             self._initialized = True
             logger.info(
-                "FFmpeg %s initialized - NVENC: %s, libass: %s",
-                self.version, self.has_nvenc, self.has_libass
+                "FFmpeg %s initialized - NVENC: %s, NVDEC: %s, scale_npp: %s, libass: %s",
+                self.version, self.has_nvenc, self.has_nvdec, self.has_scale_npp, self.has_libass
             )
             return True
             
@@ -163,32 +185,58 @@ class FFmpegService:
         crf: int = 28,
         progress_callback: Optional[callable] = None
     ) -> bool:
-        """Create a proxy video file using GPU if available."""
-        # Build filter for scaling
-        scale_filter = f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
-        
+        """Create a proxy video file using full GPU pipeline if available."""
         # Check availability if not done
         if not self._initialized:
             await self.check_availability()
         
-        # Use NVENC (GPU) if available for much faster encoding
-        if self.has_nvenc:
-            logger.info("Using NVENC (GPU) for proxy creation")
-            cmd = [
-                self.ffmpeg_path,
-                "-y",
-                "-i", input_path,
-                "-vf", scale_filter,
-                "-c:v", "h264_nvenc",
-                "-preset", "p4",  # Fast preset (p1=fastest, p7=slowest)
-                "-cq", str(crf),  # Quality level
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-movflags", "+faststart",
-                output_path
-            ]
+        use_hwaccel = settings.USE_HWACCEL and self.has_nvenc and not settings.FORCE_CPU
+        proxy_preset = getattr(settings, 'FFMPEG_PROXY_PRESET', 'p1')
+        
+        if use_hwaccel:
+            # Full GPU pipeline: hwaccel decode -> GPU scale -> NVENC encode
+            logger.info("Using FULL GPU pipeline for proxy (hwaccel + NVENC)")
+            
+            # Use scale_cuda if available, otherwise fall back to CPU scale
+            if self.has_scale_npp:
+                # GPU-based scaling
+                scale_filter = f"scale_cuda={width}:{height}:force_original_aspect_ratio=decrease,pad_cuda={width}:{height}:(ow-iw)/2:(oh-ih)/2"
+                cmd = [
+                    self.ffmpeg_path,
+                    "-y",
+                    "-hwaccel", "cuda",
+                    "-hwaccel_output_format", "cuda",
+                    "-i", input_path,
+                    "-vf", scale_filter,
+                    "-c:v", "h264_nvenc",
+                    "-preset", proxy_preset,  # Ultra-fast for proxy
+                    "-cq", str(crf),
+                    "-c:a", "aac",
+                    "-b:a", "128k",
+                    "-movflags", "+faststart",
+                    output_path
+                ]
+            else:
+                # Fallback: hwaccel decode, CPU scale, NVENC encode
+                scale_filter = f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
+                cmd = [
+                    self.ffmpeg_path,
+                    "-y",
+                    "-hwaccel", "cuda",
+                    "-i", input_path,
+                    "-vf", scale_filter,
+                    "-c:v", "h264_nvenc",
+                    "-preset", proxy_preset,
+                    "-cq", str(crf),
+                    "-c:a", "aac",
+                    "-b:a", "128k",
+                    "-movflags", "+faststart",
+                    output_path
+                ]
         else:
+            # CPU fallback
             logger.info("Using CPU (libx264) for proxy creation")
+            scale_filter = f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
             cmd = [
                 self.ffmpeg_path,
                 "-y",
@@ -253,21 +301,27 @@ class FFmpegService:
         fps: int = 30,
         progress_callback: Optional[callable] = None
     ) -> bool:
-        """Render a clip with filters and captions."""
+        """Render a clip with filters and captions using GPU acceleration."""
         # Detect if we have a complex filter graph (with labels like [facecam])
         is_complex = any('[' in f and ']' in f for f in filters)
-        
-        # Choose encoder
-        encoder = "libx264"
-        encoder_opts = ["-preset", "medium", "-crf", str(crf)]
-        
-        if use_nvenc and self.has_nvenc and not settings.FORCE_CPU:
-            encoder = "h264_nvenc"
-            encoder_opts = ["-preset", "p4", "-cq", str(crf), "-b:v", "0"]
         
         # Ensure FFmpeg is initialized
         if not self._initialized:
             await self.check_availability()
+        
+        # Choose encoder and hardware acceleration
+        use_hwaccel = settings.USE_HWACCEL and self.has_nvenc and not settings.FORCE_CPU
+        nvenc_preset = getattr(settings, 'FFMPEG_NVENC_PRESET', 'p4')
+        
+        encoder = "libx264"
+        encoder_opts = ["-preset", "medium", "-crf", str(crf)]
+        hwaccel_opts = []
+        
+        if use_nvenc and use_hwaccel:
+            encoder = "h264_nvenc"
+            encoder_opts = ["-preset", nvenc_preset, "-cq", str(crf), "-b:v", "0"]
+            # Add hardware acceleration for decoding
+            hwaccel_opts = ["-hwaccel", "cuda"]
         
         logger.info(f"render_clip called with ass_path={ass_path}, has_libass={self.has_libass}")
         
@@ -300,6 +354,7 @@ class FFmpegService:
             cmd = [
                 self.ffmpeg_path,
                 "-y",
+                *hwaccel_opts,
                 "-ss", str(start_time),
                 "-i", input_path,
                 "-t", str(duration),
@@ -329,10 +384,13 @@ class FFmpegService:
             cmd = [
                 self.ffmpeg_path,
                 "-y",
+                *hwaccel_opts,
                 "-ss", str(start_time),
                 "-i", input_path,
                 "-t", str(duration),
                 "-vf", ",".join(filter_chain),
+                "-map", "0:v",
+                "-map", "0:a?",  # Map audio if available
                 "-c:v", encoder,
                 *encoder_opts,
                 "-c:a", "aac",

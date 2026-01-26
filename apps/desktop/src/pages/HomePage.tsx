@@ -6,6 +6,7 @@ import { Plus, Search, FolderOpen, Clock, Film, Layers, TrendingUp, Calendar, Li
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { UrlImportModal } from '@/components/import/UrlImportModal';
+import ProjectProgress from '@/components/project/ProjectProgress';
 import { api } from '@/lib/api';
 import { formatDuration } from '@/lib/utils';
 import { useToastStore, useJobsStore, useProjectsStore } from '@/store';
@@ -309,10 +310,9 @@ function ProjectCard({
     return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
   };
 
-  // Convert file path to file:// URL for Electron
-  const thumbnailUrl = project.thumbnailPath
-    ? `file:///${project.thumbnailPath.replace(/\\/g, '/')}`
-    : null;
+  // Use API endpoint for thumbnails (works in both web and Electron)
+  const baseUrl = window.forge?.getApiUrl?.() || 'http://localhost:8420';
+  const thumbnailUrl = `${baseUrl}/v1/projects/${project.id}/thumbnail?time=${(project.duration || 60) / 2}&width=320&height=180`;
 
   return (
     <motion.div
@@ -325,38 +325,35 @@ function ProjectCard({
         onClick={onClick}
       >
         {/* Thumbnail */}
-        <div className="aspect-video bg-[var(--bg-tertiary)] relative overflow-hidden">
-          {thumbnailUrl ? (
-            <img
-              src={thumbnailUrl}
-              alt={project.name}
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-              onError={(e) => {
-                // Fallback to placeholder on error
-                e.currentTarget.style.display = 'none';
-                e.currentTarget.parentElement?.classList.add('flex', 'items-center', 'justify-center');
-              }}
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center">
-              <Film className="w-12 h-12 text-[var(--text-muted)] opacity-30" />
-            </div>
-          )}
+        <div className="aspect-video bg-[var(--bg-tertiary)] relative overflow-hidden flex items-center justify-center">
+          <img
+            src={thumbnailUrl}
+            alt={project.name}
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+            onError={(e) => {
+              // Fallback to placeholder on error
+              e.currentTarget.style.display = 'none';
+            }}
+          />
+          <Film className="w-12 h-12 text-[var(--text-muted)] opacity-30 absolute" />
           
           {/* Duration badge */}
           {project.duration && (
-            <div className="absolute bottom-2 right-2 px-1.5 py-0.5 bg-black/70 rounded text-[10px] font-medium text-white">
+            <div className="absolute bottom-2 right-2 px-1.5 py-0.5 bg-black/70 rounded text-[10px] font-medium text-white z-10">
               {formatDuration(project.duration)}
             </div>
           )}
           
           {/* Score badge */}
           {project.averageScore !== undefined && project.averageScore > 0 && (
-            <div className="absolute top-2 right-2 px-1.5 py-0.5 bg-gradient-to-r from-amber-500 to-orange-500 rounded text-[10px] font-bold text-white flex items-center gap-0.5">
+            <div className="absolute top-2 right-2 px-1.5 py-0.5 bg-gradient-to-r from-amber-500 to-orange-500 rounded text-[10px] font-bold text-white flex items-center gap-0.5 z-10">
               <TrendingUp className="w-2.5 h-2.5" />
               {Math.round(project.averageScore)}
             </div>
           )}
+          
+          {/* Global progress overlay for active projects */}
+          <ProjectProgress projectId={project.id} projectStatus={project.status} />
           
           {/* Hover overlay with actions */}
           <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">

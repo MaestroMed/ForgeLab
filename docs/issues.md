@@ -1,56 +1,85 @@
 # FORGE/LAB - Issues et TODO
 
-## Connus / En cours
+## Etat des Fonctionnalites (Janvier 2026)
 
-### Priorité Haute
+### Implemente
 
-- [ ] **Prévisualisation vidéo temps réel** : Le player vidéo n'est pas encore implémenté dans l'UI. Actuellement, seuls les métadonnées sont affichées.
+| Fonctionnalite | Status | Description |
+|----------------|--------|-------------|
+| Player video temps reel | Complet | useVideoSync hook + VideoPlayer avec sync frame-accurate |
+| WhisperX word-level | Complet | Service whisperx_alignment.py avec alignement phonemique |
+| Tests E2E | Complet | Suite Pytest backend + Playwright frontend |
+| Cold Open Engine | Complet | Service cold_open.py avec variations et preview A/B |
+| Tracking facecam continu | Complet | Service facecam_tracking.py avec auto-reframe |
+| Sound design | Complet | SFX library, auto-duck et LUFS normalization |
+| Electron build production | Complet | electron-builder.config.js avec Python embarque |
 
-- [ ] **WhisperX pour word-level précis** : faster-whisper fournit des timestamps word-level mais whisperX serait plus précis. À intégrer en option.
+---
 
-- [ ] **Electron build Windows** : Le build de production Electron nécessite une configuration supplémentaire pour inclure le moteur Python.
+## En Cours - Priorite Haute
 
-### Priorité Moyenne
+- [ ] **Tests CI/CD** : Configurer GitHub Actions pour tests auto sur PR
 
-- [ ] **Tests E2E** : Tests d'intégration complets du pipeline (ingest → analyze → export).
+- [ ] **Multi-GPU** : Support parallele pour analyse de segments
 
-- [ ] **Gestion erreurs robuste** : Améliorer la gestion des erreurs et les messages utilisateur.
+---
 
-- [ ] **Tracking facecam amélioré** : Le tracking actuel utilise des snapshots, un tracking continu serait mieux.
+## Backlog - Priorite Moyenne
 
-- [ ] **OCR texte écran** : Détection du texte à l'écran (scoreboards, etc.) pas encore implémentée.
+- [ ] **OCR texte ecran** : Detection texte via Tesseract/EasyOCR
 
-### Priorité Basse
+- [ ] **Speaker diarization** : Identification des speakers via pyannote
 
-- [ ] **Analytics loop** : Import des stats plateforme pour feedback.
+- [ ] **Analytics loop** : Import stats TikTok/YouTube pour feedback
 
-- [ ] **Sound design** : Bibliothèque SFX et auto-duck musique.
+- [ ] **Auto-translation** : Sous-titres multilingues via NLLB
 
-- [ ] **Plugin marketplace** : Découverte et installation de plugins.
+---
+
+## Backlog - Priorite Basse
+
+- [ ] **Plugin marketplace** : Interface de decouverte plugins
+
+- [ ] **Cloud rendering** : Rendu sur serveurs cloud
+
+- [ ] **Mobile companion** : App preview mobile
+
+---
 
 ## Limitations Connues
 
-1. **Mémoire GPU** : Le modèle Whisper large-v3 nécessite ~6GB VRAM. Utiliser un modèle plus petit si la mémoire est limitée.
+1. **Memoire GPU** : Whisper large-v3 = 6GB, WhisperX = +2GB
 
-2. **Durée VOD** : Les VODs très longues (>6h) peuvent être lentes à analyser. Envisager un traitement par chunks.
+2. **Duree VOD** : VODs >6h peuvent saturer RAM - traiter par chunks
 
-3. **Formats exotiques** : Certains codecs rares peuvent ne pas être supportés par FFmpeg. Convertir si nécessaire.
+3. **Formats exotiques** : Convertir en H.264/AAC avant import
 
-4. **Multi-speaker** : La diarization (identification des speakers) n'est pas encore implémentée.
+4. **Langues WhisperX** : Optimal pour FR/EN/ES/DE/IT/PT/JA/KO/ZH
+
+---
 
 ## Contributions Bienvenues
 
-- Amélioration des patterns de détection de hooks (français/anglais)
-- Nouveaux styles de sous-titres
+- Patterns detection hooks (FR/EN)
+- Styles sous-titres custom
 - Optimisations performance
-- Tests supplémentaires
+- Tests supplementaires
 - Documentation multilingue
 
+---
 
+## Changelog v1.1.0 (Janvier 2026)
 
+**Nouvelles fonctionnalites:**
+- Player video frame-accurate avec useVideoSync
+- WhisperX alignment pour sous-titres karaoke precis
+- Cold Open Engine avec preview A/B
+- Tracking facecam continu avec auto-reframe
+- Sound design: SFX + auto-duck + LUFS
+- Build Electron avec Python embarque
 
-
-
-
-
-
+**Ameliorations:**
+- Performance transcription 4-6x avec BatchedInferencePipeline
+- Composant ColdOpenPreview pour comparaison A/B
+- Configuration electron-builder complete (Win/Mac/Linux)
+- Suite de tests E2E Playwright + Pytest

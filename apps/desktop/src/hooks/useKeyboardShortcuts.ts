@@ -93,6 +93,12 @@ export function useKeyboardShortcuts() {
     }
   });
 
+  // Fullscreen toggle
+  useHotkeys('f11', (e) => {
+    e.preventDefault();
+    useUIStore.getState().toggleFullscreen();
+  });
+
   return {
     isPlaying
   };

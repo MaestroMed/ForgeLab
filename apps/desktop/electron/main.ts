@@ -40,6 +40,15 @@ async function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  // Fullscreen change events - notify renderer
+  mainWindow.on('enter-full-screen', () => {
+    mainWindow?.webContents.send('fullscreen-changed', true);
+  });
+
+  mainWindow.on('leave-full-screen', () => {
+    mainWindow?.webContents.send('fullscreen-changed', false);
+  });
 }
 
 async function checkEngineHealth(): Promise<boolean> {
@@ -188,6 +197,34 @@ ipcMain.handle('engine:start', async () => {
 ipcMain.handle('engine:stop', async () => {
   stopEngine();
   return true;
+});
+
+// Window controls
+ipcMain.handle('window:toggle-fullscreen', () => {
+  if (!mainWindow) return false;
+  const isFullScreen = mainWindow.isFullScreen();
+  mainWindow.setFullScreen(!isFullScreen);
+  return !isFullScreen;
+});
+
+ipcMain.handle('window:is-fullscreen', () => {
+  return mainWindow?.isFullScreen() || false;
+});
+
+ipcMain.handle('window:minimize', () => {
+  mainWindow?.minimize();
+});
+
+ipcMain.handle('window:maximize', () => {
+  if (mainWindow?.isMaximized()) {
+    mainWindow.unmaximize();
+  } else {
+    mainWindow?.maximize();
+  }
+});
+
+ipcMain.handle('window:close', () => {
+  mainWindow?.close();
 });
 
 // App lifecycle

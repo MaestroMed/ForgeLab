@@ -2,17 +2,29 @@
   "name": "@forge-lab/desktop",
   "version": "1.0.0",
   "private": true,
-  "description": "FORGE/LAB Desktop Application",
+  "description": "FORGE/LAB Desktop Application - AI-Powered Viral Clip Creator",
+  "author": {
+    "name": "FORGE LAB Team",
+    "email": "contact@forgelab.dev"
+  },
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
     "dev:electron": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "build": "tsc && vite build && electron-builder",
+    "build": "npm run build:prepare && npm run build:vite && npm run build:electron",
     "build:vite": "tsc && vite build",
+    "build:electron": "electron-builder --config electron-builder.config.js",
+    "build:prepare": "node scripts/prepare-python.js",
+    "build:win": "npm run build:prepare -- --platform=win32 && npm run build:vite && electron-builder --win",
+    "build:mac": "npm run build:prepare -- --platform=darwin && npm run build:vite && electron-builder --mac",
+    "build:linux": "npm run build:prepare -- --platform=linux && npm run build:vite && electron-builder --linux",
+    "build:all": "npm run build:vite && electron-builder -mwl",
     "preview": "vite preview",
     "lint": "eslint src --ext ts,tsx",
     "typecheck": "tsc --noEmit",
-    "electron:dev": "electron ."
+    "electron:dev": "electron .",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.1.2",

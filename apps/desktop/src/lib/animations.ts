@@ -210,6 +210,182 @@ export const skeletonPulse: Variants = {
   },
 };
 
+// ============================================
+// WESTWORLD THEME SPECIFIC ANIMATIONS
+// ============================================
+
+// Westworld card hover with glow
+export const westworldCardHover = {
+  whileHover: { 
+    scale: 1.02,
+    boxShadow: '0 0 30px rgba(0, 212, 255, 0.15)',
+    borderColor: 'rgba(0, 212, 255, 0.25)',
+  },
+  transition: { duration: 0.2 },
+};
+
+// Glow pulse animation
+export const westworldGlowPulse: Variants = {
+  animate: {
+    boxShadow: [
+      '0 0 20px rgba(0, 212, 255, 0.1)',
+      '0 0 40px rgba(0, 212, 255, 0.2)',
+      '0 0 20px rgba(0, 212, 255, 0.1)',
+    ],
+    transition: { 
+      duration: 2, 
+      repeat: Infinity,
+      ease: 'easeInOut',
+    },
+  },
+};
+
+// Scan-in effect for appearing elements
+export const westworldScanIn: Variants = {
+  hidden: { 
+    opacity: 0, 
+    y: -10, 
+    filter: 'blur(4px)',
+  },
+  show: { 
+    opacity: 1, 
+    y: 0, 
+    filter: 'blur(0px)',
+    transition: { duration: 0.3, ease: 'easeOut' },
+  },
+};
+
+// Data stream background animation
+export const westworldDataStream: Variants = {
+  animate: {
+    backgroundPosition: ['0% 0%', '100% 100%'],
+    transition: { 
+      duration: 3, 
+      repeat: Infinity, 
+      ease: 'linear',
+    },
+  },
+};
+
+// Stagger container for Westworld lists
+export const westworldStaggerContainer: Variants = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.08,
+      delayChildren: 0.15,
+    },
+  },
+};
+
+// Stagger item with scan effect
+export const westworldStaggerItem: Variants = {
+  hidden: { 
+    opacity: 0, 
+    x: -20, 
+    filter: 'blur(2px)',
+  },
+  show: { 
+    opacity: 1, 
+    x: 0,
+    filter: 'blur(0px)',
+    transition: { 
+      duration: 0.25,
+      ease: 'easeOut',
+    },
+  },
+};
+
+// Text reveal with glow
+export const westworldTextReveal: Variants = {
+  hidden: { 
+    opacity: 0,
+    textShadow: '0 0 0px rgba(0, 212, 255, 0)',
+  },
+  show: {
+    opacity: 1,
+    textShadow: '0 0 10px rgba(0, 212, 255, 0.3)',
+    transition: { duration: 0.4 },
+  },
+};
+
+// Breathing glow for active indicators
+export const westworldBreathe: Variants = {
+  animate: {
+    boxShadow: [
+      '0 0 20px rgba(0, 212, 255, 0.1)',
+      '0 0 40px rgba(0, 212, 255, 0.2)',
+    ],
+    transition: {
+      duration: 3,
+      repeat: Infinity,
+      repeatType: 'reverse',
+      ease: 'easeInOut',
+    },
+  },
+};
+
+// Glitch effect for errors or alerts
+export const westworldGlitch: Variants = {
+  glitch: {
+    x: [0, -2, 2, -1, 1, 0],
+    filter: [
+      'hue-rotate(0deg)',
+      'hue-rotate(90deg)',
+      'hue-rotate(-90deg)',
+      'hue-rotate(45deg)',
+      'hue-rotate(0deg)',
+    ],
+    transition: { duration: 0.3 },
+  },
+};
+
+// Button with neon effect
+export const westworldButtonPress = {
+  whileHover: { 
+    scale: 1.02,
+    filter: 'brightness(1.1)',
+    boxShadow: '0 0 20px rgba(0, 212, 255, 0.3)',
+  },
+  whileTap: { 
+    scale: 0.98,
+    filter: 'brightness(0.95)',
+  },
+  transition: quickSpring,
+};
+
+// Modal entrance with scan effect
+export const westworldModal: Variants = {
+  hidden: { 
+    opacity: 0, 
+    scale: 0.95,
+    filter: 'blur(4px) brightness(1.2)',
+  },
+  show: { 
+    opacity: 1, 
+    scale: 1,
+    filter: 'blur(0px) brightness(1)',
+    transition: { duration: 0.3 },
+  },
+  exit: { 
+    opacity: 0, 
+    scale: 0.95,
+    filter: 'blur(4px) brightness(0.8)',
+    transition: { duration: 0.2 },
+  },
+};
+
+// Progress bar with glow trail
+export const westworldProgress = {
+  initial: { width: 0, boxShadow: '0 0 10px rgba(0, 212, 255, 0.5)' },
+  animate: (progress: number) => ({
+    width: `${progress}%`,
+    boxShadow: '0 0 10px rgba(0, 212, 255, 0.5)',
+    transition: { duration: 0.3, ease: 'easeOut' },
+  }),
+};
+
 
 
 

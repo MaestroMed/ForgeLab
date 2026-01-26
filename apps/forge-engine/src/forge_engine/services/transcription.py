@@ -1,4 +1,11 @@
-"""Transcription service using faster-whisper."""
+"""Transcription service using faster-whisper with batched inference.
+
+Features:
+- Auto-detection of optimal batch_size based on GPU VRAM
+- Multi-GPU support via GPUManager
+- BatchedInferencePipeline for 4-6x speedup
+- INT8 quantization for modern GPUs
+"""
 
 import logging
 from pathlib import Path
@@ -9,17 +16,72 @@ from forge_engine.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def auto_detect_batch_size(vram_gb: float) -> int:
+    """Automatically detect optimal batch_size based on VRAM.
+    
+    Batch size recommendations based on testing:
+    - 32GB (RTX 5090): batch_size=48-64
+    - 24GB (RTX 4090): batch_size=32
+    - 16GB (RTX 5080): batch_size=24
+    - 12GB (RTX 4070 Ti): batch_size=16
+    - 8GB (RTX 3070): batch_size=8
+    - 6GB or less: batch_size=4
+    
+    Formula: ~2.5 batch per GB, capped by model size requirements.
+    """
+    if vram_gb >= 30:
+        return 64  # RTX 5090 (32GB)
+    elif vram_gb >= 22:
+        return 32  # RTX 4090 (24GB)
+    elif vram_gb >= 14:
+        return 24  # RTX 5080 (16GB)
+    elif vram_gb >= 10:
+        return 16  # RTX 4070 Ti (12GB)
+    elif vram_gb >= 7:
+        return 8   # RTX 3070 (8GB)
+    else:
+        return 4   # Low VRAM
+
+
+def auto_detect_num_workers(vram_gb: float) -> int:
+    """Automatically detect optimal num_workers based on VRAM.
+    
+    More workers = better GPU utilization but more VRAM usage.
+    """
+    if vram_gb >= 24:
+        return 4
+    elif vram_gb >= 12:
+        return 2
+    else:
+        return 1
+
+
 class TranscriptionService:
-    """Service for audio transcription using faster-whisper."""
+    """Service for audio transcription using faster-whisper with batched inference.
+    
+    Uses BatchedInferencePipeline for 4-6x speedup on GPU.
+    """
     
     _instance: Optional["TranscriptionService"] = None
     _model = None
+    _batched_model = None  # BatchedInferencePipeline for turbo mode
     _model_name: Optional[str] = None
     
     def __init__(self):
         self.model_name = settings.WHISPER_MODEL
         self.device = settings.WHISPER_DEVICE
         self.compute_type = settings.WHISPER_COMPUTE_TYPE
+        
+        # Auto-detect batch size based on VRAM
+        self._detected_vram_gb: Optional[float] = None
+        self._auto_batch_size: Optional[int] = None
+        self._auto_num_workers: Optional[int] = None
+        
+        # Will be auto-detected on first use, or use configured value as fallback
+        self.batch_size = getattr(settings, 'WHISPER_BATCH_SIZE', 16)
+        
+        # Try to auto-detect GPU and optimize settings
+        self._auto_detect_gpu_settings()
     
     @classmethod
     def get_instance(cls) -> "TranscriptionService":
@@ -35,8 +97,96 @@ class TranscriptionService:
         except ImportError:
             return False
     
+    def _auto_detect_gpu_settings(self):
+        """Auto-detect GPU and optimize batch_size/num_workers."""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                # Get first GPU's VRAM in GB
+                vram_mb = float(result.stdout.strip().split('\n')[0])
+                self._detected_vram_gb = vram_mb / 1024
+                
+                # Auto-detect optimal settings
+                self._auto_batch_size = auto_detect_batch_size(self._detected_vram_gb)
+                self._auto_num_workers = auto_detect_num_workers(self._detected_vram_gb)
+                
+                # Update batch_size if auto-detected is better than default
+                if self._auto_batch_size != self.batch_size:
+                    logger.info(
+                        "Auto-detected GPU: %.1f GB VRAM -> batch_size=%d, num_workers=%d",
+                        self._detected_vram_gb, self._auto_batch_size, self._auto_num_workers
+                    )
+                    self.batch_size = self._auto_batch_size
+        except Exception as e:
+            logger.debug("GPU auto-detection failed (will use defaults): %s", e)
+    
+    @property
+    def detected_vram_gb(self) -> Optional[float]:
+        """Get detected GPU VRAM in GB."""
+        return self._detected_vram_gb
+    
+    @property
+    def optimal_batch_size(self) -> int:
+        """Get optimal batch size for current GPU."""
+        return self._auto_batch_size or self.batch_size
+    
+    @property
+    def optimal_num_workers(self) -> int:
+        """Get optimal num_workers for current GPU."""
+        return self._auto_num_workers or getattr(settings, 'WHISPER_NUM_WORKERS', 2)
+    
+    @staticmethod
+    def get_available_models() -> List[Dict[str, Any]]:
+        """Get list of available Whisper models with metadata."""
+        return [
+            {
+                "id": "large-v3",
+                "name": "Large V3",
+                "description": "Meilleure qualité, plus lent",
+                "speed": 1.0,
+                "quality": 100,
+                "vram_gb": 10,
+            },
+            {
+                "id": "distil-large-v3",
+                "name": "Distil Large V3 (TURBO)",
+                "description": "5.8x plus rapide, qualité proche",
+                "speed": 5.8,
+                "quality": 97,
+                "vram_gb": 6,
+            },
+            {
+                "id": "medium",
+                "name": "Medium",
+                "description": "Équilibre vitesse/qualité",
+                "speed": 3.0,
+                "quality": 90,
+                "vram_gb": 5,
+            },
+            {
+                "id": "small",
+                "name": "Small",
+                "description": "Rapide, qualité acceptable",
+                "speed": 6.0,
+                "quality": 80,
+                "vram_gb": 2,
+            },
+            {
+                "id": "base",
+                "name": "Base",
+                "description": "Très rapide, qualité réduite",
+                "speed": 10.0,
+                "quality": 70,
+                "vram_gb": 1,
+            },
+        ]
+    
     def _load_model(self, model_name: Optional[str] = None):
-        """Load the Whisper model."""
+        """Load the Whisper model with BatchedInferencePipeline for turbo mode."""
         if not self.is_available():
             raise RuntimeError("faster-whisper is not installed")
         
@@ -89,16 +239,40 @@ class TranscriptionService:
             
             # Try loading model with fallback
             try:
-                logger.info("Attempting to load Whisper on %s (%s)...", device, compute_type)
+                # Use auto-detected or configured num_workers
+                num_workers = self.optimal_num_workers
+                batch_size = self.optimal_batch_size
+                
+                logger.info(
+                    "Loading Whisper on %s (%s, workers=%d, batch_size=%d, vram=%.1fGB)...",
+                    device, compute_type, num_workers, batch_size,
+                    self._detected_vram_gb or 0
+                )
                 self._model = WhisperModel(
                     target_model,
                     device=device,
                     compute_type=compute_type,
                     cpu_threads=4,
-                    num_workers=1
+                    num_workers=num_workers
                 )
                 self._model_name = target_model
                 logger.info("Whisper model loaded successfully on %s (%s)", device, compute_type)
+                
+                # Create BatchedInferencePipeline for turbo mode (4-6x speedup on GPU)
+                if device == "cuda":
+                    try:
+                        from faster_whisper import BatchedInferencePipeline
+                        self._batched_model = BatchedInferencePipeline(model=self._model)
+                        logger.info("BatchedInferencePipeline created (TURBO MODE enabled, batch_size=%d)", self.batch_size)
+                    except ImportError:
+                        logger.warning("BatchedInferencePipeline not available, using standard mode")
+                        self._batched_model = None
+                    except Exception as e:
+                        logger.warning("Failed to create BatchedInferencePipeline: %s", e)
+                        self._batched_model = None
+                else:
+                    self._batched_model = None
+                    
             except Exception as e:
                 if device == "cuda":
                     logger.warning("CUDA loading failed (%s), falling back to CPU", e)
@@ -109,10 +283,11 @@ class TranscriptionService:
                         device=device,
                         compute_type=compute_type,
                         cpu_threads=4,
-                        num_workers=1
+                        num_workers=1  # Use 1 for CPU fallback
                     )
                     self._model_name = target_model
-                    logger.info("Whisper model loaded on CPU (fallback)")
+                    self._batched_model = None
+                    logger.info("Whisper model loaded on CPU (fallback, workers=1)")
                 else:
                     raise
     
@@ -123,9 +298,22 @@ class TranscriptionService:
         word_timestamps: bool = True,
         initial_prompt: Optional[str] = None,
         custom_dictionary: Optional[List[str]] = None,
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        model_override: Optional[str] = None,  # Use different model (e.g. "distil-large-v3" for preview)
+        turbo_mode: Optional[bool] = None,  # Override turbo mode setting
     ) -> Dict[str, Any]:
-        """Transcribe audio file."""
+        """Transcribe audio file.
+        
+        Args:
+            audio_path: Path to audio file
+            language: Language code (default: settings.WHISPER_LANGUAGE)
+            word_timestamps: Include word-level timestamps
+            initial_prompt: Initial prompt for context
+            custom_dictionary: Custom words for better recognition
+            progress_callback: Progress callback function
+            model_override: Override model (e.g. "distil-large-v3" for preview mode)
+            turbo_mode: Override turbo mode (batched inference)
+        """
         import asyncio
         
         # Run in executor since faster-whisper is synchronous
@@ -138,7 +326,9 @@ class TranscriptionService:
                 word_timestamps,
                 initial_prompt,
                 custom_dictionary,
-                progress_callback
+                progress_callback,
+                model_override,
+                turbo_mode
             )
         )
     
@@ -149,14 +339,35 @@ class TranscriptionService:
         word_timestamps: bool,
         initial_prompt: Optional[str],
         custom_dictionary: Optional[List[str]],
-        progress_callback: Optional[callable]
+        progress_callback: Optional[callable],
+        model_override: Optional[str] = None,
+        turbo_mode: Optional[bool] = None
     ) -> Dict[str, Any]:
-        """Synchronous transcription."""
+        """Synchronous transcription with optional model override.
+        
+        Supports preview mode with distil-large-v3 for rapid transcription.
+        """
         if progress_callback:
             progress_callback(0)
+        
+        # Use configured default language if not specified
+        if language is None:
+            language = settings.WHISPER_LANGUAGE
+            logger.info("Using default language from config: %s", language)
+        else:
+            logger.info("Using specified language: %s", language)
+        
+        # Handle model override (e.g. for preview mode with distil-large-v3)
+        target_model = model_override or self.model_name
+        if model_override and model_override != self.model_name:
+            logger.info("Using model override: %s (instead of %s)", model_override, self.model_name)
+            # Force reload if different model requested
+            if self._model_name != model_override:
+                self._model = None
+                self._batched_model = None
             
-        logger.info("Loading model for transcription...")
-        self._load_model()
+        logger.info("Loading model for transcription: %s", target_model)
+        self._load_model(target_model)
         
         if progress_callback:
             progress_callback(2)
@@ -185,28 +396,53 @@ class TranscriptionService:
         if progress_callback:
             progress_callback(5)
         
-        # Transcribe - VAD filter disabled for faster processing on long videos
-        # VAD pre-analysis can take a very long time on 2h+ videos
-        use_vad = audio_duration < 3600  # Only use VAD for videos < 1h
-        logger.info("VAD filter: %s (duration: %.0fs)", "enabled" if use_vad else "disabled (long video)", audio_duration)
+        # ========================================
+        # TURBO MODE: Use BatchedInferencePipeline for 4-6x speedup
+        # ========================================
+        # Determine if we should use turbo mode
+        turbo_enabled = turbo_mode if turbo_mode is not None else getattr(settings, 'WHISPER_TURBO_MODE', True)
+        use_batched = self._batched_model is not None and turbo_enabled
         
-        segments, info = self._model.transcribe(
-            audio_path,
-            language=language,
-            word_timestamps=word_timestamps,
-            initial_prompt=prompt if prompt else None,
-            vad_filter=use_vad,
-            vad_parameters=dict(
-                min_silence_duration_ms=500,
-                speech_pad_ms=200
-            ) if use_vad else None,
-            condition_on_previous_text=True,
-            compression_ratio_threshold=2.4,
-            log_prob_threshold=-1.0,
-            no_speech_threshold=0.6
+        # VAD parameters optimized for streaming content
+        vad_params = dict(
+            threshold=0.5,
+            min_speech_duration_ms=250,
+            min_silence_duration_ms=800,  # Slightly aggressive for streams
+            speech_pad_ms=150
         )
         
-        logger.info("Transcription generator started, processing segments...")
+        if use_batched:
+            # TURBO MODE: Batched inference (4-6x faster on GPU)
+            logger.info("TURBO MODE: Using BatchedInferencePipeline (batch_size=%d)", self.batch_size)
+            
+            segments, info = self._batched_model.transcribe(
+                audio_path,
+                language=language,
+                word_timestamps=word_timestamps,
+                initial_prompt=prompt if prompt else None,
+                batch_size=self.batch_size,
+                vad_filter=True,  # Always use VAD with batched mode
+                vad_parameters=vad_params,
+            )
+        else:
+            # Standard mode (fallback)
+            use_vad = audio_duration < 3600  # Only use VAD for videos < 1h in standard mode
+            logger.info("Standard mode: VAD=%s (duration: %.0fs)", use_vad, audio_duration)
+            
+            segments, info = self._model.transcribe(
+                audio_path,
+                language=language,
+                word_timestamps=word_timestamps,
+                initial_prompt=prompt if prompt else None,
+                vad_filter=use_vad,
+                vad_parameters=vad_params if use_vad else None,
+                condition_on_previous_text=True,
+                compression_ratio_threshold=2.4,
+                log_prob_threshold=-1.0,
+                no_speech_threshold=0.6
+            )
+        
+        logger.info("Transcription %s started, processing segments...", "TURBO" if use_batched else "standard")
         if progress_callback:
             progress_callback(7)
         

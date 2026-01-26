@@ -16,6 +16,7 @@ sqlalchemy[asyncio]>=2.0.23
 
 # Transcription
 faster-whisper>=0.10.0
+whisperx>=3.1.0  # For precise word-level alignment (optional but recommended)
 
 # Audio/Video Processing
 numpy>=1.26.0

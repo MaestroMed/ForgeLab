@@ -29,10 +29,23 @@ class JobType(str, Enum):
     """Job type enumeration."""
     INGEST = "ingest"
     ANALYZE = "analyze"
+    DOWNLOAD = "download"
     RENDER_PROXY = "render_proxy"
     RENDER_FINAL = "render_final"
     GENERATE_VARIANTS = "generate_variants"
     EXPORT = "export"
+
+
+# Job priority (lower = higher priority)
+JOB_PRIORITY = {
+    JobType.DOWNLOAD.value: 1,   # Downloads first (user is waiting)
+    JobType.INGEST.value: 2,     # Then ingest (enables analysis)
+    JobType.EXPORT.value: 3,     # Exports are user-initiated
+    JobType.RENDER_FINAL.value: 4,
+    JobType.ANALYZE.value: 5,    # Analysis can be queued
+    JobType.RENDER_PROXY.value: 6,
+    JobType.GENERATE_VARIANTS.value: 7,
+}
 
 
 @dataclass
@@ -78,13 +91,31 @@ class JobManager:
     
     _instance: Optional["JobManager"] = None
     
+    # Timeout settings per job type (in seconds)
+    JOB_TIMEOUTS = {
+        JobType.DOWNLOAD.value: 3600,      # 1 hour for downloads
+        JobType.INGEST.value: 7200,        # 2 hours for ingestion
+        JobType.ANALYZE.value: 14400,      # 4 hours for analysis (large videos)
+        JobType.EXPORT.value: 1800,        # 30 min for export
+        JobType.RENDER_FINAL.value: 3600,  # 1 hour for final render
+        JobType.RENDER_PROXY.value: 600,   # 10 min for proxy
+        JobType.GENERATE_VARIANTS.value: 1800,
+    }
+    
+    # Stall detection: if no progress for this many seconds, mark as stalled
+    STALL_THRESHOLD = 300  # 5 minutes
+    
     def __init__(self):
         self._handlers: Dict[str, Callable] = {}
         self._running = False
         self._workers: List[asyncio.Task] = []
-        self._max_workers = 1  # Sequential processing for stability
+        # Allow 2 workers for parallel project processing
+        # Worker 0: High priority (downloads, ingests, exports)
+        # Worker 1: Low priority (analysis, rendering)
+        self._max_workers = 2
         self._listeners: Dict[str, List[Callable[[Job], None]]] = {}
         self._main_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._last_progress: Dict[str, tuple] = {}  # job_id -> (progress, timestamp)
     
     def set_main_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Store reference to main event loop for thread-safe updates."""
@@ -124,7 +155,11 @@ class JobManager:
             worker = asyncio.create_task(self._worker(i))
             self._workers.append(worker)
         
-        logger.info("Persistent Job manager started with %d workers", self._max_workers)
+        # Start stall/timeout monitor
+        monitor_task = asyncio.create_task(self._monitor_stuck_jobs())
+        self._workers.append(monitor_task)
+        
+        logger.info("Persistent Job manager started with %d workers + monitor", self._max_workers)
     
     async def stop(self) -> None:
         """Stop the job manager."""
@@ -137,8 +172,11 @@ class JobManager:
         logger.info("Job manager stopped")
     
     async def _worker(self, worker_id: int) -> None:
-        """Worker loop polling DB."""
+        """Worker loop polling DB with priority-based job selection."""
         logger.info("Worker %d started", worker_id)
+        
+        # Worker 0 handles high-priority jobs, Worker 1 handles any
+        high_priority_types = [JobType.DOWNLOAD.value, JobType.INGEST.value, JobType.EXPORT.value]
         
         while self._running:
             try:
@@ -148,35 +186,81 @@ class JobManager:
                 
                 # Transaction to get and lock next job
                 async with async_session_maker() as db:
-                    # Find oldest pending job created in last 24 hours
-                    # (ignore stale jobs from previous sessions)
+                    # Find pending jobs created in last 24 hours
                     cutoff = datetime.utcnow() - timedelta(hours=24)
-                    result = await db.execute(
-                        select(JobRecord)
-                        .where(JobRecord.status == JobStatus.PENDING.value)
-                        .where(JobRecord.created_at > cutoff)
-                        .order_by(JobRecord.created_at)
-                        .limit(1)
+                    
+                    # Build query with priority ordering
+                    from sqlalchemy import case
+                    
+                    # Create priority expression for SQL ordering
+                    priority_order = case(
+                        {
+                            JobType.DOWNLOAD.value: 1,
+                            JobType.INGEST.value: 2,
+                            JobType.EXPORT.value: 3,
+                            JobType.RENDER_FINAL.value: 4,
+                            JobType.ANALYZE.value: 5,
+                            JobType.RENDER_PROXY.value: 6,
+                            JobType.GENERATE_VARIANTS.value: 7,
+                        },
+                        value=JobRecord.type,
+                        else_=10
                     )
-                    record = result.scalar_one_or_none()
+                    
+                    # Worker 0: prioritize high-priority jobs
+                    # Worker 1+: take any available job
+                    if worker_id == 0:
+                        # High-priority worker - prefer downloads/ingests/exports
+                        result = await db.execute(
+                            select(JobRecord)
+                            .where(JobRecord.status == JobStatus.PENDING.value)
+                            .where(JobRecord.created_at > cutoff)
+                            .where(JobRecord.type.in_(high_priority_types))
+                            .order_by(priority_order, JobRecord.created_at)
+                            .limit(1)
+                        )
+                        record = result.scalar_one_or_none()
+                        
+                        # If no high-priority jobs, fall back to any
+                        if not record:
+                            result = await db.execute(
+                                select(JobRecord)
+                                .where(JobRecord.status == JobStatus.PENDING.value)
+                                .where(JobRecord.created_at > cutoff)
+                                .order_by(priority_order, JobRecord.created_at)
+                                .limit(1)
+                            )
+                            record = result.scalar_one_or_none()
+                    else:
+                        # Other workers - take any job by priority
+                        result = await db.execute(
+                            select(JobRecord)
+                            .where(JobRecord.status == JobStatus.PENDING.value)
+                            .where(JobRecord.created_at > cutoff)
+                            .order_by(priority_order, JobRecord.created_at)
+                            .limit(1)
+                        )
+                        record = result.scalar_one_or_none()
                     
                     if record:
                         job_id = record.id
                         job_type = record.type
                         project_id = record.project_id
-                        kwargs = record.result if record.result else {} # Arguments stored in result/payload temporarily
+                        kwargs = record.result if record.result else {}
                         
                         # Lock it
                         record.status = JobStatus.RUNNING.value
                         record.started_at = datetime.utcnow()
                         await db.commit()
-                        logger.info("Worker %d picked up job %s (%s)", worker_id, job_id, job_type)
+                        
+                        priority = JOB_PRIORITY.get(job_type, 10)
+                        logger.info("Worker %d picked up job %s (%s, priority=%d)", 
+                                   worker_id, job_id[:8], job_type, priority)
                         
                         handler = self._handlers.get(job_type)
                 
                 if job_id and handler:
                     # Reconstruct transient Job object for the handler
-                    # We pass the ID so the handler can update progress via update_progress
                     job = Job(
                         id=job_id,
                         type=JobType(job_type),
@@ -188,8 +272,8 @@ class JobManager:
                     
                     await self._execute_job(job)
                 else:
-                    # No job, sleep
-                    await asyncio.sleep(2)
+                    # No job, sleep (worker 1 sleeps a bit longer)
+                    await asyncio.sleep(1 if worker_id == 0 else 3)
                     
             except asyncio.CancelledError:
                 break
@@ -250,13 +334,16 @@ class JobManager:
     async def create_job(
         self,
         job_type: JobType,
-        handler: Callable[..., Coroutine],
+        handler: Optional[Callable[..., Coroutine]] = None,
         project_id: Optional[str] = None,
         **kwargs
     ) -> Job:
-        """Create job in DB."""
-        # Ensure handler is registered
-        self.register_handler(job_type, handler)
+        """Create job in DB. Uses registered handler if none provided."""
+        # Register handler if provided, otherwise verify one exists
+        if handler:
+            self.register_handler(job_type, handler)
+        elif job_type.value not in self._handlers:
+            raise ValueError(f"No handler registered for job type: {job_type.value}")
         
         async with async_session_maker() as db:
             record = JobRecord(
@@ -411,7 +498,125 @@ class JobManager:
                 .values(status=JobStatus.CANCELLED.value, completed_at=datetime.utcnow())
             )
             await db.commit()
+        logger.info("Job %s cancelled", job_id)
         return True
+    
+    async def retry_job(self, job_id: str) -> Optional[Job]:
+        """Retry a failed or cancelled job by resetting it to pending."""
+        async with async_session_maker() as db:
+            result = await db.execute(select(JobRecord).where(JobRecord.id == job_id))
+            record = result.scalar_one_or_none()
+            
+            if not record:
+                return None
+            
+            if record.status not in [JobStatus.FAILED.value, JobStatus.CANCELLED.value]:
+                logger.warning("Cannot retry job %s with status %s", job_id, record.status)
+                return None
+            
+            # Reset to pending
+            record.status = JobStatus.PENDING.value
+            record.progress = 0.0
+            record.error = None
+            record.started_at = None
+            record.completed_at = None
+            record.stage = ""
+            record.message = "Retrying..."
+            
+            await db.commit()
+            await db.refresh(record)
+            
+            logger.info("Job %s reset to pending for retry", job_id)
+            
+            return Job(
+                id=record.id,
+                type=JobType(record.type),
+                project_id=record.project_id,
+                status=JobStatus.PENDING,
+                created_at=record.created_at
+            )
+    
+    async def _monitor_stuck_jobs(self) -> None:
+        """Monitor for stuck/stalled jobs and handle timeouts."""
+        logger.info("Job stall monitor started")
+        
+        while self._running:
+            try:
+                await asyncio.sleep(60)  # Check every minute
+                
+                async with async_session_maker() as db:
+                    # Find running jobs
+                    result = await db.execute(
+                        select(JobRecord).where(JobRecord.status == JobStatus.RUNNING.value)
+                    )
+                    running_jobs = result.scalars().all()
+                    
+                    now = datetime.utcnow()
+                    
+                    for record in running_jobs:
+                        job_id = record.id
+                        job_type = record.type
+                        started_at = record.started_at
+                        progress = record.progress
+                        
+                        # Check timeout
+                        timeout = self.JOB_TIMEOUTS.get(job_type, 7200)  # Default 2h
+                        if started_at and (now - started_at).total_seconds() > timeout:
+                            logger.warning("Job %s timed out (>%ds)", job_id[:8], timeout)
+                            await db.execute(
+                                update(JobRecord)
+                                .where(JobRecord.id == job_id)
+                                .values(
+                                    status=JobStatus.FAILED.value,
+                                    error=f"Timeout: job exceeded {timeout//60} minutes",
+                                    completed_at=now
+                                )
+                            )
+                            await db.commit()
+                            continue
+                        
+                        # Check stall (no progress for STALL_THRESHOLD seconds)
+                        last_progress_data = self._last_progress.get(job_id)
+                        if last_progress_data:
+                            last_progress, last_time = last_progress_data
+                            if progress == last_progress and (now - last_time).total_seconds() > self.STALL_THRESHOLD:
+                                logger.warning("Job %s stalled at %.1f%% for >%ds", 
+                                             job_id[:8], progress, self.STALL_THRESHOLD)
+                                # Mark as failed with stall error
+                                await db.execute(
+                                    update(JobRecord)
+                                    .where(JobRecord.id == job_id)
+                                    .values(
+                                        status=JobStatus.FAILED.value,
+                                        error=f"Stalled: no progress for {self.STALL_THRESHOLD//60} minutes at {progress:.0f}%",
+                                        completed_at=now
+                                    )
+                                )
+                                await db.commit()
+                                del self._last_progress[job_id]
+                                continue
+                        
+                        # Update last known progress
+                        self._last_progress[job_id] = (progress, now)
+                    
+                    # Clean up old entries from _last_progress
+                    completed_ids = set()
+                    for job_id in list(self._last_progress.keys()):
+                        result = await db.execute(
+                            select(JobRecord.status).where(JobRecord.id == job_id)
+                        )
+                        status = result.scalar_one_or_none()
+                        if status and status != JobStatus.RUNNING.value:
+                            completed_ids.add(job_id)
+                    
+                    for job_id in completed_ids:
+                        del self._last_progress[job_id]
+                        
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.exception("Job monitor error: %s", e)
+                await asyncio.sleep(30)
 
     async def get_running_jobs_count(self) -> int:
         """Get count of currently running jobs."""

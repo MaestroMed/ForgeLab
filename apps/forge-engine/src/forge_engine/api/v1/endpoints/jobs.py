@@ -47,6 +47,36 @@ async def cancel_job(job_id: str) -> dict:
     return {"success": True, "data": {"cancelled": True}}
 
 
+@router.post("/{job_id}/retry")
+async def retry_job(job_id: str) -> dict:
+    """Retry a failed or cancelled job."""
+    job_manager = JobManager.get_instance()
+    job = await job_manager.retry_job(job_id)
+    
+    if not job:
+        raise HTTPException(
+            status_code=400, 
+            detail="Job cannot be retried (not found or not failed/cancelled)"
+        )
+    
+    return {"success": True, "data": job.to_dict()}
+
+
+@router.get("/stats/summary")
+async def get_jobs_stats() -> dict:
+    """Get job statistics summary."""
+    job_manager = JobManager.get_instance()
+    stats = await job_manager.get_jobs_stats()
+    
+    return {
+        "success": True, 
+        "data": {
+            "stats": stats,
+            "workers": job_manager._max_workers,
+        }
+    }
+
+
 
 
 

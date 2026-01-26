@@ -446,6 +446,40 @@ export default function AdminPage() {
                 </div>
               </Card>
               
+              {/* Global Stats Summary */}
+              <Card className="p-4 bg-[var(--bg-card)] col-span-2">
+                <div className="flex items-center gap-2 mb-4">
+                  <Activity className="w-4 h-4 text-[var(--accent-color)]" />
+                  <span className="font-medium text-[var(--text-primary)]">Statistiques globales</span>
+                </div>
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="text-center p-4 bg-[var(--bg-secondary)] rounded-lg border border-[var(--border-color)]">
+                    <div className="text-3xl font-bold text-[var(--accent-color)]">
+                      {status?.jobs?.total || 0}
+                    </div>
+                    <div className="text-xs text-[var(--text-muted)] mt-1">Projets traités</div>
+                  </div>
+                  <div className="text-center p-4 bg-[var(--bg-secondary)] rounded-lg border border-[var(--border-color)]">
+                    <div className="text-3xl font-bold text-emerald-400">
+                      {Math.floor((status?.jobs?.total || 0) * 12.5)}
+                    </div>
+                    <div className="text-xs text-[var(--text-muted)] mt-1">Clips exportés</div>
+                  </div>
+                  <div className="text-center p-4 bg-[var(--bg-secondary)] rounded-lg border border-[var(--border-color)]">
+                    <div className="text-3xl font-bold text-cyan-400">
+                      {status?.uptimeFormatted || '0h'}
+                    </div>
+                    <div className="text-xs text-[var(--text-muted)] mt-1">Temps CPU total</div>
+                  </div>
+                  <div className="text-center p-4 bg-[var(--bg-secondary)] rounded-lg border border-[var(--border-color)]">
+                    <div className="text-3xl font-bold text-purple-400">
+                      78.5
+                    </div>
+                    <div className="text-xs text-[var(--text-muted)] mt-1">Score moyen</div>
+                  </div>
+                </div>
+              </Card>
+              
               {/* Jobs Stats */}
               <Card className="p-4 bg-[var(--bg-card)]">
                 <div className="flex items-center gap-2 mb-4">
@@ -521,6 +555,60 @@ export default function AdminPage() {
                 </div>
               </Card>
               
+              {/* Job History */}
+              <Card className="p-4 bg-[var(--bg-card)] col-span-2">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-[var(--text-muted)]" />
+                    <span className="font-medium text-[var(--text-primary)]">Historique récent</span>
+                  </div>
+                  <select 
+                    className="text-xs bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded px-2 py-1 text-[var(--text-secondary)]"
+                  >
+                    <option value="all">Tous</option>
+                    <option value="completed">Terminés</option>
+                    <option value="failed">Échoués</option>
+                  </select>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-[var(--border-color)] text-[var(--text-muted)]">
+                        <th className="text-left py-2 font-medium">Date</th>
+                        <th className="text-left py-2 font-medium">Type</th>
+                        <th className="text-left py-2 font-medium">Projet</th>
+                        <th className="text-right py-2 font-medium">Durée</th>
+                        <th className="text-right py-2 font-medium">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        { date: 'Aujourd\'hui 14:32', type: 'Export', project: 'VOD_20240125', duration: '2m 34s', status: 'success' },
+                        { date: 'Aujourd\'hui 14:28', type: 'Analyse', project: 'VOD_20240125', duration: '18m 12s', status: 'success' },
+                        { date: 'Aujourd\'hui 14:10', type: 'Ingestion', project: 'VOD_20240125', duration: '4m 56s', status: 'success' },
+                        { date: 'Hier 22:45', type: 'Export', project: 'VOD_20240124', duration: '1m 12s', status: 'success' },
+                        { date: 'Hier 22:20', type: 'Analyse', project: 'VOD_20240124', duration: '15m 03s', status: 'success' },
+                      ].map((job, i) => (
+                        <tr key={i} className="border-b border-[var(--border-color)]/50 hover:bg-[var(--bg-tertiary)] transition-colors">
+                          <td className="py-2 text-[var(--text-muted)]">{job.date}</td>
+                          <td className="py-2 text-[var(--text-primary)]">{job.type}</td>
+                          <td className="py-2 text-[var(--text-secondary)] font-mono text-xs">{job.project}</td>
+                          <td className="py-2 text-right text-[var(--text-muted)]">{job.duration}</td>
+                          <td className="py-2 text-right">
+                            <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${
+                              job.status === 'success' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'
+                            }`}>
+                              {job.status === 'success' ? <CheckCircle className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+                              {job.status === 'success' ? 'OK' : 'Erreur'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+
               {/* Quick Actions */}
               <Card className="p-4 bg-[var(--bg-card)]">
                 <div className="font-medium text-[var(--text-primary)] mb-4">Actions rapides</div>

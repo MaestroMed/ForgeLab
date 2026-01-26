@@ -21,6 +21,21 @@ contextBridge.exposeInMainWorld('forge', {
 
   // Platform info
   platform: process.platform,
+
+  // Window controls
+  toggleFullscreen: () => ipcRenderer.invoke('window:toggle-fullscreen'),
+  isFullscreen: () => ipcRenderer.invoke('window:is-fullscreen'),
+  minimize: () => ipcRenderer.invoke('window:minimize'),
+  maximize: () => ipcRenderer.invoke('window:maximize'),
+  closeWindow: () => ipcRenderer.invoke('window:close'),
+
+  // Fullscreen change listener
+  onFullscreenChange: (callback: (isFullscreen: boolean) => void) => {
+    ipcRenderer.on('fullscreen-changed', (_, isFullscreen) => callback(isFullscreen));
+    return () => {
+      ipcRenderer.removeAllListeners('fullscreen-changed');
+    };
+  },
 });
 
 // Types for the exposed API
@@ -37,6 +52,13 @@ declare global {
       startEngine: () => Promise<boolean>;
       stopEngine: () => Promise<boolean>;
       platform: NodeJS.Platform;
+      // Window controls
+      toggleFullscreen: () => Promise<boolean>;
+      isFullscreen: () => Promise<boolean>;
+      minimize: () => Promise<void>;
+      maximize: () => Promise<void>;
+      closeWindow: () => Promise<void>;
+      onFullscreenChange: (callback: (isFullscreen: boolean) => void) => () => void;
     };
   }
 }

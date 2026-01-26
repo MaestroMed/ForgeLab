@@ -66,12 +66,79 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from forge_engine.services.ingest import IngestService
     from forge_engine.services.analysis import AnalysisService
     from forge_engine.services.export import ExportService
+    from forge_engine.services.youtube_dl import YouTubeDLService
     from forge_engine.core.jobs import JobType
     
     ingest_service = IngestService()
     analysis_service = AnalysisService()
     export_service = ExportService()
+    youtube_service = YouTubeDLService.get_instance()
     
+    # Download handler for URL imports
+    async def download_handler(job, project_id: str = None, **kwargs):
+        """Handle download jobs from URL imports."""
+        from pathlib import Path
+        from sqlalchemy import select
+        from forge_engine.core.config import settings
+        from forge_engine.core.database import async_session_maker
+        from forge_engine.models import Project
+        
+        job_manager_instance = JobManager.get_instance()
+        
+        url = kwargs.get("url")
+        quality = kwargs.get("quality", "best")
+        auto_ingest = kwargs.get("auto_ingest", True)
+        auto_analyze = kwargs.get("auto_analyze", True)
+        
+        if not url:
+            raise ValueError("No URL provided for download")
+        
+        async with async_session_maker() as db:
+            result = await db.execute(select(Project).where(Project.id == project_id))
+            project = result.scalar_one_or_none()
+            
+            if not project:
+                raise ValueError(f"Project not found: {project_id}")
+            
+            # Setup project directory
+            project_dir = settings.LIBRARY_PATH / "projects" / project.id
+            source_dir = project_dir / "source"
+            source_dir.mkdir(parents=True, exist_ok=True)
+            
+            def progress_callback(pct, msg):
+                job_manager_instance.update_progress(job, pct * 0.9, "download", msg)
+            
+            # Download video
+            downloaded_path = await youtube_service.download_video(
+                url=url,
+                output_dir=source_dir,
+                quality=quality,
+                progress_callback=progress_callback
+            )
+            
+            if not downloaded_path or not downloaded_path.exists():
+                raise ValueError("Download failed - no file created")
+            
+            # Update project with source path
+            project.source_path = str(downloaded_path)
+            project.source_filename = downloaded_path.name
+            project.status = "pending"
+            await db.commit()
+            
+            job_manager_instance.update_progress(job, 95, "complete", "Téléchargement terminé")
+            
+            # Auto-chain to ingest if requested
+            if auto_ingest:
+                ingest_job = await job_manager_instance.create_job(
+                    job_type=JobType.INGEST,
+                    project_id=project.id,
+                    auto_analyze=auto_analyze
+                )
+                logger.info("Created ingest job %s for project %s", ingest_job.id, project.id)
+            
+            return {"downloaded_path": str(downloaded_path)}
+    
+    job_manager.register_handler(JobType.DOWNLOAD, download_handler)
     job_manager.register_handler(JobType.INGEST, ingest_service.run_ingest)
     job_manager.register_handler(JobType.ANALYZE, analysis_service.run_analysis)
     job_manager.register_handler(JobType.EXPORT, export_service.run_export)

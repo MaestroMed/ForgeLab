@@ -2,7 +2,7 @@
 
 import logging
 import os
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -96,6 +96,12 @@ class IntroConfigRequest(BaseModel):
     animation: str = "fade"  # fade, slide, zoom, bounce
 
 
+class MusicConfigRequest(BaseModel):
+    path: str  # Path to MP3 file
+    volume: float = 0.5  # 0.0 to 1.0
+    startOffset: float = 0.0  # Seconds to skip at start of music
+
+
 class ExportRequest(BaseModel):
     segment_id: str
     variant: str = "A"
@@ -110,6 +116,7 @@ class ExportRequest(BaseModel):
     caption_style: Optional[CaptionStyleRequest] = None
     layout_config: Optional[LayoutConfigRequest] = None
     intro_config: Optional[IntroConfigRequest] = None
+    music_config: Optional[MusicConfigRequest] = None
 
 
 class GenerateVariantsRequest(BaseModel):
@@ -204,6 +211,7 @@ async def import_from_url(
         """Handle video download."""
         from forge_engine.api.v1.endpoints.websockets import broadcast_project_update
         from forge_engine.core.config import settings
+        from forge_engine.core.database import async_session_maker
         
         project_id = kwargs.get("project_id")
         url = kwargs.get("url")
@@ -265,10 +273,8 @@ async def import_from_url(
             return {"downloaded_path": str(downloaded_path)}
     
     # Create job
-    from forge_engine.core.database import async_session_maker
-    
     job = await job_manager.create_job(
-        job_type=JobType.INGEST,  # Reuse ingest type for now
+        job_type=JobType.DOWNLOAD,
         handler=download_handler,
         project_id=project.id,
         url=request.url,
@@ -689,6 +695,7 @@ async def export_segment(
     logger.info(f"[API] Export request - caption_style: {request.caption_style}")
     logger.info(f"[API] Export request - layout_config: {request.layout_config}")
     logger.info(f"[API] Export request - intro_config: {request.intro_config}")
+    logger.info(f"[API] Export request - music_config: {request.music_config}")
     
     job = await job_manager.create_job(
         job_type=JobType.EXPORT,
@@ -707,9 +714,232 @@ async def export_segment(
         caption_style=request.caption_style.model_dump() if request.caption_style else None,
         layout_config=request.layout_config.model_dump() if request.layout_config else None,
         intro_config=request.intro_config.model_dump() if request.intro_config else None,
+        music_config=request.music_config.model_dump() if request.music_config else None,
     )
     
     return {"success": True, "data": {"jobId": job.id}}
+
+
+class MultiExportRequest(BaseModel):
+    """Request body for multi-variant export."""
+    segment_id: str
+    styles: Optional[List[str]] = None  # Default: ["viral", "clean", "impact"]
+    platform: str = "tiktok"
+    include_captions: bool = True
+    burn_subtitles: bool = True
+    use_nvenc: bool = True
+    layout_config: Optional[LayoutConfigRequest] = None
+    intro_config: Optional[IntroConfigRequest] = None
+    music_config: Optional[MusicConfigRequest] = None
+
+
+@router.post("/{project_id}/export-variants")
+async def export_all_variants(
+    project_id: str,
+    request: MultiExportRequest,
+    db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Export a segment with all 3 style variants (VIRAL, CLEAN, IMPACT)."""
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    result = await db.execute(
+        select(Segment)
+        .where(Segment.id == request.segment_id)
+        .where(Segment.project_id == project_id)
+    )
+    segment = result.scalar_one_or_none()
+    
+    if not segment:
+        raise HTTPException(status_code=404, detail="Segment not found")
+    
+    # Create multi-export job
+    job_manager = JobManager.get_instance()
+    export_service = ExportService()
+    
+    logger.info(f"[API] Multi-export request for segment {request.segment_id} with styles: {request.styles or ['viral', 'clean', 'impact']}")
+    
+    job = await job_manager.create_job(
+        job_type=JobType.EXPORT,
+        handler=export_service.generate_all_variants,
+        project_id=project_id,
+        segment_id=request.segment_id,
+        styles=request.styles,
+        platform=request.platform,
+        include_captions=request.include_captions,
+        burn_subtitles=request.burn_subtitles,
+        use_nvenc=request.use_nvenc,
+        layout_config=request.layout_config.model_dump() if request.layout_config else None,
+        intro_config=request.intro_config.model_dump() if request.intro_config else None,
+        music_config=request.music_config.model_dump() if request.music_config else None,
+    )
+    
+    return {"success": True, "data": {"jobId": job.id, "variants": request.styles or ["viral", "clean", "impact"]}}
+
+
+class BatchExportRequest(BaseModel):
+    """Request body for batch export - WORLD CLASS one-click export."""
+    min_score: float = 70.0  # Minimum score threshold
+    max_clips: int = 500  # Maximum clips to export (no practical limit)
+    style: str = "viral_pro"  # Caption style (default: world class)
+    platform: str = "tiktok"
+    include_captions: bool = True
+    burn_subtitles: bool = True
+    include_cover: bool = True
+    include_metadata: bool = True
+    use_nvenc: bool = True
+
+
+@router.post("/{project_id}/export-all")
+async def batch_export_all_clips(
+    project_id: str,
+    request: BatchExportRequest,
+    db: AsyncSession = Depends(get_db)
+) -> dict:
+    """
+    WORLD CLASS BATCH EXPORT - Export all high-scoring clips in one click.
+    
+    This is the simplified workflow for viral content creation:
+    1. Analyzes all segments with score >= min_score
+    2. Exports top max_clips with viral_pro style
+    3. Generates covers and metadata automatically
+    
+    Returns job ID to track progress via WebSocket.
+    """
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    if project.status not in ("analyzed", "ready"):
+        raise HTTPException(status_code=400, detail="Project must be analyzed first")
+    
+    # Count available segments
+    count_result = await db.execute(
+        select(func.count())
+        .select_from(Segment)
+        .where(Segment.project_id == project_id)
+        .where(Segment.score_total >= request.min_score)
+    )
+    available_count = count_result.scalar() or 0
+    
+    if available_count == 0:
+        return {
+            "success": True,
+            "data": {
+                "message": f"Aucun segment avec score >= {request.min_score}",
+                "availableCount": 0
+            }
+        }
+    
+    # Create batch export job
+    job_manager = JobManager.get_instance()
+    export_service = ExportService()
+    
+    logger.info(f"[API] Batch export for project {project_id}: {available_count} segments available, exporting top {request.max_clips} with style '{request.style}'")
+    
+    job = await job_manager.create_job(
+        job_type=JobType.EXPORT,
+        handler=export_service.batch_export_all,
+        project_id=project_id,
+        min_score=request.min_score,
+        max_clips=request.max_clips,
+        style=request.style,
+        platform=request.platform,
+        include_captions=request.include_captions,
+        burn_subtitles=request.burn_subtitles,
+        include_cover=request.include_cover,
+        include_metadata=request.include_metadata,
+        use_nvenc=request.use_nvenc,
+    )
+    
+    return {
+        "success": True,
+        "data": {
+            "jobId": job.id,
+            "availableCount": available_count,
+            "willExport": min(available_count, request.max_clips),
+            "style": request.style,
+            "minScore": request.min_score
+        }
+    }
+
+
+@router.get("/{project_id}/thumbnail")
+async def get_project_thumbnail(
+    project_id: str,
+    time: float = Query(0, description="Time in seconds to extract thumbnail"),
+    width: int = Query(320, ge=32, le=1920),
+    height: int = Query(180, ge=32, le=1080),
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate a thumbnail from project video at specified time."""
+    from fastapi.responses import FileResponse, Response
+    from pathlib import Path
+    from forge_engine.core.config import settings
+    import subprocess
+    import hashlib
+    
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Check if project has a stored thumbnail
+    if project.thumbnail_path and Path(project.thumbnail_path).exists():
+        return FileResponse(
+            project.thumbnail_path,
+            media_type="image/jpeg"
+        )
+    
+    # Try to find proxy or source video
+    project_dir = settings.LIBRARY_PATH / "projects" / project_id
+    proxy_path = project_dir / "proxy" / "proxy.mp4"
+    source_path = Path(project.source_path) if project.source_path else None
+    
+    video_path = None
+    if proxy_path.exists():
+        video_path = proxy_path
+    elif source_path and source_path.exists():
+        video_path = source_path
+    
+    if not video_path:
+        # Return placeholder
+        raise HTTPException(status_code=404, detail="No video found for thumbnail")
+    
+    # Generate thumbnail using FFmpeg
+    cache_dir = project_dir / "cache" / "thumbnails"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Cache key based on time and size
+    cache_key = hashlib.md5(f"{time}_{width}_{height}".encode()).hexdigest()[:8]
+    thumb_path = cache_dir / f"thumb_{cache_key}.jpg"
+    
+    if not thumb_path.exists():
+        try:
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", str(max(0, time)),
+                "-i", str(video_path),
+                "-vframes", "1",
+                "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
+                "-q:v", "3",
+                str(thumb_path)
+            ]
+            subprocess.run(cmd, capture_output=True, timeout=10)
+        except Exception as e:
+            logger.error(f"Failed to generate thumbnail: {e}")
+            raise HTTPException(status_code=500, detail="Failed to generate thumbnail")
+    
+    if thumb_path.exists():
+        return FileResponse(thumb_path, media_type="image/jpeg")
+    
+    raise HTTPException(status_code=500, detail="Thumbnail generation failed")
 
 
 @router.get("/{project_id}/artifacts")
@@ -726,6 +956,47 @@ async def list_artifacts(
     artifacts = result.scalars().all()
     
     return {"success": True, "data": [a.to_dict() for a in artifacts]}
+
+
+@router.get("/{project_id}/artifacts/{artifact_id}/file")
+async def serve_artifact_file(
+    project_id: str,
+    artifact_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """Serve an artifact file (video, cover, etc.)."""
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+    from pathlib import Path
+    
+    result = await db.execute(
+        select(Artifact)
+        .where(Artifact.id == artifact_id)
+        .where(Artifact.project_id == project_id)
+    )
+    artifact = result.scalar_one_or_none()
+    
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    
+    file_path = Path(artifact.path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+    
+    # Determine media type based on artifact type
+    media_types = {
+        "video": "video/mp4",
+        "cover": "image/jpeg",
+        "thumbnail": "image/jpeg",
+        "audio": "audio/wav",
+    }
+    media_type = media_types.get(artifact.type, "application/octet-stream")
+    
+    return FileResponse(
+        file_path,
+        media_type=media_type,
+        filename=artifact.filename
+    )
 
 
 

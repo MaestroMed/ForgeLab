@@ -116,8 +116,17 @@ export function ExportModal({
   const handleExport = async () => {
     setExporting(true);
     // Always use the latest caption style from store at export time
-    const latestStyle = useSubtitleStyleStore.getState().style;
-    console.log('[ExportModal] Exporting with captionStyle:', latestStyle);
+    const storeState = useSubtitleStyleStore.getState();
+    const latestStyle = storeState.style;
+    const presetName = storeState.presetName;
+    
+    console.log('=== EXPORT DEBUG ===');
+    console.log('[ExportModal] Preset actif:', presetName);
+    console.log('[ExportModal] Style complet:', JSON.stringify(latestStyle, null, 2));
+    console.log('[ExportModal] Couleur highlight:', latestStyle.highlightColor);
+    console.log('[ExportModal] Animation:', latestStyle.animation);
+    console.log('====================');
+    
     await onExport({ ...options, captionStyle: latestStyle });
     setExporting(false);
     onClose();

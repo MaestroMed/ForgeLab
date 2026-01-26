@@ -1,0 +1,38 @@
+FORGE LAB - End User License Agreement
+======================================
+
+Copyright © 2026 FORGE LAB. All rights reserved.
+
+This software is provided "as-is" without warranty of any kind.
+
+LICENSE TERMS:
+
+1. GRANT OF LICENSE
+   This license grants you the right to use FORGE LAB for personal 
+   and commercial video content creation.
+
+2. RESTRICTIONS
+   You may not:
+   - Reverse engineer or decompile the software
+   - Redistribute the software without authorization
+   - Use the software for illegal purposes
+
+3. INTELLECTUAL PROPERTY
+   FORGE LAB and all related trademarks are property of FORGE LAB.
+   Content created with FORGE LAB belongs to you.
+
+4. THIRD-PARTY COMPONENTS
+   This software includes:
+   - FFmpeg (LGPL/GPL licensed)
+   - Python (PSF License)
+   - Various open-source libraries (see CREDITS.txt)
+
+5. DISCLAIMER
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR
+   ANY CLAIM, DAMAGES OR OTHER LIABILITY.
+
+By installing FORGE LAB, you agree to these terms.
+
+For support: contact@forgelab.dev
+Website: https://forgelab.dev

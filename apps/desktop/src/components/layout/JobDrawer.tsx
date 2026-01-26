@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, CheckCircle, XCircle, Clock, Loader2, RefreshCw, Trash2, ExternalLink, Cpu, Zap, ChevronDown, ChevronUp } from 'lucide-react';
-import { useJobsStore, useUIStore } from '@/store';
+import { X, CheckCircle, XCircle, Clock, Loader2, RefreshCw, Trash2, ExternalLink, Cpu, Zap, ChevronDown, ChevronUp, FolderOpen, Play, AlertTriangle } from 'lucide-react';
+import { useJobsStore, useUIStore, useToastStore } from '@/store';
 import { useShallow } from 'zustand/react/shallow';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
@@ -71,15 +71,62 @@ export default function JobDrawer() {
     }
   }, [expandedJobId, jobs, jobDetails]);
 
+  // Auto-clear completed jobs after 2 minutes
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      jobs.forEach((job) => {
+        if (job.status === 'completed') {
+          // Remove completed jobs after 2 minutes (120000ms)
+          // Note: We don't have completedAt, so we remove after a fixed delay
+          removeJob(job.id);
+        }
+      });
+    }, 120000); // Check every 2 minutes
+    
+    return () => clearInterval(interval);
+  }, [jobs, removeJob]);
+
   // Separate active and completed jobs
   const activeJobs = jobs.filter((j) => j.status === 'running' || j.status === 'pending');
   const completedJobs = jobs.filter((j) => j.status === 'completed' || j.status === 'failed' || j.status === 'cancelled');
 
+  const { addToast } = useToastStore();
+
   const handleCancel = async (jobId: string) => {
     try {
       await api.cancelJob(jobId);
+      addToast({ type: 'info', title: 'Job annulé', message: 'La tâche a été annulée' });
     } catch (e) {
       console.error('Failed to cancel job:', e);
+      addToast({ type: 'error', title: 'Erreur', message: 'Impossible d\'annuler le job' });
+    }
+  };
+
+  const handleRetry = async (jobId: string) => {
+    try {
+      const response = await api.request(`/jobs/${jobId}/retry`, { method: 'POST' });
+      if (response.success) {
+        addToast({ type: 'success', title: 'Relance', message: 'La tâche a été relancée' });
+      } else {
+        throw new Error(response.error || 'Échec de la relance');
+      }
+    } catch (e) {
+      console.error('Failed to retry job:', e);
+      addToast({ type: 'error', title: 'Erreur', message: 'Impossible de relancer le job' });
+    }
+  };
+
+  const handleOpenFolder = async (projectId: string) => {
+    try {
+      const project = await api.getProject(projectId);
+      if (project.data?.path) {
+        // Open exports folder
+        const exportsPath = `${project.data.path}\\exports`;
+        window.forge?.openPath?.(exportsPath) || window.forge?.openPath?.(project.data.path);
+      }
+    } catch (e) {
+      console.error('Failed to open folder:', e);
     }
   };
 
@@ -87,12 +134,25 @@ export default function JobDrawer() {
     completedJobs.forEach((job) => removeJob(job.id));
   };
 
+  // Format elapsed time
+  const formatDuration = (startedAt?: string) => {
+    if (!startedAt) return '';
+    const start = new Date(startedAt);
+    const now = new Date();
+    const seconds = Math.floor((now.getTime() - start.getTime()) / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+  };
+
   const jobTypeLabels: Record<string, string> = {
+    download: 'Téléchargement',
     ingest: 'Ingestion',
     analyze: 'Analyse',
     export: 'Export',
     render_proxy: 'Proxy',
     render_final: 'Rendu final',
+    generate_variants: 'Variantes',
   };
 
   const statusIcons: Record<string, React.ReactNode> = {
@@ -221,9 +281,17 @@ export default function JobDrawer() {
                             <ChevronDown className="w-4 h-4 text-[var(--text-muted)]" />
                           )}
                           <button
-                            onClick={(e) => { e.stopPropagation(); handleCancel(job.id); }}
+                            onClick={(e) => { 
+                              e.stopPropagation(); 
+                              // If job is at 100%, just remove it silently instead of "cancelling"
+                              if (job.progress >= 100) {
+                                removeJob(job.id);
+                              } else {
+                                handleCancel(job.id);
+                              }
+                            }}
                             className="p-1.5 hover:bg-red-500/20 rounded-lg transition-colors"
-                            title="Annuler"
+                            title={job.progress >= 100 ? "Retirer" : "Annuler"}
                           >
                             <X className="w-4 h-4 text-[var(--text-muted)]" />
                           </button>
@@ -365,24 +433,50 @@ export default function JobDrawer() {
                                   </div>
                                   {job.error && (
                                     <div>
-                                      <span className="text-[var(--text-muted)] text-xs">Erreur</span>
+                                      <span className="text-[var(--text-muted)] text-xs flex items-center gap-1">
+                                        <AlertTriangle className="w-3 h-3 text-red-400" />
+                                        Erreur
+                                      </span>
                                       <p className="text-xs text-red-400 bg-red-500/10 p-2 rounded mt-1 break-all">
                                         {job.error}
                                       </p>
                                     </div>
                                   )}
-                                  {job.projectId && (
-                                    <button
-                                      onClick={() => {
-                                        setJobDrawerOpen(false);
-                                        navigate(`/project/${job.projectId}`);
-                                      }}
-                                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-[var(--bg-tertiary)] text-[var(--text-secondary)] rounded-lg hover:bg-[var(--bg-primary)] transition-colors"
-                                    >
-                                      <ExternalLink className="w-3 h-3" />
-                                      Voir le projet
-                                    </button>
-                                  )}
+                                  {/* Actions for completed/failed jobs */}
+                                  <div className="flex flex-wrap gap-2 pt-2">
+                                    {/* Retry button for failed/cancelled */}
+                                    {(job.status === 'failed' || job.status === 'cancelled') && (
+                                      <button
+                                        onClick={() => handleRetry(job.id)}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-green-500/20 text-green-400 rounded-lg hover:bg-green-500/30 transition-colors"
+                                      >
+                                        <RefreshCw className="w-3 h-3" />
+                                        Relancer
+                                      </button>
+                                    )}
+                                    {/* Open folder for completed exports */}
+                                    {job.status === 'completed' && job.type === 'export' && job.projectId && (
+                                      <button
+                                        onClick={() => handleOpenFolder(job.projectId!)}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30 transition-colors"
+                                      >
+                                        <FolderOpen className="w-3 h-3" />
+                                        Ouvrir le dossier
+                                      </button>
+                                    )}
+                                    {job.projectId && (
+                                      <button
+                                        onClick={() => {
+                                          setJobDrawerOpen(false);
+                                          navigate(`/project/${job.projectId}`);
+                                        }}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-[var(--bg-tertiary)] text-[var(--text-secondary)] rounded-lg hover:bg-[var(--bg-primary)] transition-colors"
+                                      >
+                                        <ExternalLink className="w-3 h-3" />
+                                        Voir le projet
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
                               </motion.div>
                             )}

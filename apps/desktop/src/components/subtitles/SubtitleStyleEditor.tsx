@@ -28,11 +28,26 @@ const POSITION_OPTIONS = [
   { id: 'top', name: 'Haut' },
 ];
 
+// 3 OPTIMIZED TIKTOK STYLES
 const PRESETS = [
-  { id: 'default', name: 'Standard', preview: { bg: 'transparent', color: '#FFF', outline: '#000' } },
-  { id: 'mrbeast', name: 'MrBeast', preview: { bg: 'transparent', color: '#FFF', outline: '#000' } },
-  { id: 'minimalist', name: 'Minimaliste', preview: { bg: 'rgba(0,0,0,0.6)', color: '#FFF', outline: 'transparent' } },
-  { id: 'karaoke', name: 'Karaoké', preview: { bg: 'transparent', color: '#FFF', outline: '#000' } },
+  { 
+    id: 'viral', 
+    name: '🔥 VIRAL', 
+    description: 'Karaoke style - Maximum engagement',
+    preview: { bg: 'transparent', color: '#FFF', outline: '#000', highlight: '#00BFFF' } 
+  },
+  { 
+    id: 'clean', 
+    name: '✨ CLEAN', 
+    description: 'Lisible et professionnel',
+    preview: { bg: 'transparent', color: '#FFF', outline: '#000', highlight: '#FFD700' } 
+  },
+  { 
+    id: 'impact', 
+    name: '💥 IMPACT', 
+    description: 'Style MrBeast - Attention max',
+    preview: { bg: 'transparent', color: '#FFF', outline: '#000', highlight: '#FF0000' } 
+  },
 ];
 
 export function SubtitleStyleEditor() {
@@ -72,33 +87,44 @@ export function SubtitleStyleEditor() {
       {/* Tab content */}
       <div className="min-h-[200px]">
         {activeTab === 'presets' && (
-          <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-2">
             {PRESETS.map((preset) => (
               <motion.button
                 key={preset.id}
-                className={`p-3 rounded-lg text-left transition-colors ${
+                className={`w-full p-4 rounded-xl text-left transition-all ${
                   presetName === preset.id
-                    ? 'bg-blue-500/20 ring-2 ring-blue-500'
+                    ? 'bg-gradient-to-r from-blue-500/20 to-purple-500/20 ring-2 ring-blue-500'
                     : 'bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)]'
                 }`}
                 onClick={() => applyPreset(preset.id)}
-                whileHover={{ scale: 1.02 }}
+                whileHover={{ scale: 1.01 }}
+                whileTap={{ scale: 0.99 }}
               >
-                {/* Preview */}
-                <div
-                  className="h-8 rounded flex items-center justify-center text-sm font-bold mb-2"
-                  style={{
-                    backgroundColor: preset.preview.bg,
-                    color: preset.preview.color,
-                    textShadow:
-                      preset.preview.outline !== 'transparent'
-                        ? `2px 2px 0 ${preset.preview.outline}, -2px 2px 0 ${preset.preview.outline}, 2px -2px 0 ${preset.preview.outline}, -2px -2px 0 ${preset.preview.outline}`
-                        : 'none',
-                  }}
-                >
-                  Exemple
+                <div className="flex items-center gap-4">
+                  {/* Preview with highlight color */}
+                  <div
+                    className="h-12 w-24 rounded-lg flex items-center justify-center text-base font-black"
+                    style={{
+                      backgroundColor: '#1a1a2e',
+                      color: preset.preview.color,
+                      textShadow: `3px 3px 0 ${preset.preview.outline}, -3px 3px 0 ${preset.preview.outline}, 3px -3px 0 ${preset.preview.outline}, -3px -3px 0 ${preset.preview.outline}`,
+                    }}
+                  >
+                    <span>C'est </span>
+                    <span style={{ color: preset.preview.highlight }}>cool</span>
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-base font-bold text-[var(--text-primary)]">{preset.name}</div>
+                    <div className="text-xs text-[var(--text-muted)]">{preset.description}</div>
+                  </div>
+                  {presetName === preset.id && (
+                    <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center">
+                      <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                  )}
                 </div>
-                <span className="text-sm font-medium text-[var(--text-primary)]">{preset.name}</span>
               </motion.button>
             ))}
           </div>

@@ -1,17 +1,16 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Loader2, Minimize2, Maximize2 } from 'lucide-react';
+import { X, Loader2 } from 'lucide-react';
 import { useJobsStore } from '@/store';
 import { useShallow } from 'zustand/react/shallow';
 import { api } from '@/lib/api';
-import { Progress } from '@/components/ui/Progress';
 
 interface ProgressOverlayProps {
   projectId: string;
 }
 
 export default function ProgressOverlay({ projectId }: ProgressOverlayProps) {
-  const [minimized, setMinimized] = useState(false);
+  const [hidden, setHidden] = useState(false);
 
   // Get active job for this project
   const activeJob = useJobsStore(
@@ -23,7 +22,15 @@ export default function ProgressOverlay({ projectId }: ProgressOverlayProps) {
     })
   );
 
-  if (!activeJob) return null;
+  // Reset hidden state when a new job starts
+  useEffect(() => {
+    if (activeJob) {
+      setHidden(false);
+    }
+  }, [activeJob?.id]);
+
+  // If hidden or no active job, don't render
+  if (hidden || !activeJob) return null;
 
   const progress = activeJob.progress || 0;
   const circumference = 2 * Math.PI * 90; // radius = 90
@@ -45,83 +52,10 @@ export default function ProgressOverlay({ projectId }: ProgressOverlayProps) {
     }
   };
 
-  // Minimized floating widget
-  if (minimized) {
-    return (
-      <motion.div
-        initial={{ y: 100, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        exit={{ y: 100, opacity: 0 }}
-        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-        className="fixed bottom-20 right-4 z-40"
-      >
-        <div className="glass rounded-xl shadow-2xl p-3 min-w-[280px]">
-          <div className="flex items-center gap-3 mb-2">
-            {/* Mini progress ring */}
-            <div className="relative w-10 h-10 flex-shrink-0">
-              <svg className="w-full h-full -rotate-90" viewBox="0 0 40 40">
-                <circle
-                  cx="20"
-                  cy="20"
-                  r="16"
-                  fill="none"
-                  stroke="rgba(255,255,255,0.1)"
-                  strokeWidth="3"
-                />
-                <circle
-                  cx="20"
-                  cy="20"
-                  r="16"
-                  fill="none"
-                  stroke="url(#miniProgressGradient)"
-                  strokeWidth="3"
-                  strokeLinecap="round"
-                  strokeDasharray={2 * Math.PI * 16}
-                  strokeDashoffset={2 * Math.PI * 16 * (1 - progress / 100)}
-                />
-                <defs>
-                  <linearGradient id="miniProgressGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                    <stop offset="0%" stopColor="#10B981" />
-                    <stop offset="100%" stopColor="#06B6D4" />
-                  </linearGradient>
-                </defs>
-              </svg>
-              <span className="absolute inset-0 flex items-center justify-center text-xs font-bold text-[var(--text-primary)]">
-                {Math.floor(progress)}%
-              </span>
-            </div>
-
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-[var(--text-primary)] truncate">
-                {jobTypeLabels[activeJob.type] || activeJob.type}
-              </div>
-              <div className="text-xs text-[var(--text-muted)] truncate">
-                {activeJob.stage || 'En cours...'}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setMinimized(false)}
-                className="p-1.5 hover:bg-[var(--bg-tertiary)] rounded-lg transition-colors"
-                title="Agrandir"
-              >
-                <Maximize2 className="w-4 h-4 text-[var(--text-muted)]" />
-              </button>
-              <button
-                onClick={handleCancel}
-                className="p-1.5 hover:bg-red-500/10 rounded-lg transition-colors"
-                title="Annuler"
-              >
-                <X className="w-4 h-4 text-red-400" />
-              </button>
-            </div>
-          </div>
-          <Progress value={progress} className="h-1" />
-        </div>
-      </motion.div>
-    );
-  }
+  const handleBackground = () => {
+    // Hide overlay - job continues in background, accessible via JobDrawer in footer
+    setHidden(true);
+  };
 
   // Full overlay
   return (
@@ -134,18 +68,6 @@ export default function ProgressOverlay({ projectId }: ProgressOverlayProps) {
       >
         {/* Backdrop with blur */}
         <div className="absolute inset-0 bg-black/80 backdrop-blur-md" />
-
-        {/* Minimize button - top right */}
-        <motion.button
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.3 }}
-          onClick={() => setMinimized(true)}
-          className="absolute top-6 right-6 z-20 flex items-center gap-2 px-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm text-gray-300 transition-colors"
-        >
-          <Minimize2 className="w-4 h-4" />
-          Réduire
-        </motion.button>
 
         {/* Content */}
         <motion.div
@@ -239,23 +161,27 @@ export default function ProgressOverlay({ projectId }: ProgressOverlayProps) {
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
-              onClick={() => setMinimized(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm text-gray-300 transition-colors"
+              onClick={handleBackground}
+              className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-500/20 to-cyan-500/20 hover:from-emerald-500/30 hover:to-cyan-500/30 border border-emerald-500/30 rounded-lg text-sm text-emerald-300 font-medium transition-all"
             >
-              <Minimize2 className="w-4 h-4" />
-              Continuer en arrière-plan
+              Arrière-plan
             </motion.button>
 
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={handleCancel}
-              className="flex items-center gap-2 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg text-sm text-red-300 transition-colors"
+              className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-lg text-sm text-red-400 transition-colors"
             >
               <X className="w-4 h-4" />
               Annuler
             </motion.button>
           </div>
+
+          {/* Hint about JobDrawer */}
+          <p className="text-xs text-gray-500 mt-4">
+            💡 Suivi disponible dans la barre des tâches en bas
+          </p>
 
           {/* Subtle animated dots */}
           <div className="flex gap-1 mt-8">

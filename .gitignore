@@ -4,9 +4,13 @@ node_modules/
 
 # Build outputs
 dist/
-out/
-build/
-*.tsbuildinfo
+dist-electron/
+release/
+*.exe
+*.dmg
+*.AppImage
+*.deb
+*.rpm
 
 # Python
 __pycache__/
@@ -14,15 +18,12 @@ __pycache__/
 *$py.class
 *.so
 .Python
-venv/
-.venv/
-ENV/
-env/
 *.egg-info/
 .eggs/
 *.egg
-.ruff_cache/
-.mypy_cache/
+.venv/
+venv/
+ENV/
 
 # IDE
 .idea/
@@ -34,25 +35,21 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+ehthumbs.db
 
 # Logs
 *.log
 npm-debug.log*
-pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+backend_out.log
+backend_err.log
+backend.log
 
 # Environment
 .env
 .env.local
 .env.*.local
-
-# Turbo
-.turbo/
-
-# Electron
-release/
-
-# FORGE Library (user data)
-FORGE_LIBRARY/
 
 # Test coverage
 coverage/
@@ -63,11 +60,38 @@ coverage/
 *.temp
 .cache/
 
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
 
+# FFmpeg outputs (keep in gitignore)
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.webm
 
+# Large media files
+*.wav
+*.mp3
+*.aac
+*.ogg
 
+# Thumbnails
+thumbnail.jpg
+thumbnails/
 
+# User data
+FORGE_LIBRARY/
 
+# Build resources (platform specific)
+apps/desktop/resources/python/
+apps/desktop/resources/python-*/
+apps/desktop/resources/ffmpeg/
+apps/desktop/resources/ffmpeg-*/
 
-
-
+# Installer graphics (optional, user-provided)
+# apps/desktop/build-resources/installer-header.bmp
+# apps/desktop/build-resources/installer-sidebar.bmp
+# apps/desktop/build-resources/dmg-background.png

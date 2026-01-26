@@ -1,6 +1,7 @@
 import { useJobsStore, useUIStore } from '@/store';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronUp, Layers } from 'lucide-react';
+import AudioControls from '../ambient/AudioControls';
 
 export default function StatusBar() {
   const { jobs } = useJobsStore();
@@ -67,6 +68,12 @@ export default function StatusBar() {
           <span>{totalJobs} tâche{totalJobs > 1 ? 's' : ''}</span>
         </button>
       )}
+
+      {/* Audio controls */}
+      <AudioControls />
+
+      {/* Separator */}
+      <div className="w-px h-3 bg-[var(--border-color)] mx-2" />
 
       {/* Version */}
       <span className="opacity-50">FORGE LAB v1.0.0</span>

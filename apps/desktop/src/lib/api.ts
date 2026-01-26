@@ -212,8 +212,77 @@ class ApiClient {
     });
   }
 
+  async exportAllVariants(
+    projectId: string,
+    options: {
+      segmentId: string;
+      styles?: string[];  // Default: ["viral", "clean", "impact"]
+      platform?: string;
+      includeCaptions?: boolean;
+      burnSubtitles?: boolean;
+      useNvenc?: boolean;
+      layoutConfig?: any;
+      introConfig?: any;
+      musicConfig?: any;
+    }
+  ) {
+    return this.request<ApiResponse<{ jobId: string; variants: string[] }>>(`/projects/${projectId}/export-variants`, {
+      method: 'POST',
+      body: JSON.stringify({
+        segment_id: options.segmentId,
+        styles: options.styles ?? ['viral', 'clean', 'impact'],
+        platform: options.platform ?? 'tiktok',
+        include_captions: options.includeCaptions ?? true,
+        burn_subtitles: options.burnSubtitles ?? true,
+        use_nvenc: options.useNvenc ?? true,
+        layout_config: options.layoutConfig,
+        intro_config: options.introConfig,
+        music_config: options.musicConfig,
+      }),
+    });
+  }
+
   async listArtifacts(projectId: string) {
     return this.request<ApiResponse<any[]>>(`/projects/${projectId}/artifacts`);
+  }
+
+  /**
+   * WORLD CLASS BATCH EXPORT - Export all high-scoring clips in one click
+   */
+  async batchExportAll(
+    projectId: string,
+    options: {
+      minScore?: number;
+      maxClips?: number;
+      style?: string;
+      platform?: string;
+      includeCaptions?: boolean;
+      burnSubtitles?: boolean;
+      includeCover?: boolean;
+      includeMetadata?: boolean;
+      useNvenc?: boolean;
+    } = {}
+  ) {
+    return this.request<ApiResponse<{
+      jobId: string;
+      availableCount: number;
+      willExport: number;
+      style: string;
+      minScore: number;
+    }>>(`/projects/${projectId}/export-all`, {
+      method: 'POST',
+      body: JSON.stringify({
+        min_score: options.minScore ?? 70,
+        max_clips: options.maxClips ?? 500,
+        style: options.style ?? 'viral_pro',
+        platform: options.platform ?? 'tiktok',
+        include_captions: options.includeCaptions ?? true,
+        burn_subtitles: options.burnSubtitles ?? true,
+        include_cover: options.includeCover ?? true,
+        include_metadata: options.includeMetadata ?? true,
+        use_nvenc: options.useNvenc ?? true,
+      }),
+    });
   }
 
   // Jobs
@@ -282,6 +351,36 @@ class ApiClient {
 
   async checkHealth() {
     return fetch('http://localhost:8420/health').then(r => r.json());
+  }
+  
+  // Transcription Providers
+  async getTranscriptionProviders() {
+    return this.request<{
+      success: boolean;
+      current: string;
+      available: string[];
+      providers: Record<string, {
+        name: string;
+        description: string;
+        available: boolean;
+        configured?: boolean;
+        cost_per_hour: number;
+        icon: string;
+      }>;
+      error?: string;
+    }>('/transcription/providers');
+  }
+  
+  async setTranscriptionProvider(provider: string) {
+    return this.request<{
+      success: boolean;
+      provider: string;
+      message: string;
+      error?: string;
+    }>('/transcription/provider', {
+      method: 'POST',
+      body: JSON.stringify({ provider }),
+    });
   }
 }
 

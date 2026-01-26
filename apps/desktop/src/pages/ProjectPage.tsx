@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, Upload, Search, Sparkles, Download } from 'lucide-react';
+import { ArrowLeft, Upload, Search, Sparkles, Download, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { api } from '@/lib/api';
 import { useJobsStore, useToastStore, useUIStore, useProjectsStore } from '@/store';
@@ -11,6 +11,14 @@ import AnalyzePanel from '@/components/project/AnalyzePanel';
 import ForgePanel from '@/components/project/ForgePanel';
 import ExportPanel from '@/components/project/ExportPanel';
 import ProgressOverlay from '@/components/project/ProgressOverlay';
+
+// Panel prerequisite messages
+const PANEL_PREREQUISITES: Record<string, string> = {
+  ingest: '',
+  analyze: 'Ingestion requise avant l\'analyse',
+  forge: 'Analyse requise avant de forger les clips',
+  export: 'Analyse requise avant l\'export',
+};
 
 interface Project {
   id: string;
@@ -188,9 +196,10 @@ export default function ProjectPage() {
                 key={panel.id}
                 onClick={() => status !== 'locked' && setCurrentPanel(panel.id as any)}
                 disabled={status === 'locked'}
+                title={status === 'locked' ? PANEL_PREREQUISITES[panel.id] : undefined}
                 className={`
                   relative px-4 py-2 rounded-md text-sm font-medium transition-all
-                  flex items-center gap-2
+                  flex items-center gap-2 group
                   ${status === 'active' 
                     ? 'bg-[var(--bg-card)] text-[var(--text-primary)] shadow-sm' 
                     : status === 'locked'

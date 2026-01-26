@@ -19,7 +19,7 @@ import {
   Trash2,
 } from 'lucide-react';
 
-import { useLayoutEditorStore, useSubtitleStyleStore, useToastStore, useIntroStore, INTRO_PRESETS } from '@/store';
+import { useLayoutEditorStore, useSubtitleStyleStore, useToastStore, useIntroStore, useMusicStore, INTRO_PRESETS } from '@/store';
 import { api } from '@/lib/api';
 import { ExportModal } from '@/components/export/ExportModal';
 import { TemplateStudio } from '@/components/editor/TemplateStudio';
@@ -79,9 +79,8 @@ export default function ClipEditorPage() {
   // Active panel
   const [activePanel, setActivePanel] = useState<'layout' | 'subtitles' | 'intro' | 'music' | 'templates'>('layout');
   
-  // Music state
-  const [selectedMusic, setSelectedMusic] = useState<string | null>(null);
-  const [musicList, setMusicList] = useState<string[]>([]);
+  // Music state from store
+  const { selectedMusic, musicList, setSelectedMusic, setMusicList } = useMusicStore();
   const musicRef = useRef<HTMLAudioElement | null>(null);
   const [showExportModal, setShowExportModal] = useState(false);
 
@@ -128,9 +127,18 @@ export default function ClipEditorPage() {
         facecamRatio: facecamZone ? facecamZone.height / 100 : 0.4,
       };
       
+      // Build music config from store
+      const musicState = useMusicStore.getState();
+      const musicConfig = musicState.selectedMusic ? {
+        path: musicState.selectedMusic,
+        volume: musicState.volume,
+        startOffset: musicState.startOffset,
+      } : undefined;
+      
       console.log('[ClipEditor] Export - layoutConfig:', layoutConfig);
       console.log('[ClipEditor] Export - captionStyle:', options.captionStyle);
       console.log('[ClipEditor] Export - introConfig:', introConfig.enabled ? introConfig : 'disabled');
+      console.log('[ClipEditor] Export - musicConfig:', musicConfig);
       
       const response = await api.exportSegment(project.id, {
         segmentId: selectedSegment.id,
@@ -145,6 +153,7 @@ export default function ClipEditorPage() {
         captionStyle: options.captionStyle,
         layoutConfig,
         introConfig: introConfig.enabled ? introConfig : undefined,
+        musicConfig,
       });
       
       if (response.data?.jobId) {
@@ -990,12 +999,12 @@ function SubtitlePanel({
   onApplyPreset: (preset: string) => void;
 }) {
   const presets = [
-    { id: 'default', label: 'Standard', color: '#FFFFFF' },
+    { id: 'viral_pro', label: '⭐ World Class', color: '#00FF00' },  // Default - Hormozi/MrBeast level
+    { id: 'viral', label: 'Viral', color: '#00BFFF' },
+    { id: 'impact', label: 'Impact', color: '#FF0000' },
+    { id: 'clean', label: 'Clean', color: '#FFFFFF' },
+    { id: 'karaoke', label: 'Karaoké', color: '#FFD700' },
     { id: 'mrbeast', label: 'MrBeast', color: '#FF0000' },
-    { id: 'minimalist', label: 'Minimaliste', color: '#888888' },
-    { id: 'karaoke', label: 'Karaoké', color: '#00BFFF' },
-    { id: 'viral-glow', label: 'Viral Glow', color: '#00FF88' },
-    { id: 'wave-gradient', label: 'Wave', color: '#FFD700' },
   ];
 
   const fonts = [
@@ -1093,8 +1102,8 @@ function SubtitlePanel({
         </label>
         <input
           type="range"
-          min="24"
-          max="72"
+          min="48"
+          max="120"
           value={style.fontSize}
           onChange={(e) => onStyleChange({ fontSize: Number(e.target.value) })}
           className="w-full"
@@ -1203,6 +1212,26 @@ function SubtitlePanel({
           onChange={(e) => onStyleChange({ outlineWidth: Number(e.target.value) })}
           className="w-full"
         />
+      </div>
+
+      {/* Words per line - WORLD CLASS: 2-4 for viral content */}
+      <div>
+        <label className="text-sm font-medium text-gray-400 block mb-2">
+          Mots par ligne: {style.wordsPerLine || 3}
+        </label>
+        <input
+          type="range"
+          min="2"
+          max="8"
+          value={style.wordsPerLine || 3}
+          onChange={(e) => onStyleChange({ wordsPerLine: Number(e.target.value) })}
+          className="w-full"
+        />
+        <div className="flex justify-between text-xs text-gray-500 mt-1">
+          <span>2 (Ultra viral)</span>
+          <span>5 (Standard)</span>
+          <span>8 (Dense)</span>
+        </div>
       </div>
     </div>
   );
@@ -1728,8 +1757,7 @@ function MusicPanel({
   musicRef: React.MutableRefObject<HTMLAudioElement | null>;
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
-  const [volume, setVolume] = useState(0.5);
-  const [startOffset, setStartOffset] = useState(0);
+  const { volume, startOffset, setVolume, setStartOffset } = useMusicStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Sync music with video playback

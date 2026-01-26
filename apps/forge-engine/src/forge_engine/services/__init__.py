@@ -29,6 +29,10 @@ def get_export_service():
     from forge_engine.services.export import ExportService
     return ExportService
 
+def get_auto_params_service():
+    from forge_engine.services.auto_params import AutoParamsService
+    return AutoParamsService
+
 __all__ = [
     "FFmpegService",
     "TranscriptionService",
@@ -39,4 +43,5 @@ __all__ = [
     "get_caption_engine",
     "get_render_service",
     "get_export_service",
+    "get_auto_params_service",
 ]

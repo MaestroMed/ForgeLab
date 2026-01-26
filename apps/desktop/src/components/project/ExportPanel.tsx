@@ -171,6 +171,7 @@ export default function ExportPanel({ project }: ExportPanelProps) {
                         onOpen={openInFolder}
                         onSelect={setSelectedVideo}
                         isSelected={selectedVideo?.id === video?.id}
+                        projectId={project.id}
                       />
                     </motion.div>
                   );
@@ -186,6 +187,7 @@ export default function ExportPanel({ project }: ExportPanelProps) {
         {selectedVideo && (
           <VideoPlayerModal
             video={selectedVideo}
+            projectId={project.id}
             onClose={() => setSelectedVideo(null)}
           />
         )}
@@ -199,18 +201,23 @@ function ExportCard({
   onOpen,
   onSelect,
   isSelected,
+  projectId,
 }: {
   artifacts: Artifact[];
   onOpen: (path: string) => void;
   onSelect: (video: Artifact) => void;
   isSelected: boolean;
+  projectId: string;
 }) {
   const video = artifacts.find((a) => a.type === 'video');
   const cover = artifacts.find((a) => a.type === 'cover');
 
   if (!video) return null;
 
-  const videoUrl = `file:///${video.path.replace(/\\/g, '/')}`;
+  // Use backend API to serve videos (works in both Electron and browser)
+  const baseUrl = window.forge?.getApiUrl?.() || 'http://localhost:8420';
+  const videoUrl = `${baseUrl}/v1/projects/${projectId}/artifacts/${video.id}/file`;
+  const coverUrl = cover ? `${baseUrl}/v1/projects/${projectId}/artifacts/${cover.id}/file` : null;
 
   return (
     <Card 
@@ -223,9 +230,9 @@ function ExportCard({
         <div className="flex gap-4">
           {/* Thumbnail with play overlay */}
           <div className="w-28 h-40 bg-[var(--bg-tertiary)] rounded-lg flex-shrink-0 flex items-center justify-center overflow-hidden relative group">
-            {cover ? (
+            {coverUrl ? (
               <img
-                src={`file:///${cover.path.replace(/\\/g, '/')}`}
+                src={coverUrl}
                 alt="Cover"
                 className="w-full h-full object-cover"
               />
@@ -307,9 +314,11 @@ function ExportCard({
 // Video Player Modal
 function VideoPlayerModal({
   video,
+  projectId,
   onClose,
 }: {
   video: Artifact;
+  projectId: string;
   onClose: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -318,7 +327,9 @@ function VideoPlayerModal({
   const [duration, setDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
 
-  const videoUrl = `file:///${video.path.replace(/\\/g, '/')}`;
+  // Use backend API to serve videos
+  const baseUrl = window.forge?.getApiUrl?.() || 'http://localhost:8420';
+  const videoUrl = `${baseUrl}/v1/projects/${projectId}/artifacts/${video.id}/file`;
 
   useEffect(() => {
     // Auto-play when modal opens

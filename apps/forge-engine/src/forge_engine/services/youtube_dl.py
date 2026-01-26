@@ -1,17 +1,30 @@
-"""YouTube/Twitch download service using yt-dlp."""
+"""YouTube/Twitch download service using yt-dlp with parallel download support."""
 
 import asyncio
 import json
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Dict, List, Optional
 
 from forge_engine.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Semaphore for parallel download limiting
+_download_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def get_download_semaphore() -> asyncio.Semaphore:
+    """Get or create the download semaphore for parallel limiting."""
+    global _download_semaphore
+    if _download_semaphore is None:
+        max_parallel = getattr(settings, 'MAX_PARALLEL_DOWNLOADS', 4)
+        _download_semaphore = asyncio.Semaphore(max_parallel)
+        logger.info("Download semaphore initialized with %d slots", max_parallel)
+    return _download_semaphore
 
 
 @dataclass
@@ -125,10 +138,11 @@ class YouTubeDLService:
             stdout, stderr = await proc.communicate()
             
             if proc.returncode != 0:
-                logger.error("yt-dlp info failed: %s", stderr.decode()[:500])
+                logger.error("yt-dlp info failed: %s", stderr.decode(errors='replace')[:500])
                 return None
             
-            data = json.loads(stdout.decode())
+            # Decode with error handling for special characters
+            data = json.loads(stdout.decode(errors='replace'))
             
             return VideoInfo(
                 id=data.get("id", ""),
@@ -175,8 +189,8 @@ class YouTubeDLService:
         # Build quality format
         format_spec = self._build_format(quality)
         
-        # Output template
-        output_template = str(output_dir / "%(title)s [%(id)s].%(ext)s")
+        # Output template - use simple filename to avoid special character issues
+        output_template = str(output_dir / "video_%(id)s.%(ext)s")
         
         cmd = [
             self._yt_dlp_path,
@@ -207,7 +221,8 @@ class YouTubeDLService:
                 if not line:
                     break
                 
-                line_str = line.decode().strip()
+                # Decode with error handling for special characters
+                line_str = line.decode(errors='replace').strip()
                 
                 # Parse progress percentage
                 if "%" in line_str:
@@ -231,26 +246,34 @@ class YouTubeDLService:
             
             if proc.returncode != 0:
                 stderr = await proc.stderr.read()
-                logger.error("Download failed: %s", stderr.decode()[:500])
+                logger.error("Download failed: %s", stderr.decode(errors='replace')[:500])
                 if progress_callback:
                     progress_callback(0, "Échec du téléchargement")
                 return None
             
             # Find the downloaded file if not captured
-            if not downloaded_file:
-                # List files in output directory sorted by modification time
-                files = list(output_dir.glob("*.*"))
+            if not downloaded_file or not os.path.exists(downloaded_file):
+                # List video files in output directory sorted by modification time
+                video_extensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi']
+                files = []
+                for ext in video_extensions:
+                    files.extend(output_dir.glob(f"*{ext}"))
+                
                 if files:
+                    # Sort by modification time, most recent first
                     files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
                     downloaded_file = str(files[0])
+                    logger.info("Found downloaded file by scan: %s", downloaded_file)
             
-            if downloaded_file and os.path.exists(downloaded_file):
-                logger.info("Download complete: %s", downloaded_file)
-                if progress_callback:
-                    progress_callback(100, "Téléchargement terminé")
-                return Path(downloaded_file)
+            if downloaded_file:
+                downloaded_path = Path(downloaded_file)
+                if downloaded_path.exists():
+                    logger.info("Download complete: %s", downloaded_file)
+                    if progress_callback:
+                        progress_callback(100, "Téléchargement terminé")
+                    return downloaded_path
             
-            logger.error("Could not find downloaded file")
+            logger.error("Could not find downloaded file in %s", output_dir)
             return None
             
         except Exception as e:
@@ -291,6 +314,73 @@ class YouTubeDLService:
         
         return False
     
+    async def download_video_with_semaphore(
+        self,
+        url: str,
+        output_dir: Optional[Path] = None,
+        quality: str = "best",
+        progress_callback: Optional[Callable[[float, str], None]] = None
+    ) -> Optional[Path]:
+        """Download video with semaphore limiting for parallel downloads.
+        
+        Uses the global semaphore to limit concurrent downloads.
+        """
+        semaphore = get_download_semaphore()
+        async with semaphore:
+            logger.info("Acquired download slot for: %s", url[:50])
+            return await self.download_video(url, output_dir, quality, progress_callback)
+    
+    async def download_batch(
+        self,
+        urls: List[str],
+        output_dir: Optional[Path] = None,
+        quality: str = "best",
+        progress_callback: Optional[Callable[[int, float, str], None]] = None
+    ) -> Dict[str, Optional[Path]]:
+        """Download multiple videos in parallel.
+        
+        Args:
+            urls: List of video URLs to download
+            output_dir: Directory to save videos
+            quality: Video quality
+            progress_callback: Callback with (url_index, progress_percent, status_message)
+            
+        Returns:
+            Dict mapping URL to downloaded file path (or None on failure)
+        """
+        results: Dict[str, Optional[Path]] = {}
+        total = len(urls)
+        completed = [0]  # Use list for mutation in closure
+        
+        async def download_one(index: int, url: str):
+            def local_progress(pct: float, msg: str):
+                if progress_callback:
+                    progress_callback(index, pct, msg)
+            
+            try:
+                path = await self.download_video_with_semaphore(
+                    url, output_dir, quality, local_progress
+                )
+                results[url] = path
+                completed[0] += 1
+                logger.info("Batch progress: %d/%d completed", completed[0], total)
+            except Exception as e:
+                logger.error("Failed to download %s: %s", url, e)
+                results[url] = None
+        
+        # Start all downloads concurrently
+        tasks = [
+            asyncio.create_task(download_one(i, url))
+            for i, url in enumerate(urls)
+        ]
+        
+        await asyncio.gather(*tasks, return_exceptions=True)
+        
+        success_count = sum(1 for v in results.values() if v is not None)
+        logger.info("Batch download complete: %d/%d succeeded", success_count, total)
+        
+        return results
+    
     async def get_channel_videos(
         self,
         channel_url: str,
@@ -318,11 +408,11 @@ class YouTubeDLService:
             stdout, stderr = await proc.communicate()
             
             if proc.returncode != 0:
-                logger.error("Failed to get channel videos: %s", stderr.decode()[:500])
+                logger.error("Failed to get channel videos: %s", stderr.decode(errors='replace')[:500])
                 return []
             
-            # Each line is a JSON object
-            for line in stdout.decode().strip().split("\n"):
+            # Each line is a JSON object - decode with error handling
+            for line in stdout.decode(errors='replace').strip().split("\n"):
                 if line:
                     try:
                         data = json.loads(line)

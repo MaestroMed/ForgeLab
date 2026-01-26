@@ -40,22 +40,37 @@ export default function Sidebar() {
             const Icon = item.icon;
 
             return (
-              <li key={item.path}>
+              <motion.li 
+                key={item.path}
+                whileHover={{ x: 2 }}
+                transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+              >
                 <Link
                   to={item.path}
                   className={cn(
-                    'flex items-center gap-3 px-3 py-2 rounded-lg transition-colors',
+                    'relative flex items-center gap-3 px-3 py-2 rounded-lg transition-colors',
                     isActive
                       ? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
                       : 'text-[var(--text-muted)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]'
                   )}
                 >
-                  <Icon className="w-4 h-4 flex-shrink-0" />
+                  {/* Active indicator bar */}
+                  {isActive && (
+                    <motion.div
+                      layoutId="sidebar-active-indicator"
+                      className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-4 bg-[var(--accent-color)] rounded-full"
+                      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                    />
+                  )}
+                  <Icon className={cn(
+                    'w-4 h-4 flex-shrink-0 transition-colors',
+                    isActive && 'text-[var(--accent-color)]'
+                  )} />
                   {!sidebarCollapsed && (
                     <span className="text-sm font-medium">{item.label}</span>
                   )}
                 </Link>
-              </li>
+              </motion.li>
             );
           })}
         </ul>

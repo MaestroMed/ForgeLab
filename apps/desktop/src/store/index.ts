@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import { temporal } from 'zundo';
 
 // Engine status store
@@ -74,10 +75,13 @@ interface UIState {
   currentPanel: 'ingest' | 'analyze' | 'forge' | 'export';
   jobDrawerOpen: boolean;
   shortcutsModalOpen: boolean;
+  isFullscreen: boolean;
   toggleSidebar: () => void;
   setCurrentPanel: (panel: UIState['currentPanel']) => void;
   setJobDrawerOpen: (open: boolean) => void;
   setShortcutsModalOpen: (open: boolean) => void;
+  setFullscreen: (fullscreen: boolean) => void;
+  toggleFullscreen: () => Promise<void>;
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -85,10 +89,16 @@ export const useUIStore = create<UIState>((set) => ({
   currentPanel: 'ingest',
   jobDrawerOpen: false,
   shortcutsModalOpen: false,
+  isFullscreen: false,
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
   setCurrentPanel: (panel) => set({ currentPanel: panel }),
   setJobDrawerOpen: (open) => set({ jobDrawerOpen: open }),
   setShortcutsModalOpen: (open) => set({ shortcutsModalOpen: open }),
+  setFullscreen: (fullscreen) => set({ isFullscreen: fullscreen }),
+  toggleFullscreen: async () => {
+    const result = await window.forge?.toggleFullscreen();
+    set({ isFullscreen: result });
+  },
 }));
 
 // Batch selection store for segments
@@ -146,7 +156,7 @@ export const useToastStore = create<ToastState>((set) => ({
 }));
 
 // Theme store
-type Theme = 'light' | 'dark' | 'system';
+type Theme = 'light' | 'dark' | 'westworld' | 'system';
 
 interface ThemeState {
   theme: Theme;
@@ -163,14 +173,18 @@ const getInitialTheme = (): Theme => {
 
 const applyTheme = (theme: Theme) => {
   const root = document.documentElement;
-  const isDark = theme === 'dark' || 
-    (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  // Remove all theme classes first
+  root.classList.remove('dark', 'westworld');
   
-  if (isDark) {
+  if (theme === 'westworld') {
+    // Westworld includes dark mode base + westworld overrides
+    root.classList.add('dark', 'westworld');
+  } else if (theme === 'dark' || 
+    (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
     root.classList.add('dark');
-  } else {
-    root.classList.remove('dark');
   }
+  // Light theme: no classes needed (default)
+  
   localStorage.setItem('forge-theme', theme);
 };
 
@@ -189,7 +203,10 @@ export const useThemeStore = create<ThemeState>((set, get) => {
     },
     toggleTheme: () => {
       const current = get().theme;
-      const next = current === 'dark' ? 'light' : 'dark';
+      // Cycle: light -> dark -> westworld -> light
+      const themeOrder: Theme[] = ['light', 'dark', 'westworld'];
+      const currentIndex = themeOrder.indexOf(current);
+      const next = themeOrder[(currentIndex + 1) % themeOrder.length];
       applyTheme(next);
       set({ theme: next });
     },
@@ -289,25 +306,31 @@ const LAYOUT_PRESETS: Record<string, LayoutZone[]> = {
 };
 
 export const useLayoutEditorStore = create<LayoutEditorState>()(
-  temporal(
-    (set) => ({
-      zones: LAYOUT_PRESETS['facecam-top'],
-      selectedZoneId: null,
-      presetName: 'facecam-top',
-      
-      setZones: (zones) => set({ zones }),
-      updateZone: (id, updates) => set((state) => ({
-        zones: state.zones.map((z) => (z.id === id ? { ...z, ...updates } : z)),
-      })),
-      setSelectedZone: (id) => set({ selectedZoneId: id }),
-      applyPreset: (preset) => set({
-        zones: LAYOUT_PRESETS[preset] || LAYOUT_PRESETS['facecam-top'],
-        presetName: preset,
+  persist(
+    temporal(
+      (set) => ({
+        zones: LAYOUT_PRESETS['facecam-top'],
+        selectedZoneId: null,
+        presetName: 'facecam-top',
+        
+        setZones: (zones) => set({ zones }),
+        updateZone: (id, updates) => set((state) => ({
+          zones: state.zones.map((z) => (z.id === id ? { ...z, ...updates } : z)),
+        })),
+        setSelectedZone: (id) => set({ selectedZoneId: id }),
+        applyPreset: (preset) => set({
+          zones: LAYOUT_PRESETS[preset] || LAYOUT_PRESETS['facecam-top'],
+          presetName: preset,
+        }),
       }),
-    }),
+      {
+        limit: 50,
+        partialize: (state) => ({ zones: state.zones }),
+      }
+    ),
     {
-      limit: 50,
-      partialize: (state) => ({ zones: state.zones }),
+      name: 'forge-layout-config',
+      partialize: (state) => ({ zones: state.zones, presetName: state.presetName }),
     }
   )
 );
@@ -335,97 +358,161 @@ interface SubtitleStyleState {
   applyPreset: (preset: string) => void;
 }
 
+// WORLD CLASS TIKTOK STYLES - Optimized for maximum viral potential
 const SUBTITLE_PRESETS: Record<string, SubtitleStyle> = {
-  'default': {
-    fontFamily: 'Inter',
-    fontSize: 48,
-    fontWeight: 700,
+  // VIRAL_PRO - THE WORLD CLASS DEFAULT - Hormozi/MrBeast level
+  // This is the new gold standard for viral subtitles
+  'viral_pro': {
+    fontFamily: 'Montserrat',
+    fontSize: 96,  // 5% of 1920 - Maximum mobile visibility
+    fontWeight: 900,  // Extra bold for impact
     color: '#FFFFFF',
     backgroundColor: 'transparent',
     outlineColor: '#000000',
-    outlineWidth: 2,
-    position: 'bottom',
-    animation: 'none',
-    highlightColor: '#FFD700',
-    wordsPerLine: 6,
+    outlineWidth: 5,  // Thick for maximum contrast
+    position: 'center',
+    positionY: 960,  // True center (1920/2)
+    animation: 'pop',  // Pop effect with scale
+    highlightColor: '#00FF00',  // Vert vif - Maximum attention
+    wordsPerLine: 3,  // Ultra-readable on mobile
   },
-  'mrbeast': {
-    fontFamily: 'Impact',
-    fontSize: 56,
-    fontWeight: 900,
+  // VIRAL - Classic karaoke style
+  'viral': {
+    fontFamily: 'Montserrat',
+    fontSize: 72,
+    fontWeight: 800,
     color: '#FFFFFF',
     backgroundColor: 'transparent',
     outlineColor: '#000000',
     outlineWidth: 4,
     position: 'center',
-    animation: 'pop',
-    highlightColor: '#FF0000',
+    animation: 'bounce',
+    highlightColor: '#00BFFF',  // Cyan highlight
     wordsPerLine: 4,
   },
-  'minimalist': {
+  // CLEAN - Readable and professional (bottom, clean, fade)
+  'clean': {
     fontFamily: 'Inter',
-    fontSize: 42,
-    fontWeight: 500,
-    color: '#FFFFFF',
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    outlineColor: 'transparent',
-    outlineWidth: 0,
-    position: 'bottom',
-    animation: 'fade',
-    highlightColor: '#00FF00',
-    wordsPerLine: 8,
-  },
-  'karaoke': {
-    fontFamily: 'Montserrat',
-    fontSize: 52,
-    fontWeight: 800,
+    fontSize: 64,
+    fontWeight: 700,
     color: '#FFFFFF',
     backgroundColor: 'transparent',
     outlineColor: '#000000',
     outlineWidth: 3,
     position: 'bottom',
-    animation: 'bounce',
-    highlightColor: '#00BFFF',
+    animation: 'fade',
+    highlightColor: '#00FF00',  // Vert vif
     wordsPerLine: 5,
   },
-  'viral-glow': {
-    fontFamily: 'Poppins',
-    fontSize: 54,
+  // IMPACT - Attention-grabbing MrBeast style (centered, huge, pop)
+  'impact': {
+    fontFamily: 'Impact',
+    fontSize: 80,
     fontWeight: 900,
     color: '#FFFFFF',
     backgroundColor: 'transparent',
-    outlineColor: '#FF00FF',
-    outlineWidth: 2,
-    position: 'center',
-    animation: 'glow',
-    highlightColor: '#00FF88',
-    wordsPerLine: 4,
-  },
-  'wave-gradient': {
-    fontFamily: 'Inter',
-    fontSize: 50,
-    fontWeight: 700,
-    color: '#FFFFFF',
-    backgroundColor: 'rgba(0,0,0,0.4)',
     outlineColor: '#000000',
-    outlineWidth: 1,
-    position: 'bottom',
-    animation: 'wave',
-    highlightColor: '#FFD700',
-    wordsPerLine: 5,
+    outlineWidth: 5,
+    position: 'center',
+    animation: 'pop',
+    highlightColor: '#FF0000',  // Red highlight
+    wordsPerLine: 3,
+  },
+  // DEFAULT now points to VIRAL_PRO - World Class by default
+  'default': {
+    fontFamily: 'Montserrat',
+    fontSize: 96,
+    fontWeight: 900,
+    color: '#FFFFFF',
+    backgroundColor: 'transparent',
+    outlineColor: '#000000',
+    outlineWidth: 5,
+    position: 'center',
+    positionY: 960,
+    animation: 'pop',
+    highlightColor: '#00FF00',  // Vert vif
+    wordsPerLine: 3,
+  },
+  // Legacy aliases
+  'mrbeast': {
+    fontFamily: 'Impact',
+    fontSize: 80,
+    fontWeight: 900,
+    color: '#FFFFFF',
+    backgroundColor: 'transparent',
+    outlineColor: '#000000',
+    outlineWidth: 5,
+    position: 'center',
+    animation: 'pop',
+    highlightColor: '#FF0000',
+    wordsPerLine: 3,
+  },
+  'karaoke': {
+    fontFamily: 'Montserrat',
+    fontSize: 72,
+    fontWeight: 800,
+    color: '#FFFFFF',
+    backgroundColor: 'transparent',
+    outlineColor: '#000000',
+    outlineWidth: 4,
+    position: 'center',
+    animation: 'bounce',
+    highlightColor: '#00BFFF',
+    wordsPerLine: 4,
   },
 };
 
-export const useSubtitleStyleStore = create<SubtitleStyleState>((set) => ({
-  style: SUBTITLE_PRESETS['default'],
-  presetName: 'default',
-  setStyle: (updates) => set((state) => ({
-    style: { ...state.style, ...updates },
+export const useSubtitleStyleStore = create<SubtitleStyleState>()(
+  persist(
+    (set) => ({
+      style: SUBTITLE_PRESETS['viral_pro'],
+      presetName: 'viral_pro',
+      setStyle: (updates) => set((state) => ({
+        style: { ...state.style, ...updates },
+      })),
+      applyPreset: (preset) => set({
+        style: SUBTITLE_PRESETS[preset] || SUBTITLE_PRESETS['default'],
+        presetName: preset,
+      }),
+    }),
+    {
+      name: 'forge-subtitle-style',
+    }
+  )
+);
+
+// Music store for export
+interface MusicState {
+  selectedMusic: string | null;
+  musicList: string[];
+  volume: number;
+  startOffset: number;
+  setSelectedMusic: (path: string | null) => void;
+  setMusicList: (list: string[]) => void;
+  addMusic: (path: string) => void;
+  removeMusic: (path: string) => void;
+  setVolume: (volume: number) => void;
+  setStartOffset: (offset: number) => void;
+  clearMusic: () => void;
+}
+
+export const useMusicStore = create<MusicState>((set) => ({
+  selectedMusic: null,
+  musicList: [],
+  volume: 0.5,
+  startOffset: 0,
+  setSelectedMusic: (path) => set({ selectedMusic: path }),
+  setMusicList: (list) => set({ musicList: list }),
+  addMusic: (path) => set((state) => ({
+    musicList: [...state.musicList, path],
   })),
-  applyPreset: (preset) => set({
-    style: SUBTITLE_PRESETS[preset] || SUBTITLE_PRESETS['default'],
-    presetName: preset,
-  }),
+  removeMusic: (path) => set((state) => ({
+    musicList: state.musicList.filter((m) => m !== path),
+    selectedMusic: state.selectedMusic === path ? null : state.selectedMusic,
+  })),
+  setVolume: (volume) => set({ volume }),
+  setStartOffset: (offset) => set({ startOffset: offset }),
+  clearMusic: () => set({ selectedMusic: null }),
 }));
 
 // Projects store - synced via WebSocket
@@ -715,24 +802,174 @@ export const INTRO_PRESETS: Record<string, Partial<IntroConfig>> = {
   },
 };
 
-export const useIntroStore = create<IntroState>((set) => ({
-  config: DEFAULT_INTRO_CONFIG,
-  
-  setConfig: (updates) => set((state) => ({
-    config: { ...state.config, ...updates },
-  })),
-  
-  setEnabled: (enabled) => set((state) => ({
-    config: { ...state.config, enabled },
-  })),
-  
-  resetConfig: () => set({ config: DEFAULT_INTRO_CONFIG }),
-  
-  applyPreset: (presetName) => set((state) => {
-    const preset = INTRO_PRESETS[presetName];
-    if (preset) {
-      return { config: { ...state.config, ...preset, enabled: true } };
+export const useIntroStore = create<IntroState>()(
+  persist(
+    (set) => ({
+      config: DEFAULT_INTRO_CONFIG,
+      
+      setConfig: (updates) => set((state) => ({
+        config: { ...state.config, ...updates },
+      })),
+      
+      setEnabled: (enabled) => set((state) => ({
+        config: { ...state.config, enabled },
+      })),
+      
+      resetConfig: () => set({ config: DEFAULT_INTRO_CONFIG }),
+      
+      applyPreset: (presetName) => set((state) => {
+        const preset = INTRO_PRESETS[presetName];
+        if (preset) {
+          return { config: { ...state.config, ...preset, enabled: true } };
+        }
+        return state;
+      }),
+    }),
+    {
+      name: 'forge-intro-config',
     }
-    return state;
-  }),
-}));
+  )
+);
+
+// Export Profile store
+export interface ExportProfile {
+  id: string;
+  name: string;
+  description?: string;
+  is_default: boolean;
+  layout_config: Record<string, any>;
+  subtitle_style: Record<string, any>;
+  intro_config: Record<string, any>;
+  music_config: Record<string, any>;
+  export_settings: {
+    format: 'mp4' | 'mov';
+    resolution: string;
+    quality: string;
+    use_nvenc: boolean;
+    burn_subtitles: boolean;
+    include_cover: boolean;
+  };
+  segment_filters: {
+    min_score: number;
+    min_duration: number;
+    max_duration: number;
+    auto_export_count: number;
+  };
+}
+
+interface ProfileState {
+  profiles: ExportProfile[];
+  selectedProfileId: string | null;
+  loading: boolean;
+  setProfiles: (profiles: ExportProfile[]) => void;
+  setSelectedProfile: (id: string | null) => void;
+  setLoading: (loading: boolean) => void;
+  addProfile: (profile: ExportProfile) => void;
+  updateProfile: (id: string, updates: Partial<ExportProfile>) => void;
+  removeProfile: (id: string) => void;
+  getDefaultProfile: () => ExportProfile | undefined;
+}
+
+export const useProfileStore = create<ProfileState>()(
+  persist(
+    (set, get) => ({
+      profiles: [],
+      selectedProfileId: null,
+      loading: false,
+      
+      setProfiles: (profiles) => set({ profiles }),
+      setSelectedProfile: (id) => set({ selectedProfileId: id }),
+      setLoading: (loading) => set({ loading }),
+      
+      addProfile: (profile) => set((state) => ({
+        profiles: [...state.profiles, profile],
+      })),
+      
+      updateProfile: (id, updates) => set((state) => ({
+        profiles: state.profiles.map((p) => 
+          p.id === id ? { ...p, ...updates } : p
+        ),
+      })),
+      
+      removeProfile: (id) => set((state) => ({
+        profiles: state.profiles.filter((p) => p.id !== id),
+        selectedProfileId: state.selectedProfileId === id ? null : state.selectedProfileId,
+      })),
+      
+      getDefaultProfile: () => {
+        const { profiles } = get();
+        return profiles.find((p) => p.is_default);
+      },
+    }),
+    {
+      name: 'forge-profiles',
+    }
+  )
+);
+
+// Floating Widget store
+interface FloatingWidgetState {
+  visible: boolean;
+  collapsed: boolean;
+  position: { x: number; y: number };
+  setVisible: (visible: boolean) => void;
+  setCollapsed: (collapsed: boolean) => void;
+  setPosition: (position: { x: number; y: number }) => void;
+  toggleCollapsed: () => void;
+}
+
+export const useFloatingWidgetStore = create<FloatingWidgetState>()(
+  persist(
+    (set) => ({
+      visible: true,
+      collapsed: false,
+      position: { x: 20, y: 100 },
+      setVisible: (visible) => set({ visible }),
+      setCollapsed: (collapsed) => set({ collapsed }),
+      setPosition: (position) => set({ position }),
+      toggleCollapsed: () => set((s) => ({ collapsed: !s.collapsed })),
+    }),
+    { name: 'forge-floating-widget' }
+  )
+);
+
+// Ambient Audio store
+export type AmbientTrack = 'westworld' | 'minimal' | 'deep' | 'none';
+
+interface AmbientAudioState {
+  enabled: boolean;
+  volume: number;           // 0-100
+  track: AmbientTrack;
+  fadeOnActivity: boolean;  // Attenuate during exports
+  sfxEnabled: boolean;      // Sound effects for notifications
+  sfxVolume: number;
+  
+  setEnabled: (enabled: boolean) => void;
+  setVolume: (volume: number) => void;
+  setTrack: (track: AmbientTrack) => void;
+  setFadeOnActivity: (fade: boolean) => void;
+  setSfxEnabled: (enabled: boolean) => void;
+  setSfxVolume: (volume: number) => void;
+  toggleEnabled: () => void;
+}
+
+export const useAmbientAudioStore = create<AmbientAudioState>()(
+  persist(
+    (set) => ({
+      enabled: false,
+      volume: 30,
+      track: 'westworld',
+      fadeOnActivity: true,
+      sfxEnabled: true,
+      sfxVolume: 50,
+      setEnabled: (enabled) => set({ enabled }),
+      setVolume: (volume) => set({ volume: Math.max(0, Math.min(100, volume)) }),
+      setTrack: (track) => set({ track }),
+      setFadeOnActivity: (fadeOnActivity) => set({ fadeOnActivity }),
+      setSfxEnabled: (sfxEnabled) => set({ sfxEnabled }),
+      setSfxVolume: (sfxVolume) => set({ sfxVolume: Math.max(0, Math.min(100, sfxVolume)) }),
+      toggleEnabled: () => set((s) => ({ enabled: !s.enabled })),
+    }),
+    { name: 'forge-ambient-audio' }
+  )
+);

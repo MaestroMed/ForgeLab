@@ -43,7 +43,8 @@ class ExportService:
         use_nvenc: bool = True,
         caption_style: Optional[Dict[str, Any]] = None,
         layout_config: Optional[Dict[str, Any]] = None,
-        intro_config: Optional[Dict[str, Any]] = None
+        intro_config: Optional[Dict[str, Any]] = None,
+        music_config: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Run the export pipeline."""
         job_manager = JobManager.get_instance()
@@ -145,7 +146,14 @@ class ExportService:
                 render_layout_config.update(template.layout)
             
             # Build caption config from custom style or template
+            logger.info(f"=== EXPORT DEBUG ===")
             logger.info(f"[EXPORT] caption_style received: {caption_style}")
+            if caption_style:
+                logger.info(f"[EXPORT] fontFamily: {caption_style.get('fontFamily')}")
+                logger.info(f"[EXPORT] color: {caption_style.get('color')}")
+                logger.info(f"[EXPORT] highlightColor: {caption_style.get('highlightColor')}")
+                logger.info(f"[EXPORT] animation: {caption_style.get('animation')}")
+            logger.info(f"====================")
             logger.info(f"[EXPORT] layout_config received: {layout_config}")
             
             caption_config = {
@@ -178,16 +186,17 @@ class ExportService:
             
             video_path = exports_dir / f"{base_name}.mp4"
             
-            # If intro is enabled, render to temp file first
-            if intro_config and intro_config.get("enabled"):
-                temp_clip_path = exports_dir / f"{base_name}_clip_temp.mp4"
-                actual_video_path = temp_clip_path
+            # If intro is enabled, we'll apply overlay after rendering
+            needs_intro = intro_config and intro_config.get("enabled")
+            if needs_intro:
+                temp_clip_path = exports_dir / f"{base_name}_no_intro.mp4"
+                render_output = temp_clip_path
             else:
-                actual_video_path = video_path
+                render_output = video_path
             
             render_result = await self.render.render_clip(
                 source_path=project.source_path,
-                output_path=str(actual_video_path),
+                output_path=str(render_output),
                 start_time=segment.start_time,
                 duration=segment.duration,
                 layout_config=render_layout_config,
@@ -199,59 +208,68 @@ class ExportService:
                 )
             )
             
-            # If intro is enabled, render intro and concatenate
-            if intro_config and intro_config.get("enabled"):
+            # Apply intro as overlay on the beginning of the clip
+            if needs_intro:
                 try:
-                    job_manager.update_progress(job, 60, "intro", "Generating intro...")
-                    
-                    intro_path = exports_dir / f"{base_name}_intro_temp.mp4"
+                    job_manager.update_progress(job, 60, "intro", "Applying intro overlay...")
                     
                     # Set title from segment if not provided
                     if not intro_config.get("title"):
                         intro_config["title"] = segment.topic_label or "Untitled"
                     
-                    await self.intro.render_intro(
-                        source_path=project.source_path,
-                        output_path=str(intro_path),
-                        start_time=segment.start_time,
-                        duration=intro_config.get("duration", 2.0),
+                    await self.intro.apply_intro_overlay(
+                        clip_path=str(temp_clip_path),
+                        output_path=str(video_path),
                         config=intro_config,
                         progress_callback=lambda p: job_manager.update_progress(
                             job, 60 + p * 0.1, "intro", f"Intro: {p:.0f}%"
                         )
                     )
                     
-                    job_manager.update_progress(job, 70, "concat", "Concatenating intro + clip...")
-                    
-                    await self.intro.concat_intro_with_clip(
-                        intro_path=str(intro_path),
-                        clip_path=str(temp_clip_path),
-                        output_path=str(video_path),
-                    )
-                    
-                    # Cleanup temp files
+                    # Cleanup temp file
                     try:
-                        intro_path.unlink()
                         temp_clip_path.unlink()
                     except Exception as e:
-                        logger.warning(f"Could not delete temp files: {e}")
+                        logger.warning(f"Could not delete temp clip: {e}")
                         
                 except Exception as intro_error:
-                    # Intro rendering failed - fallback to clip without intro
-                    logger.warning(f"Intro rendering failed, exporting without intro: {intro_error}")
+                    # Intro overlay failed - use clip without intro
+                    logger.warning(f"Intro overlay failed, exporting without intro: {intro_error}")
                     job_manager.update_progress(job, 70, "fallback", "Intro échouée, export sans intro...")
                     
-                    # Move temp clip to final path
+                    # Rename temp clip to final path
                     import shutil
                     if temp_clip_path.exists():
                         shutil.move(str(temp_clip_path), str(video_path))
+            
+            # Mix music if configured
+            if music_config and music_config.get("path"):
+                try:
+                    job_manager.update_progress(job, 72, "music", "Mixing music...")
+                    music_path = music_config.get("path")
+                    music_volume = music_config.get("volume", 0.5)
+                    music_offset = music_config.get("startOffset", 0)
                     
-                    # Try to cleanup intro temp file if it exists
-                    try:
-                        if intro_path.exists():
-                            intro_path.unlink()
-                    except:
-                        pass
+                    if Path(music_path).exists():
+                        video_with_music_path = exports_dir / f"{base_name}_with_music.mp4"
+                        
+                        await self._mix_audio_track(
+                            video_path=str(video_path),
+                            audio_path=music_path,
+                            output_path=str(video_with_music_path),
+                            audio_volume=music_volume,
+                            audio_offset=music_offset,
+                        )
+                        
+                        # Replace original with music version
+                        if video_with_music_path.exists():
+                            video_path.unlink()
+                            video_with_music_path.rename(video_path)
+                            logger.info(f"Mixed music into video: {music_path}")
+                    else:
+                        logger.warning(f"Music file not found: {music_path}")
+                except Exception as music_error:
+                    logger.warning(f"Music mixing failed, continuing without: {music_error}")
             
             # Record video artifact
             video_artifact = Artifact(
@@ -545,6 +563,342 @@ class ExportService:
 
 {hashtag_text}
 """
+    
+    async def _mix_audio_track(
+        self,
+        video_path: str,
+        audio_path: str,
+        output_path: str,
+        audio_volume: float = 0.5,
+        audio_offset: float = 0.0,
+    ) -> None:
+        """Mix an additional audio track (music) with the video's audio.
+        
+        Args:
+            video_path: Path to video file
+            audio_path: Path to audio file (MP3, WAV, etc.)
+            output_path: Path for output video
+            audio_volume: Volume of added audio (0.0-1.0)
+            audio_offset: Seconds to skip at start of audio track
+        """
+        import asyncio
+        
+        # FFmpeg command to mix audio
+        # - adelay to sync if needed
+        # - amix to blend the two audio tracks
+        # - Keep video stream, add mixed audio
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-ss", str(audio_offset),
+            "-i", audio_path,
+            "-filter_complex", f"[0:a]volume=1.0[a0];[1:a]volume={audio_volume}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+            "-map", "0:v",
+            "-map", "[aout]",
+            "-c:v", "copy",  # Copy video stream without re-encoding
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-shortest",
+            output_path,
+        ]
+        
+        logger.info(f"Mixing audio: {' '.join(cmd)}")
+        
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        
+        if proc.returncode != 0:
+            raise RuntimeError(f"Audio mixing failed: {stderr.decode(errors='replace')[:500]}")
+    
+    async def generate_all_variants(
+        self,
+        job: Job,
+        project_id: str,
+        segment_id: str,
+        styles: Optional[List[str]] = None,
+        platform: str = "tiktok",
+        include_captions: bool = True,
+        burn_subtitles: bool = True,
+        use_nvenc: bool = True,
+        layout_config: Optional[Dict[str, Any]] = None,
+        intro_config: Optional[Dict[str, Any]] = None,
+        music_config: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate all 3 style variants in one operation.
+        
+        This exports the same segment with VIRAL, CLEAN, and IMPACT styles,
+        allowing the user to quickly compare and choose the best one.
+        """
+        from forge_engine.services.auto_params import get_auto_params_service
+        
+        job_manager = JobManager.get_instance()
+        
+        # Default to all 3 TikTok-optimized styles
+        if styles is None:
+            styles = ["viral", "clean", "impact"]
+        
+        results = {
+            "success": True,
+            "variants": [],
+            "errors": []
+        }
+        
+        total_styles = len(styles)
+        
+        for idx, style_name in enumerate(styles):
+            variant_letter = chr(65 + idx)  # A, B, C
+            
+            try:
+                # Update progress
+                base_progress = int((idx / total_styles) * 100)
+                await job_manager._update_db_progress(
+                    job.id,
+                    progress=base_progress,
+                    message=f"Generating {style_name.upper()} variant ({idx+1}/{total_styles})",
+                    stage="multi_export"
+                )
+                
+                # Get auto-computed parameters
+                auto_params = get_auto_params_service()
+                optimal = await auto_params.compute_optimal_params(
+                    layout_info=layout_config
+                )
+                
+                # Create caption style for this variant
+                caption_style = {
+                    "style_name": style_name,
+                    "position": optimal.get("subtitle_position", "bottom"),
+                    "positionY": optimal.get("subtitle_position_y"),
+                }
+                
+                # Run export for this variant
+                variant_result = await self.run_export(
+                    job=job,
+                    project_id=project_id,
+                    segment_id=segment_id,
+                    variant=f"{variant_letter}_{style_name}",
+                    platform=platform,
+                    include_captions=include_captions,
+                    burn_subtitles=burn_subtitles,
+                    use_nvenc=use_nvenc,
+                    caption_style=caption_style,
+                    layout_config=layout_config,
+                    intro_config=intro_config,
+                    music_config=music_config
+                )
+                
+                results["variants"].append({
+                    "style": style_name,
+                    "variant": variant_letter,
+                    "output_path": variant_result.get("video_path"),
+                    "artifacts": variant_result.get("artifacts", [])
+                })
+                
+                logger.info(f"[MultiExport] Generated {style_name} variant successfully")
+                
+            except Exception as e:
+                logger.error(f"[MultiExport] Failed to generate {style_name} variant: {e}")
+                results["errors"].append({
+                    "style": style_name,
+                    "error": str(e)
+                })
+        
+        # Final progress
+        await job_manager._update_db_progress(
+            job.id,
+            progress=100,
+            message=f"Generated {len(results['variants'])} variants",
+            stage="complete"
+        )
+        
+        results["success"] = len(results["errors"]) == 0
+        
+        return results
+    
+    async def batch_export_all(
+        self,
+        job: Job,
+        project_id: str,
+        min_score: float = 70.0,
+        max_clips: int = 500,
+        style: str = "viral_pro",
+        platform: str = "tiktok",
+        include_captions: bool = True,
+        burn_subtitles: bool = True,
+        include_cover: bool = True,
+        include_metadata: bool = True,
+        use_nvenc: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        WORLD CLASS BATCH EXPORT - Export all high-scoring segments in one click.
+        
+        This is the simplified workflow:
+        1. Get all segments with score >= min_score
+        2. Take top max_clips segments
+        3. Apply viral_pro style by default
+        4. Export all clips automatically with covers
+        
+        Args:
+            project_id: Project ID
+            min_score: Minimum score threshold (default: 70)
+            max_clips: Maximum number of clips to export (default: 20)
+            style: Caption style to use (default: viral_pro)
+            platform: Target platform (default: tiktok)
+        """
+        job_manager = JobManager.get_instance()
+        
+        async with async_session_maker() as db:
+            # Get project
+            result = await db.execute(select(Project).where(Project.id == project_id))
+            project = result.scalar_one_or_none()
+            
+            if not project:
+                raise ValueError(f"Project not found: {project_id}")
+            
+            # Get all segments above threshold, sorted by score
+            result = await db.execute(
+                select(Segment)
+                .where(Segment.project_id == project_id)
+                .where(Segment.score_total >= min_score)
+                .order_by(Segment.score_total.desc())
+                .limit(max_clips)
+            )
+            segments = result.scalars().all()
+            
+            if not segments:
+                job_manager.update_progress(job, 100, "complete", "Aucun segment au-dessus du seuil")
+                return {
+                    "success": True,
+                    "project_id": project_id,
+                    "exported_count": 0,
+                    "clips": [],
+                    "message": f"Aucun segment avec score >= {min_score}"
+                }
+            
+            logger.info(f"[BatchExport] Found {len(segments)} segments to export (score >= {min_score})")
+            
+            exported_clips = []
+            errors = []
+            total_segments = len(segments)
+            
+            # Get the viral_pro caption style
+            from forge_engine.services.captions import CAPTION_STYLES
+            caption_style_config = CAPTION_STYLES.get(style, CAPTION_STYLES["viral_pro"])
+            
+            # Convert backend style to frontend format for run_export
+            caption_style = {
+                "fontFamily": caption_style_config.get("font_family", "Montserrat"),
+                "fontSize": caption_style_config.get("font_size", 96),
+                "fontWeight": 900 if caption_style_config.get("bold") else 700,
+                "color": self._ass_color_to_hex(caption_style_config.get("primary_color", "&H00FFFFFF")),
+                "backgroundColor": "transparent",
+                "outlineColor": self._ass_color_to_hex(caption_style_config.get("outline_color", "&H00000000")),
+                "outlineWidth": caption_style_config.get("outline_width", 5),
+                "position": "center" if caption_style_config.get("alignment") == 5 else "bottom",
+                "positionY": caption_style_config.get("margin_v", 960),
+                "animation": caption_style_config.get("animation", "pop"),
+                "highlightColor": self._ass_color_to_hex(caption_style_config.get("highlight_color", "&H0000D7FF")),
+                "wordsPerLine": caption_style_config.get("max_words_per_line", 3),
+            }
+            
+            for idx, segment in enumerate(segments):
+                try:
+                    # Calculate progress
+                    base_progress = int((idx / total_segments) * 100)
+                    job_manager.update_progress(
+                        job,
+                        base_progress,
+                        f"export_{idx+1}",
+                        f"Exporting clip {idx+1}/{total_segments}: {segment.topic_label or 'Untitled'}"
+                    )
+                    
+                    # Create a sub-job for this export (or use same job with progress offset)
+                    variant = f"batch_{idx+1:02d}"
+                    
+                    # Use segment's detected layout if available
+                    layout_config = None
+                    if segment.facecam_rect and segment.content_rect:
+                        layout_config = {
+                            "facecam": {
+                                "x": 0, "y": 0, "width": 1, "height": 0.4,
+                                "sourceCrop": segment.facecam_rect
+                            },
+                            "content": {
+                                "x": 0, "y": 0.4, "width": 1, "height": 0.6,
+                                "sourceCrop": segment.content_rect
+                            },
+                            "facecamRatio": 0.4
+                        }
+                    
+                    # Run export
+                    export_result = await self.run_export(
+                        job=job,
+                        project_id=project_id,
+                        segment_id=segment.id,
+                        variant=variant,
+                        platform=platform,
+                        include_captions=include_captions,
+                        burn_subtitles=burn_subtitles,
+                        include_cover=include_cover,
+                        include_metadata=include_metadata,
+                        include_post=True,
+                        use_nvenc=use_nvenc,
+                        caption_style=caption_style,
+                        layout_config=layout_config,
+                    )
+                    
+                    exported_clips.append({
+                        "segment_id": segment.id,
+                        "topic": segment.topic_label,
+                        "score": segment.score_total,
+                        "duration": segment.duration,
+                        "variant": variant,
+                        "export_dir": export_result.get("export_dir"),
+                        "artifacts": export_result.get("artifacts", []),
+                    })
+                    
+                    logger.info(f"[BatchExport] Exported clip {idx+1}/{total_segments}: {segment.topic_label}")
+                    
+                except Exception as e:
+                    logger.error(f"[BatchExport] Failed to export segment {segment.id}: {e}")
+                    errors.append({
+                        "segment_id": segment.id,
+                        "topic": segment.topic_label,
+                        "error": str(e)
+                    })
+            
+            job_manager.update_progress(job, 100, "complete", f"Batch export terminé: {len(exported_clips)} clips")
+            
+            return {
+                "success": len(errors) == 0,
+                "project_id": project_id,
+                "exported_count": len(exported_clips),
+                "total_available": total_segments,
+                "clips": exported_clips,
+                "errors": errors,
+                "style_used": style,
+            }
+    
+    def _ass_color_to_hex(self, ass_color: str) -> str:
+        """Convert ASS color (&HAABBGGRR) to hex (#RRGGBB)."""
+        if not ass_color or not ass_color.startswith("&H"):
+            return "#FFFFFF"
+        
+        # ASS format: &HAABBGGRR where AA=alpha, BB=blue, GG=green, RR=red
+        color = ass_color[2:]  # Remove &H
+        if len(color) >= 6:
+            # Extract BGR and convert to RGB
+            bb = color[-6:-4] if len(color) >= 6 else "FF"
+            gg = color[-4:-2] if len(color) >= 4 else "FF"
+            rr = color[-2:] if len(color) >= 2 else "FF"
+            return f"#{rr}{gg}{bb}"
+        
+        return "#FFFFFF"
 
 
 
