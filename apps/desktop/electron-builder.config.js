@@ -37,33 +37,25 @@ module.exports = {
   
   // Extra resources (not in asar)
   extraResources: [
-    // Python environment
+    // FORGE Engine (Python backend)
     {
-      from: 'resources/python',
-      to: 'python',
-      filter: ['**/*'],
-    },
-    // FFmpeg binaries
-    {
-      from: 'resources/ffmpeg',
-      to: 'ffmpeg',
-      filter: ['**/*'],
-    },
-    // FORGE Engine
-    {
-      from: '../../apps/forge-engine/src',
+      from: '../forge-engine/src',
       to: 'forge-engine/src',
-      filter: ['**/*.py'],
+      filter: ['**/*.py', '!**/__pycache__/**'],
     },
     {
-      from: '../../apps/forge-engine/requirements.txt',
+      from: '../forge-engine/requirements.txt',
       to: 'forge-engine/requirements.txt',
     },
-    // Assets
+    {
+      from: '../forge-engine/requirements-minimal.txt',
+      to: 'forge-engine/requirements-minimal.txt',
+    },
+    // Assets (audio, music, etc.)
     {
       from: '../../assets',
       to: 'assets',
-      filter: ['**/*'],
+      filter: ['**/*', '!**/.gitkeep'],
     },
   ],
   
@@ -105,18 +97,14 @@ module.exports = {
     createStartMenuShortcut: true,
     shortcutName: 'FORGE LAB',
     
-    // Custom installer script
+    // Custom installer script for prerequisites check
     include: 'build-resources/installer.nsh',
     
-    // License
+    // License agreement
     license: 'build-resources/license.txt',
     
-    // Custom installer messages
-    installerHeader: 'build-resources/installer-header.bmp',
-    installerSidebar: 'build-resources/installer-sidebar.bmp',
-    
-    // Install Python and FFmpeg during installation
-    // (handled by custom nsh script)
+    // Uninstaller display name
+    uninstallDisplayName: 'FORGE LAB',
   },
   
   // Portable version

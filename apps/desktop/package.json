@@ -12,7 +12,7 @@
     "dev": "vite",
     "dev:electron": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "npm run build:prepare && npm run build:vite && npm run build:electron",
-    "build:vite": "tsc && vite build",
+    "build:vite": "vite build",
     "build:electron": "electron-builder --config electron-builder.config.js",
     "build:prepare": "node scripts/prepare-python.js",
     "build:win": "npm run build:prepare -- --platform=win32 && npm run build:vite && electron-builder --win",

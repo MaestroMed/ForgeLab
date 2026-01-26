@@ -9,7 +9,7 @@ import {
 } from '@/store';
 import { 
   FolderOpen, Cpu, HardDrive, RefreshCw, Zap, Cloud, Monitor,
-  Palette, Volume2, Key, FileVideo, Flask, Settings, Sun, Moon,
+  Palette, Volume2, Key, FileVideo, FlaskConical, Settings, Sun, Moon,
   Sparkles, Check, Eye, EyeOff, Play, Trash2, Download
 } from 'lucide-react';
 
@@ -21,7 +21,7 @@ const SETTINGS_SECTIONS = [
   { id: 'api-keys', icon: Key, label: 'Clés API' },
   { id: 'performance', icon: Zap, label: 'Performances' },
   { id: 'export', icon: FileVideo, label: 'Export' },
-  { id: 'experimental', icon: Flask, label: 'Expérimental' },
+  { id: 'experimental', icon: FlaskConical, label: 'Expérimental' },
 ];
 
 interface ProviderInfo {
@@ -1037,3 +1037,4 @@ function formatBytes(bytes: number): string {
     unitIndex++;
   }  return `${size.toFixed(1)} ${units[unitIndex]}`;
 }
+
