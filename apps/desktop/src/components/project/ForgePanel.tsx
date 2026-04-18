@@ -1,30 +1,28 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ENGINE_BASE_URL } from '@/lib/config';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Play,
-  Pause,
-  Clock,
   Zap,
-  ChevronRight,
   Download,
   Filter,
   Grid3X3,
   LayoutList,
-  Volume2,
-  VolumeX,
-  SkipBack,
-  SkipForward,
-  Layers,
   Check,
-  AlertTriangle,
   Rocket,
   Loader2,
   X,
+  ChevronDown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { api } from '@/lib/api';
-import { formatDuration, truncate } from '@/lib/utils';
+import { SegmentFilterBar, type FilterState, type SegmentStats } from '@/components/segments/SegmentFilterBar';
+import { useSegmentFilterStore, useToastStore } from '@/store';
+import { useSegmentNavigation } from '@/hooks/useSegmentNavigation';
+import { useDebounce } from '@/hooks/useDebounce';
+import { SegmentPreview } from '@/components/project/SegmentPreview';
+import { SegmentScoreCard } from '@/components/project/SegmentScoreCard';
 
 interface ForgePanelProps {
   project: {
@@ -56,67 +54,193 @@ interface Segment {
   };
 }
 
-type FilterMode = 'all' | 'monetizable' | 'high-score';
 type SortMode = 'score' | 'duration' | 'time';
 
 export default function ForgePanel({ project }: ForgePanelProps) {
   const navigate = useNavigate();
+  const { addToast } = useToastStore();
   const videoRef = useRef<HTMLVideoElement>(null);
-  
+
   const [segments, setSegments] = useState<Segment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [selectedSegment, setSelectedSegment] = useState<Segment | null>(null);
+  
+  // Stats from backend
+  const [segmentStats, setSegmentStats] = useState<SegmentStats | null>(null);
+  const [totalFiltered, setTotalFiltered] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
   
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   
-  // Filter/Sort state
-  const [filter, setFilter] = useState<FilterMode>('all');
-  const [sortBy, setSortBy] = useState<SortMode>('score');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  // Persisted filter state from store
+  const {
+    minScore, minDuration, maxDuration, limit,
+    sortBy, viewMode, search, selectedTags,
+    setFilters: setStoreFilters,
+    setSearch,
+    setSelectedTags,
+  } = useSegmentFilterStore();
+
+  // Debounce search input to avoid API calls on every keystroke
+  const debouncedSearch = useDebounce(search, 300);
+
+  // Available tags for this project
+  const [availableTags, setAvailableTags] = useState<string[]>([]);
+  
+  // Smart suggestions
+  const [suggestions, setSuggestions] = useState<{ segment: Segment; reason: string }[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(true);
+  
+  const filters: FilterState = { minScore, minDuration, maxDuration, limit, search, tags: selectedTags };
+  
+  const setFilters = (newFilters: FilterState) => {
+    setStoreFilters(newFilters);
+  };
+  
+  const setSortBy = (sort: SortMode) => {
+    setStoreFilters({ sortBy: sort });
+  };
+  
+  const setViewMode = (mode: 'grid' | 'list') => {
+    setStoreFilters({ viewMode: mode });
+  };
   
   // Batch export state
   const [showBatchExportModal, setShowBatchExportModal] = useState(false);
   const [batchExportLoading, setBatchExportLoading] = useState(false);
   const [batchExportProgress, setBatchExportProgress] = useState<{ current: number; total: number; status: string } | null>(null);
+  
+  // Multi-select state
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
+  // Load stats, tags, and suggestions on mount
   useEffect(() => {
-    loadSegments();
+    loadStats();
+    loadTags();
+    loadSuggestions();
   }, [project.id]);
 
-  const loadSegments = async () => {
+  // Load segments when filters change — use debouncedSearch to avoid API call on every keystroke
+  useEffect(() => {
+    setCurrentPage(1);
+    loadSegments(1);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id, minScore, minDuration, maxDuration, limit, sortBy, debouncedSearch, selectedTags]);
+
+  const loadStats = async () => {
     try {
-      const res = await api.listSegments(project.id, { pageSize: 100 });
-      setSegments(res.data?.items || []);
+      const res = await api.getSegmentStats(project.id);
+      if (res.data) {
+        setSegmentStats(res.data);
+      }
+    } catch (error) {
+      console.error('Failed to load segment stats:', error);
+      addToast({
+        type: 'error',
+        title: 'Erreur de statistiques',
+        message: 'Impossible de charger les statistiques des segments.',
+      });
+    }
+  };
+
+  const loadTags = async () => {
+    try {
+      const res = await api.getSegmentTags(project.id);
+      if (res.data?.tags) {
+        setAvailableTags(res.data.tags);
+      }
+    } catch (error) {
+      console.error('Failed to load tags:', error);
+      addToast({
+        type: 'error',
+        title: 'Erreur de tags',
+        message: 'Impossible de charger les tags disponibles.',
+      });
+    }
+  };
+
+  const loadSuggestions = async () => {
+    try {
+      const res = await api.getSegmentSuggestions(project.id, 5);
+      if (res.data?.suggestions) {
+        const suggestionsWithReasons = res.data.suggestions.map(seg => ({
+          segment: seg as Segment,
+          reason: res.data!.reasons[seg.id] || 'Recommandé',
+        }));
+        setSuggestions(suggestionsWithReasons);
+      }
+    } catch (error) {
+      console.error('Failed to load suggestions:', error);
+      addToast({
+        type: 'error',
+        title: 'Erreur de suggestions',
+        message: 'Impossible de charger les suggestions de segments.',
+      });
+    }
+  };
+
+  const loadSegments = async (page: number = 1) => {
+    if (page === 1) {
+      setLoading(true);
+    } else {
+      setLoadingMore(true);
+    }
+    
+    try {
+      const pageSize = filters.limit || 100;
+      const res = await api.listSegments(project.id, {
+        page,
+        pageSize: Math.min(pageSize, 500),
+        sortBy: sortBy === 'time' ? 'startTime' : sortBy,
+        sortOrder: 'desc',
+        minScore: filters.minScore > 0 ? filters.minScore : undefined,
+        minDuration: filters.minDuration > 0 ? filters.minDuration : undefined,
+        maxDuration: filters.maxDuration < 600 ? filters.maxDuration : undefined,
+        search: debouncedSearch || undefined,
+        tags: selectedTags.length > 0 ? selectedTags : undefined,
+      });
+      
+      const newSegments = res.data?.items || [];
+      
+      if (page === 1) {
+        setSegments(newSegments);
+      } else {
+        setSegments(prev => [...prev, ...newSegments]);
+      }
+      
+      setTotalFiltered(res.data?.total || 0);
+      setHasMore(res.data?.hasMore || false);
+      setCurrentPage(page);
     } catch (error) {
       console.error('Failed to load segments:', error);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   };
 
-  // Filter and sort segments (with null-safe score access)
-  const getScore = (seg: Segment) => seg.score?.total ?? 0;
-  
-  const filteredSegments = segments
-    .filter((seg) => {
-      if (filter === 'monetizable') return seg.duration >= 60;
-      if (filter === 'high-score') return getScore(seg) >= 60;
-      return true;
-    })
-    .sort((a, b) => {
-      if (sortBy === 'score') return getScore(b) - getScore(a);
-      if (sortBy === 'duration') return b.duration - a.duration;
-      return a.startTime - b.startTime;
-    });
+  const handleLoadMore = () => {
+    if (!loadingMore && hasMore) {
+      loadSegments(currentPage + 1);
+    }
+  };
 
-  // Stats
+  // Apply client-side limit if set
+  const displayedSegments = filters.limit 
+    ? segments.slice(0, filters.limit)
+    : segments;
+
+  // Stats for legacy compatibility
   const stats = {
-    total: segments.length,
-    monetizable: segments.filter((s) => s.duration >= 60).length,
-    highScore: segments.filter((s) => getScore(s) >= 60).length,
+    total: segmentStats?.total ?? segments.length,
+    monetizable: segmentStats?.monetizable ?? 0,
+    highScore: segmentStats?.highScore ?? 0,
   };
 
   // Video controls
@@ -153,6 +277,54 @@ export default function ForgePanel({ project }: ForgePanelProps) {
       videoRef.current.play();
       setIsPlaying(true);
     }
+  }, []);
+
+  // Keyboard navigation for segments
+  useSegmentNavigation({
+    segments: displayedSegments,
+    selectedSegmentId: selectedSegment?.id || null,
+    onSelect: handleSegmentSelect as (segment: any) => void,
+    onPlay: handleSegmentPlay as (segment: any) => void,
+    onEdit: (seg) => navigate(`/editor/${project.id}?segment=${seg.id}`),
+    enabled: !showBatchExportModal,
+  });
+
+  // Toggle multi-select for a segment
+  const toggleSegmentSelection = useCallback((segmentId: string, e?: React.MouseEvent) => {
+    if (e?.shiftKey && selectedIds.length > 0) {
+      // Range select
+      const lastId = selectedIds[selectedIds.length - 1];
+      const lastIndex = displayedSegments.findIndex(s => s.id === lastId);
+      const currentIndex = displayedSegments.findIndex(s => s.id === segmentId);
+      const start = Math.min(lastIndex, currentIndex);
+      const end = Math.max(lastIndex, currentIndex);
+      const rangeIds = displayedSegments.slice(start, end + 1).map(s => s.id);
+      setSelectedIds(prev => [...new Set([...prev, ...rangeIds])]);
+    } else if (e?.ctrlKey || e?.metaKey) {
+      // Toggle single
+      setSelectedIds(prev => 
+        prev.includes(segmentId) 
+          ? prev.filter(id => id !== segmentId)
+          : [...prev, segmentId]
+      );
+    } else {
+      // Single select (in multi-select mode) or toggle
+      if (multiSelectMode) {
+        setSelectedIds(prev => 
+          prev.includes(segmentId) 
+            ? prev.filter(id => id !== segmentId)
+            : [...prev, segmentId]
+        );
+      }
+    }
+  }, [displayedSegments, selectedIds, multiSelectMode]);
+
+  const selectAllSegments = useCallback(() => {
+    setSelectedIds(displayedSegments.map(s => s.id));
+  }, [displayedSegments]);
+
+  const deselectAllSegments = useCallback(() => {
+    setSelectedIds([]);
   }, []);
 
   // WORLD CLASS BATCH EXPORT - One click to export all high-scoring clips
@@ -193,23 +365,6 @@ export default function ForgePanel({ project }: ForgePanelProps) {
     }
   };
 
-  // Update time display
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    
-    const onTimeUpdate = () => setCurrentTime(video.currentTime);
-    const onEnded = () => setIsPlaying(false);
-    
-    video.addEventListener('timeupdate', onTimeUpdate);
-    video.addEventListener('ended', onEnded);
-    
-    return () => {
-      video.removeEventListener('timeupdate', onTimeUpdate);
-      video.removeEventListener('ended', onEnded);
-    };
-  }, []);
-
   // Keyboard shortcuts
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -244,45 +399,76 @@ export default function ForgePanel({ project }: ForgePanelProps) {
     );
   }
 
-  const videoSrc = project.proxyPath || project.sourcePath;
-
   return (
     <div className="h-full flex bg-[var(--bg-primary)]">
       {/* LEFT: Segment List */}
       <div className="w-80 flex flex-col border-r border-[var(--border-color)] bg-[var(--bg-card)]">
         {/* Header */}
-        <div className="p-4 border-b border-[var(--border-color)]">
-          <div className="flex items-center justify-between mb-3">
+        <div className="p-3 border-b border-[var(--border-color)]">
+          <div className="flex items-center justify-between mb-2">
             <h3 className="font-bold text-lg text-[var(--text-primary)]">Segments</h3>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-[var(--text-muted)]">{filteredSegments.length} / {stats.total}</span>
-              {/* WORLD CLASS: One-click batch export button */}
-              <Button
-                size="sm"
-                onClick={() => setShowBatchExportModal(true)}
-                disabled={stats.highScore === 0}
-                className="flex items-center gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white text-xs px-2 py-1"
+              {/* Multi-select toggle */}
+              <button
+                onClick={() => {
+                  setMultiSelectMode(!multiSelectMode);
+                  if (multiSelectMode) setSelectedIds([]);
+                }}
+                className={`p-1.5 rounded-lg transition-colors ${
+                  multiSelectMode 
+                    ? 'bg-blue-500 text-white' 
+                    : 'bg-[var(--bg-secondary)] text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)]'
+                }`}
+                title={multiSelectMode ? 'Désactiver la sélection multiple' : 'Activer la sélection multiple'}
               >
-                <Rocket className="w-3.5 h-3.5" />
-                Tout exporter
-              </Button>
+                <Check className="w-4 h-4" />
+              </button>
+              
+              {/* Export button - changes based on multi-select mode */}
+              {multiSelectMode && selectedIds.length > 0 ? (
+                <Button
+                  size="sm"
+                  onClick={() => setShowBatchExportModal(true)}
+                  className="flex items-center gap-1.5 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white text-xs px-2 py-1"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  {selectedIds.length}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={() => setShowBatchExportModal(true)}
+                  disabled={stats.highScore === 0}
+                  className="flex items-center gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white text-xs px-2 py-1"
+                >
+                  <Rocket className="w-3.5 h-3.5" />
+                </Button>
+              )}
             </div>
           </div>
           
-          {/* Filter pills */}
-          <div className="flex items-center gap-1 mb-3">
-            <FilterPill active={filter === 'all'} onClick={() => setFilter('all')}>
-              Tous
-            </FilterPill>
-            <FilterPill active={filter === 'monetizable'} onClick={() => setFilter('monetizable')}>
-              <Clock className="w-3 h-3 mr-1" />
-              ≥1min
-            </FilterPill>
-            <FilterPill active={filter === 'high-score'} onClick={() => setFilter('high-score')}>
-              <Zap className="w-3 h-3 mr-1" />
-              60+
-            </FilterPill>
-          </div>
+          {/* Multi-select actions bar */}
+          {multiSelectMode && (
+            <div className="flex items-center justify-between text-xs mb-2">
+              <span className="text-[var(--text-muted)]">
+                {selectedIds.length} sélectionné{selectedIds.length !== 1 ? 's' : ''}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  onClick={selectAllSegments}
+                  className="text-blue-500 hover:text-blue-400"
+                >
+                  Tout
+                </button>
+                <button
+                  onClick={deselectAllSegments}
+                  className="text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                >
+                  Aucun
+                </button>
+              </div>
+            </div>
+          )}
           
           {/* Sort & View toggle */}
           <div className="flex items-center justify-between">
@@ -312,6 +498,18 @@ export default function ForgePanel({ project }: ForgePanelProps) {
             </div>
           </div>
         </div>
+
+        {/* Advanced Filter Bar */}
+        <SegmentFilterBar
+          stats={segmentStats}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filteredCount={displayedSegments.length}
+          loading={loading}
+          availableTags={availableTags}
+          onSearchChange={setSearch}
+          onTagsChange={setSelectedTags}
+        />
 
         {/* WORLD CLASS: Batch Export Modal */}
         <AnimatePresence>
@@ -420,31 +618,83 @@ export default function ForgePanel({ project }: ForgePanelProps) {
           )}
         </AnimatePresence>
 
+        {/* Smart Suggestions */}
+        {showSuggestions && suggestions.length > 0 && !multiSelectMode && (
+          <div className="p-2 border-b border-[var(--border-color)] bg-gradient-to-br from-amber-500/5 to-orange-500/5">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-xs font-semibold text-amber-500 flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5" />
+                Suggestions
+              </h4>
+              <button
+                onClick={() => setShowSuggestions(false)}
+                className="p-0.5 rounded hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)]"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+            <div className="space-y-1.5">
+              {suggestions.slice(0, 3).map(({ segment, reason }) => (
+                <button
+                  key={segment.id}
+                  onClick={() => handleSegmentSelect(segment)}
+                  className={`w-full flex items-center gap-2 p-2 rounded-lg text-left transition-colors ${
+                    selectedSegment?.id === segment.id
+                      ? 'bg-amber-500/20 ring-1 ring-amber-500'
+                      : 'bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)]'
+                  }`}
+                >
+                  <div className={`w-8 h-8 rounded flex items-center justify-center text-xs font-bold ${
+                    (segment.score?.total || 0) >= 70 ? 'bg-green-500' : 'bg-amber-500'
+                  } text-white`}>
+                    {segment.score?.total || 0}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-medium text-[var(--text-primary)] truncate">
+                      {segment.topicLabel || 'Segment'}
+                    </div>
+                    <div className="text-[10px] text-amber-500">{reason}</div>
+                  </div>
+                  <Play className="w-3.5 h-3.5 text-[var(--text-muted)]" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Segment List */}
         <div className="flex-1 overflow-y-auto p-2 scrollbar-thin">
-          {filteredSegments.length === 0 ? (
+          {loading ? (
+            <div className="flex items-center justify-center h-32">
+              <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
+            </div>
+          ) : displayedSegments.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center p-4">
               <Filter className="w-10 h-10 text-[var(--text-muted)] opacity-30 mb-3" />
               <p className="text-sm text-[var(--text-muted)]">Aucun segment trouvé</p>
+              <p className="text-xs text-[var(--text-muted)] mt-1">Essayez d'ajuster les filtres</p>
             </div>
           ) : viewMode === 'grid' ? (
             // Grid mode
             <div className="grid grid-cols-2 gap-2">
-              {filteredSegments.map((segment) => (
+              {displayedSegments.map((segment) => (
                 <SegmentCardCompact
                   key={segment.id}
                   segment={segment}
                   projectId={project.id}
                   isSelected={selectedSegment?.id === segment.id}
+                  isChecked={selectedIds.includes(segment.id)}
+                  showCheckbox={multiSelectMode}
                   onSelect={() => handleSegmentSelect(segment)}
                   onPlay={() => handleSegmentPlay(segment)}
+                  onCheckToggle={(e) => toggleSegmentSelection(segment.id, e)}
                 />
               ))}
             </div>
           ) : (
             // List mode
             <div className="space-y-1">
-              {filteredSegments.map((segment) => (
+              {displayedSegments.map((segment) => (
                 <SegmentRowCompact
                   key={segment.id}
                   segment={segment}
@@ -455,277 +705,110 @@ export default function ForgePanel({ project }: ForgePanelProps) {
               ))}
             </div>
           )}
+          
+          {/* Load More Button */}
+          {hasMore && !filters.limit && (
+            <div className="mt-4 mb-2">
+              <button
+                onClick={handleLoadMore}
+                disabled={loadingMore}
+                className="w-full py-2 px-4 rounded-lg bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)] text-sm font-medium transition-colors flex items-center justify-center gap-2"
+              >
+                {loadingMore ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Chargement...
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="w-4 h-4" />
+                    Charger plus ({totalFiltered - segments.length} restants)
+                  </>
+                )}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
       {/* CENTER: Video Preview */}
-      <div className="flex-1 flex flex-col">
-        {/* Video area */}
-        <div className="flex-1 bg-black flex items-center justify-center relative">
-          {videoSrc ? (
-            <>
-              <video
-                ref={videoRef}
-                src={`http://localhost:8420/media/${project.id}/proxy`}
-                className="max-h-full max-w-full"
-                muted={isMuted}
-                onClick={handlePlayPause}
-              />
-              
-              {/* Overlay info */}
-              {selectedSegment && (
-                <div className="absolute top-4 left-4 bg-black/70 backdrop-blur-sm rounded-lg px-3 py-2 text-white text-sm">
-                  <div className="font-medium">{selectedSegment.topicLabel || 'Segment'}</div>
-                  <div className="text-xs opacity-70">
-                    {formatTime(selectedSegment.startTime)} → {formatTime(selectedSegment.endTime)}
-                  </div>
-                </div>
-              )}
-              
-              {/* Time indicator */}
-              <div className="absolute bottom-4 right-4 bg-black/70 backdrop-blur-sm rounded-lg px-3 py-1.5 text-white text-sm font-mono">
-                {formatTime(currentTime)} / {formatTime(project.duration || 0)}
-              </div>
-            </>
-          ) : (
-            <div className="text-[var(--text-muted)]">Aucune vidéo disponible</div>
-          )}
-        </div>
-        
-        {/* Controls bar */}
-        <div className="h-16 bg-[var(--bg-card)] border-t border-[var(--border-color)] flex items-center px-4 gap-4">
-          {/* Play controls */}
-          <div className="flex items-center gap-2">
-            <button
-              className="p-2 rounded-lg hover:bg-[var(--bg-tertiary)] transition-colors"
-              onClick={() => handleSeek(Math.max(0, currentTime - 10))}
-            >
-              <SkipBack className="w-5 h-5 text-[var(--text-secondary)]" />
-            </button>
-            <button
-              className="p-3 rounded-full bg-blue-500 hover:bg-blue-600 text-white transition-colors"
-              onClick={handlePlayPause}
-            >
-              {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
-            </button>
-            <button
-              className="p-2 rounded-lg hover:bg-[var(--bg-tertiary)] transition-colors"
-              onClick={() => handleSeek(currentTime + 10)}
-            >
-              <SkipForward className="w-5 h-5 text-[var(--text-secondary)]" />
-            </button>
-          </div>
-          
-          {/* Timeline scrubber */}
-          <div className="flex-1 relative h-2 bg-[var(--bg-tertiary)] rounded-full cursor-pointer group"
-            onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              const pct = (e.clientX - rect.left) / rect.width;
-              handleSeek(pct * (project.duration || 0));
-            }}
-          >
-            {/* Progress */}
-            <div
-              className="absolute inset-y-0 left-0 bg-blue-500 rounded-full"
-              style={{ width: `${(currentTime / (project.duration || 1)) * 100}%` }}
-            />
-            
-            {/* Selected segment highlight */}
-            {selectedSegment && (
-              <div
-                className="absolute inset-y-0 bg-green-500/30 rounded-full"
-                style={{
-                  left: `${(selectedSegment.startTime / (project.duration || 1)) * 100}%`,
-                  width: `${((selectedSegment.endTime - selectedSegment.startTime) / (project.duration || 1)) * 100}%`,
-                }}
-              />
-            )}
-            
-            {/* Playhead */}
-            <div
-              className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow-lg border-2 border-blue-500 opacity-0 group-hover:opacity-100 transition-opacity"
-              style={{ left: `${(currentTime / (project.duration || 1)) * 100}%`, marginLeft: '-6px' }}
-            />
-          </div>
-          
-          {/* Volume */}
-          <button
-            className="p-2 rounded-lg hover:bg-[var(--bg-tertiary)] transition-colors"
-            onClick={() => setIsMuted(!isMuted)}
-          >
-            {isMuted ? (
-              <VolumeX className="w-5 h-5 text-[var(--text-secondary)]" />
-            ) : (
-              <Volume2 className="w-5 h-5 text-[var(--text-secondary)]" />
-            )}
-          </button>
-        </div>
-      </div>
+      <SegmentPreview
+        project={project}
+        segments={segments}
+        selectedSegment={selectedSegment}
+        isPlaying={isPlaying}
+        currentTime={currentTime}
+        isMuted={isMuted}
+        onPlayPause={handlePlayPause}
+        onSeek={handleSeek}
+        onMuteToggle={() => setIsMuted(!isMuted)}
+        onTimeUpdate={setCurrentTime}
+        onEnded={() => setIsPlaying(false)}
+        videoRef={videoRef}
+      />
 
       {/* RIGHT: Segment Details + Actions */}
-      <div className="w-80 flex flex-col border-l border-[var(--border-color)] bg-[var(--bg-card)]">
-        {selectedSegment ? (
-          <>
-            {/* Segment info */}
-            <div className="p-4 border-b border-[var(--border-color)]">
-              <div className="flex items-center gap-3 mb-4">
-                <ScoreBadge score={selectedSegment.score?.total} size="lg" />
-                <div className="flex-1">
-                  <h3 className="font-semibold text-[var(--text-primary)]">
-                    {selectedSegment.topicLabel || 'Segment sans titre'}
-                  </h3>
-                  <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
-                    <Clock className="w-3 h-3" />
-                    <span>{formatDuration(selectedSegment.duration)}</span>
-                    {selectedSegment.duration >= 60 ? (
-                      <span className="flex items-center text-green-500">
-                        <Check className="w-3 h-3 mr-0.5" /> Monétisable
-                      </span>
-                    ) : (
-                      <span className="flex items-center text-amber-500">
-                        <AlertTriangle className="w-3 h-3 mr-0.5" /> &lt; 1 min
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-              
-              {/* Hook */}
-              {selectedSegment.hookText && (
-                <div className="bg-[var(--bg-secondary)] rounded-lg p-3 mb-3">
-                  <p className="text-xs text-[var(--text-muted)] mb-1">Hook détecté</p>
-                  <p className="text-sm text-[var(--text-primary)] italic">"{selectedSegment.hookText}"</p>
-                </div>
-              )}
-              
-              {/* Tags */}
-              {(selectedSegment.score?.tags?.length ?? 0) > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {selectedSegment.score?.tags?.map((tag) => (
-                    <span
-                      key={tag}
-                      className="px-2 py-0.5 bg-[var(--bg-tertiary)] text-[var(--text-muted)] text-xs rounded-full capitalize"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Score breakdown */}
-            <div className="p-4 border-b border-[var(--border-color)]">
-              <h4 className="text-sm font-medium text-[var(--text-primary)] mb-3">Score détaillé</h4>
-              <div className="space-y-2">
-                <ScoreRow label="Hook" value={selectedSegment.score?.hookStrength ?? 0} max={25} />
-                <ScoreRow label="Payoff" value={selectedSegment.score?.payoff ?? 0} max={20} />
-                <ScoreRow label="Humour/Réaction" value={selectedSegment.score?.humourReaction ?? 0} max={15} />
-                <ScoreRow label="Tension/Surprise" value={selectedSegment.score?.tensionSurprise ?? 0} max={15} />
-                <ScoreRow label="Clarté" value={selectedSegment.score?.clarityAutonomy ?? 0} max={15} />
-                <ScoreRow label="Rythme" value={selectedSegment.score?.rhythm ?? 0} max={10} />
-              </div>
-            </div>
-
-            {/* Transcript preview */}
-            {selectedSegment.transcript && (
-              <div className="flex-1 overflow-auto p-4">
-                <h4 className="text-sm font-medium text-[var(--text-primary)] mb-2">Transcription</h4>
-                <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
-                  {selectedSegment.transcript.slice(0, 500)}
-                  {selectedSegment.transcript.length > 500 && '...'}
-                </p>
-              </div>
-            )}
-
-            {/* Actions */}
-            <div className="p-4 border-t border-[var(--border-color)] space-y-2">
-              <Button
-                size="sm"
-                onClick={() => navigate(`/editor/${project.id}?segment=${selectedSegment.id}`)}
-                className="w-full flex items-center justify-center gap-2 bg-blue-500 hover:bg-blue-600"
-              >
-                <Layers className="w-4 h-4" />
-                Ouvrir l'éditeur 9:16
-              </Button>
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => handleSegmentPlay(selectedSegment)}
-                  className="flex items-center justify-center gap-1.5"
-                >
-                  <Play className="w-4 h-4" />
-                  Preview
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {/* TODO: export */}}
-                  className="flex items-center justify-center gap-1.5"
-                >
-                  <Download className="w-4 h-4" />
-                  Export rapide
-                </Button>
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center p-4">
-            <div className="text-center">
-              <ChevronRight className="w-12 h-12 mx-auto mb-3 text-[var(--text-muted)] opacity-30" />
-              <p className="text-sm text-[var(--text-muted)]">
-                Sélectionnez un segment pour voir les détails
-              </p>
-            </div>
-          </div>
-        )}
-      </div>
+      <SegmentScoreCard
+        segment={selectedSegment}
+        projectId={project.id}
+        onNavigateToEditor={(segmentId) => navigate(`/editor/${project.id}?segment=${segmentId}`)}
+        onPlaySegment={handleSegmentPlay}
+      />
     </div>
   );
 }
 
 // Components
 
-function FilterPill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      className={`flex items-center px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-        active
-          ? 'bg-blue-500 text-white'
-          : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
-      }`}
-      onClick={onClick}
-    >
-      {children}
-    </button>
-  );
-}
-
 function SegmentCardCompact({
   segment,
   projectId,
   isSelected,
+  isChecked = false,
+  showCheckbox = false,
   onSelect,
   onPlay,
+  onCheckToggle,
 }: {
   segment: Segment;
   projectId: string;
   isSelected: boolean;
+  isChecked?: boolean;
+  showCheckbox?: boolean;
   onSelect: () => void;
   onPlay: () => void;
+  onCheckToggle?: (e: React.MouseEvent) => void;
 }) {
   const isMonetizable = segment.duration >= 60;
-  const baseUrl = window.forge?.getApiUrl?.() || 'http://localhost:8420';
+  const baseUrl = ENGINE_BASE_URL;
   
   return (
     <motion.div
+      data-segment-id={segment.id}
       className={`relative rounded-lg overflow-hidden cursor-pointer transition-all ${
-        isSelected ? 'ring-2 ring-blue-500' : 'hover:ring-1 hover:ring-[var(--border-color)]'
+        isSelected ? 'ring-2 ring-blue-500' : isChecked ? 'ring-2 ring-cyan-500' : 'hover:ring-1 hover:ring-[var(--border-color)]'
       }`}
-      onClick={onSelect}
+      onClick={showCheckbox ? onCheckToggle : onSelect}
       whileHover={{ scale: 1.02 }}
       whileTap={{ scale: 0.98 }}
     >
+      {/* Checkbox overlay */}
+      {showCheckbox && (
+        <div 
+          className={`absolute top-1 left-1 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+            isChecked 
+              ? 'bg-cyan-500 border-cyan-500' 
+              : 'bg-black/50 border-white/50 hover:border-white'
+          }`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onCheckToggle?.(e);
+          }}
+        >
+          {isChecked && <Check className="w-3 h-3 text-white" />}
+        </div>
+      )}
+      
       {/* Thumbnail */}
       <div className="aspect-video bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center relative">
         <img
@@ -740,12 +823,14 @@ function SegmentCardCompact({
           className="absolute inset-0 flex items-center justify-center bg-black/0 hover:bg-black/40 transition-colors group"
           onClick={(e) => {
             e.stopPropagation();
-            onPlay();
+            if (!showCheckbox) onPlay();
           }}
         >
-          <div className="w-8 h-8 bg-white/90 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-            <Play className="w-4 h-4 text-gray-900 ml-0.5" />
-          </div>
+          {!showCheckbox && (
+            <div className="w-8 h-8 bg-white/90 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+              <Play className="w-4 h-4 text-gray-900 ml-0.5" />
+            </div>
+          )}
         </button>
         
         {/* Duration badge */}
@@ -829,22 +914,6 @@ function ScoreBadge({ score, size = 'md' }: { score: number | undefined | null; 
   return (
     <div className={`${sizes[size]} ${colors} rounded-lg flex items-center justify-center text-white font-bold`}>
       {Math.round(s)}
-    </div>
-  );
-}
-
-function ScoreRow({ label, value, max }: { label: string; value: number; max: number }) {
-  const pct = Math.min(100, (value / max) * 100);
-  return (
-    <div className="flex items-center gap-3">
-      <span className="text-xs text-[var(--text-muted)] w-28">{label}</span>
-      <div className="flex-1 h-1.5 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
-        <div
-          className="h-full bg-gradient-to-r from-amber-500 to-green-500 transition-all"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className="text-xs text-[var(--text-secondary)] w-10 text-right">{value}/{max}</span>
     </div>
   );
 }

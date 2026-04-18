@@ -1,8 +1,8 @@
 ; FORGE LAB NSIS Installer Script
-; Beta v1.0.0 - Requires Python and FFmpeg pre-installed
+; v1.0.0 - ALL-IN-ONE (Python + FFmpeg bundled)
 
 !macro customInit
-  ; Nothing special needed for beta
+  ; Nothing needed - everything is bundled!
 !macroend
 
 !macro customInstall
@@ -16,19 +16,8 @@
   WriteRegStr HKCU "Software\FORGE LAB" "InstallPath" "$INSTDIR"
   WriteRegStr HKCU "Software\FORGE LAB" "Version" "${VERSION}"
   
-  ; Check Python availability and show instructions if missing
-  nsExec::ExecToStack 'python --version'
-  Pop $0
-  ${If} $0 != 0
-    MessageBox MB_OK|MB_ICONINFORMATION "FORGE LAB requiert Python 3.11+.$\n$\nTelechargez-le sur: python.org/downloads$\n$\nCochez 'Add Python to PATH' lors de l'installation."
-  ${EndIf}
-  
-  ; Check FFmpeg availability
-  nsExec::ExecToStack 'ffmpeg -version'
-  Pop $0
-  ${If} $0 != 0
-    MessageBox MB_OK|MB_ICONINFORMATION "FORGE LAB requiert FFmpeg.$\n$\nTelechargez-le sur: ffmpeg.org/download.html$\n$\nAjoutez le dossier bin a votre PATH."
-  ${EndIf}
+  ; Show success message
+  MessageBox MB_OK|MB_ICONINFORMATION "FORGE LAB a ete installe avec succes !$\n$\nPython et FFmpeg sont inclus - aucune configuration supplementaire requise.$\n$\nLancez FORGE LAB depuis le Menu Demarrer ou le Bureau."
 !macroend
 
 !macro customUnInstall

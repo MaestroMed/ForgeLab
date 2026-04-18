@@ -1,6 +1,6 @@
 // API Configuration
 export const API_VERSION = 'v1';
-export const DEFAULT_ENGINE_PORT = 7860;
+export const DEFAULT_ENGINE_PORT = 8420;
 export const ENGINE_HOST = 'localhost';
 
 // Video Presets

@@ -29,7 +29,7 @@
 
 4. **Lancer manuellement**
    ```powershell
-   python -m uvicorn forge_engine.main:app --host 127.0.0.1 --port 7860
+   python -m uvicorn forge_engine.main:app --host 127.0.0.1 --port 8420
    ```
 
 ### FFmpeg non trouvé

@@ -7,6 +7,7 @@ from forge_engine.models.profile import ExportProfile
 from forge_engine.models.segment import Segment
 from forge_engine.models.artifact import Artifact
 from forge_engine.models.channel import WatchedChannel, DetectedVOD
+from forge_engine.models.review import ClipReview, ClipQueue
 
 __all__ = [
     "Project",
@@ -18,6 +19,8 @@ __all__ = [
     "Artifact",
     "WatchedChannel",
     "DetectedVOD",
+    "ClipReview",
+    "ClipQueue",
 ]
 
 

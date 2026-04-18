@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, Upload, Search, Sparkles, Download, Lock } from 'lucide-react';
+import { ArrowLeft, Upload, Search, Sparkles, Download } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { api } from '@/lib/api';
 import { useJobsStore, useToastStore, useUIStore, useProjectsStore } from '@/store';
@@ -93,7 +93,6 @@ export default function ProjectPage() {
     if (storeProject && project) {
       // If status changed, reload full project data
       if (storeProject.status !== project.status) {
-        console.log('Project status changed via WebSocket:', storeProject.status);
         loadProject();
       }
     }
@@ -104,7 +103,7 @@ export default function ProjectPage() {
     
     try {
       const response = await api.getProject(id);
-      setProject(response.data);
+      setProject(response.data ?? null);
     } catch (error) {
       addToast({
         type: 'error',

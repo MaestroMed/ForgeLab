@@ -122,7 +122,7 @@ function checkEngineHealth() {
 }
 function startEngine() {
     return __awaiter(this, void 0, void 0, function () {
-        var attempt, enginePath, pythonPath, venvPath, cudnnBin, cublasBin, enhancedPath, i, response, _a;
+        var attempt, enginePath, pythonPath, enhancedPath, venvPath, cudnnBin, cublasBin, bundledPython, bundledFFmpeg, cudnnBin, cublasBin, pythonSrcPath, i, response, _a;
         var _b, _c;
         return __generator(this, function (_d) {
             switch (_d.label) {
@@ -149,16 +149,37 @@ function startEngine() {
                     enginePath = isDev
                         ? path.join(__dirname, '../../forge-engine')
                         : path.join(process.resourcesPath, 'forge-engine');
-                    pythonPath = isDev && process.platform === 'win32'
-                        ? path.join(enginePath, '.venv', 'Scripts', 'python.exe')
-                        : process.platform === 'win32' ? 'python' : 'python3';
-                    venvPath = path.join(enginePath, '.venv');
-                    cudnnBin = path.join(venvPath, 'Lib', 'site-packages', 'nvidia', 'cudnn', 'bin');
-                    cublasBin = path.join(venvPath, 'Lib', 'site-packages', 'nvidia', 'cublas', 'bin');
-                    enhancedPath = "".concat(cudnnBin, ";").concat(cublasBin, ";").concat(process.env.PATH);
-                    engineProcess = spawn(pythonPath, ['-m', 'uvicorn', 'forge_engine.main:app', '--host', '0.0.0.0', '--port', ENGINE_PORT.toString()], {
+                    enhancedPath = process.env.PATH || '';
+                    if (isDev) {
+                        // Development: use venv
+                        pythonPath = process.platform === 'win32'
+                            ? path.join(enginePath, '.venv', 'Scripts', 'python.exe')
+                            : path.join(enginePath, '.venv', 'bin', 'python3');
+                        venvPath = path.join(enginePath, '.venv');
+                        cudnnBin = path.join(venvPath, 'Lib', 'site-packages', 'nvidia', 'cudnn', 'bin');
+                        cublasBin = path.join(venvPath, 'Lib', 'site-packages', 'nvidia', 'cublas', 'bin');
+                        enhancedPath = "".concat(cudnnBin, ";").concat(cublasBin, ";").concat(enhancedPath);
+                    }
+                    else {
+                        bundledPython = path.join(process.resourcesPath, 'python', 'python.exe');
+                        bundledFFmpeg = path.join(process.resourcesPath, 'ffmpeg');
+                        pythonPath = bundledPython;
+                        // Add bundled FFmpeg and Python to PATH
+                        enhancedPath = "".concat(bundledFFmpeg, ";").concat(path.dirname(bundledPython), ";").concat(enhancedPath);
+                        cudnnBin = path.join(process.resourcesPath, 'python', 'Lib', 'site-packages', 'nvidia', 'cudnn', 'bin');
+                        cublasBin = path.join(process.resourcesPath, 'python', 'Lib', 'site-packages', 'nvidia', 'cublas', 'bin');
+                        enhancedPath = "".concat(cudnnBin, ";").concat(cublasBin, ";").concat(enhancedPath);
+                    }
+                    pythonSrcPath = path.join(enginePath, 'src');
+                    console.log('Engine config:', {
+                        pythonPath: pythonPath,
+                        enginePath: enginePath,
+                        pythonSrcPath: pythonSrcPath,
                         cwd: enginePath,
-                        env: __assign(__assign({}, process.env), { PYTHONPATH: path.join(enginePath, 'src'), PATH: enhancedPath }),
+                    });
+                    engineProcess = spawn(pythonPath, ['-m', 'uvicorn', 'forge_engine.main:app', '--host', '0.0.0.0', '--port', ENGINE_PORT.toString()], {
+                        cwd: pythonSrcPath, // Run from src directory
+                        env: __assign(__assign({}, process.env), { PYTHONPATH: pythonSrcPath, PATH: enhancedPath }),
                     });
                     (_b = engineProcess.stdout) === null || _b === void 0 ? void 0 : _b.on('data', function (data) {
                         console.log("[Engine] ".concat(data));

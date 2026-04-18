@@ -185,6 +185,12 @@ async def get_transcription_providers() -> dict:
         }
 
 
+@router.get("/platforms")
+async def get_platform_presets() -> dict:
+    """Return export platform presets."""
+    return {"platforms": settings.PLATFORM_PRESETS}
+
+
 @router.post("/transcription/provider")
 async def set_transcription_provider(request: ProviderSettingRequest) -> dict:
     """Set the default transcription provider."""

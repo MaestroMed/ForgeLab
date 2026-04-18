@@ -81,22 +81,51 @@ async function startEngine() {
     ? path.join(__dirname, '../../forge-engine')
     : path.join(process.resourcesPath, 'forge-engine');
 
-  // Use venv Python in dev mode
-  const pythonPath = isDev && process.platform === 'win32'
-    ? path.join(enginePath, '.venv', 'Scripts', 'python.exe')
-    : process.platform === 'win32' ? 'python' : 'python3';
+  // Python path - use bundled Python in production, venv in dev
+  let pythonPath: string;
+  let enhancedPath = process.env.PATH || '';
+  
+  if (isDev) {
+    // Development: use venv
+    pythonPath = process.platform === 'win32'
+      ? path.join(enginePath, '.venv', 'Scripts', 'python.exe')
+      : path.join(enginePath, '.venv', 'bin', 'python3');
+    
+    // Add CUDA/cuDNN DLLs for Whisper GPU acceleration
+    const venvPath = path.join(enginePath, '.venv');
+    const cudnnBin = path.join(venvPath, 'Lib', 'site-packages', 'nvidia', 'cudnn', 'bin');
+    const cublasBin = path.join(venvPath, 'Lib', 'site-packages', 'nvidia', 'cublas', 'bin');
+    enhancedPath = `${cudnnBin};${cublasBin};${enhancedPath}`;
+  } else {
+    // Production: use bundled Python + FFmpeg
+    const bundledPython = path.join(process.resourcesPath, 'python', 'python.exe');
+    const bundledFFmpeg = path.join(process.resourcesPath, 'ffmpeg');
+    pythonPath = bundledPython;
+    
+    // Add bundled FFmpeg and Python to PATH
+    enhancedPath = `${bundledFFmpeg};${path.dirname(bundledPython)};${enhancedPath}`;
+    
+    // Add CUDA DLLs from bundled Python
+    const cudnnBin = path.join(process.resourcesPath, 'python', 'Lib', 'site-packages', 'nvidia', 'cudnn', 'bin');
+    const cublasBin = path.join(process.resourcesPath, 'python', 'Lib', 'site-packages', 'nvidia', 'cublas', 'bin');
+    enhancedPath = `${cudnnBin};${cublasBin};${enhancedPath}`;
+  }
 
-  // Build PATH with CUDA/cuDNN DLLs for Whisper GPU acceleration
-  const venvPath = path.join(enginePath, '.venv');
-  const cudnnBin = path.join(venvPath, 'Lib', 'site-packages', 'nvidia', 'cudnn', 'bin');
-  const cublasBin = path.join(venvPath, 'Lib', 'site-packages', 'nvidia', 'cublas', 'bin');
-  const enhancedPath = `${cudnnBin};${cublasBin};${process.env.PATH}`;
+  // Set PYTHONPATH correctly for the module structure
+  const pythonSrcPath = path.join(enginePath, 'src');
+  
+  console.log('Engine config:', {
+    pythonPath,
+    enginePath,
+    pythonSrcPath,
+    cwd: enginePath,
+  });
 
   engineProcess = spawn(pythonPath, ['-m', 'uvicorn', 'forge_engine.main:app', '--host', '0.0.0.0', '--port', ENGINE_PORT.toString()], {
-    cwd: enginePath,
+    cwd: pythonSrcPath,  // Run from src directory
     env: {
       ...process.env,
-      PYTHONPATH: path.join(enginePath, 'src'),
+      PYTHONPATH: pythonSrcPath,
       PATH: enhancedPath,
     },
   });

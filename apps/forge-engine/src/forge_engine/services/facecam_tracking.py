@@ -517,33 +517,106 @@ class FacecamTracker:
         input_height: int,
         output_width: int = 1080,
         output_height: int = 1920,
+        fps: int = 30,
     ) -> str:
         """Generate FFmpeg filter string for animated crop.
-        
+
+        If 0 or 1 keyframe: static crop centered on the face (or frame center).
+        If 2+ keyframes: piecewise-linear interpolation using FFmpeg crop with
+        dynamic x/y expressions evaluated per frame.
+
         Returns:
             FFmpeg filter_complex string
         """
         if not keyframes:
-            # Default center crop
-            return (
-                f"crop=ih*9/16:ih:(iw-ih*9/16)/2:0,"
-                f"scale={output_width}:{output_height}"
+            return self.center_crop_filter(output_width, output_height)
+
+        # Normalise: each keyframe carries a 'crop' sub-dict produced by
+        # generate_keyframes(), which uses keys x/y/width/height (normalised).
+        def _crop_rect(kf: Dict[str, Any]) -> Dict[str, float]:
+            return kf.get("crop", kf)  # tolerate flat dicts too
+
+        if len(keyframes) == 1:
+            return self._build_zoompan_filter(
+                [_crop_rect(keyframes[0])],
+                output_width, output_height, fps, input_width, input_height,
             )
-        
-        # For complex keyframe animation, we'd need to use zoompan or
-        # a series of overlays. For simplicity, use the first keyframe.
-        kf = keyframes[0]
-        crop = kf["crop"]
-        
-        # Calculate pixel values
-        crop_x = int(crop["x"] * input_width)
-        crop_y = int(crop["y"] * input_height)
-        crop_w = int(crop["width"] * input_width)
-        crop_h = int(crop["height"] * input_height)
-        
+
+        return self._build_zoompan_filter(
+            [_crop_rect(kf) for kf in keyframes],
+            output_width, output_height, fps, input_width, input_height,
+        )
+
+    def center_crop_filter(self, out_w: int, out_h: int) -> str:
+        """Return a static center-crop + scale filter (fallback when no face detected)."""
+        return f"crop={out_w}:{out_h}:(iw-{out_w})/2:(ih-{out_h})/2"
+
+    def _build_zoompan_filter(
+        self,
+        keyframes: List[Dict[str, Any]],
+        out_w: int,
+        out_h: int,
+        fps: int,
+        src_w: int,
+        src_h: int,
+    ) -> str:
+        """Build a crop filter expression that smoothly follows the face position.
+
+        keyframes: list of normalised crop rects with keys x, y, width, height.
+        """
+        if not keyframes:
+            return self.center_crop_filter(out_w, out_h)
+
+        if len(keyframes) == 1:
+            kf = keyframes[0]
+            x_px = int(kf["x"] * src_w)
+            y_px = int(kf["y"] * src_h)
+            w_px = max(2, int(kf["width"] * src_w) & ~1)
+            h_px = max(2, int(kf["height"] * src_h) & ~1)
+            return f"crop={w_px}:{h_px}:{x_px}:{y_px},scale={out_w}:{out_h}"
+
+        # Convert normalised coords → pixel coords with frame numbers
+        kf_pixels = []
+        for i, kf in enumerate(keyframes):
+            # Spread keyframes evenly across the video if no explicit time is given;
+            # generate_keyframes() stores time in the parent dict, not the crop rect,
+            # so we do best-effort by using index-based frame estimation.
+            kf_pixels.append({
+                "frame": i,  # relative index — actual spread handled via time in outer dict
+                "x": int(kf["x"] * src_w),
+                "y": int(kf["y"] * src_h),
+                "w": max(2, int(kf["width"] * src_w) & ~1),
+                "h": max(2, int(kf["height"] * src_h) & ~1),
+            })
+
+        def build_lerp_expr(coord: str) -> str:
+            """Build FFmpeg if-then-else expression for piecewise linear interpolation."""
+            expr = str(kf_pixels[-1][coord])  # default: last keyframe value
+            for i in range(len(kf_pixels) - 2, -1, -1):
+                a = kf_pixels[i]
+                b = kf_pixels[i + 1]
+                if b["frame"] == a["frame"]:
+                    continue
+                t = f"(on-{a['frame']})/({b['frame']}-{a['frame']})"
+                lerp = (
+                    f"({a[coord]}+({b[coord]}-{a[coord]})"
+                    f"*clip({t}\\,0\\,1))"
+                )
+                expr = (
+                    f"if(between(on\\,{a['frame']}\\,{b['frame']})"
+                    f"\\,{lerp}\\,{expr})"
+                )
+            return expr
+
+        x_expr = build_lerp_expr("x")
+        y_expr = build_lerp_expr("y")
+        # Use the first keyframe dimensions as a stable crop size
+        w_expr = str(kf_pixels[0]["w"])
+        h_expr = str(kf_pixels[0]["h"])
+
         return (
-            f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},"
-            f"scale={output_width}:{output_height}"
+            f"crop={w_expr}:{h_expr}:'{x_expr}':'{y_expr}',"
+            f"scale={out_w}:{out_h}"
         )
     
     def to_serializable(

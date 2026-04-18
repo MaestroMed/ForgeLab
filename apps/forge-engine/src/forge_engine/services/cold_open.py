@@ -512,65 +512,75 @@ class ColdOpenEngine:
     def generate_ffmpeg_filter(
         self,
         variation: ColdOpenVariation,
-        input_file: str = "input",
+        input_file: str = "0",
     ) -> str:
         """Generate FFmpeg filter complex for cold open effect.
         
+        Generates both video and audio streams for proper A/V sync.
         Returns the filter_complex string for FFmpeg.
         """
         filters = []
-        segment_parts = []
+        video_parts = []
+        audio_parts = []
         
         for i, item in enumerate(variation.timeline):
-            if item["type"] == "hook":
-                # Trim hook section
+            if item["type"] in ("hook", "segment"):
+                start = item["start"]
+                end = item["end"]
+                label = "hook" if item["type"] == "hook" else "seg"
                 filters.append(
-                    f"[{input_file}]trim=start={item['start']}:end={item['end']},"
-                    f"setpts=PTS-STARTPTS[hook{i}]"
+                    f"[{input_file}:v]trim=start={start}:end={end},"
+                    f"setpts=PTS-STARTPTS[{label}v{i}]"
                 )
-                segment_parts.append(f"[hook{i}]")
-                
-            elif item["type"] == "segment":
-                # Trim segment section
                 filters.append(
-                    f"[{input_file}]trim=start={item['start']}:end={item['end']},"
-                    f"setpts=PTS-STARTPTS[seg{i}]"
+                    f"[{input_file}:a]atrim=start={start}:end={end},"
+                    f"asetpts=PTS-STARTPTS[{label}a{i}]"
                 )
-                segment_parts.append(f"[seg{i}]")
+                video_parts.append(f"[{label}v{i}]")
+                audio_parts.append(f"[{label}a{i}]")
                 
             elif item["type"] == "transition":
                 duration = item.get("duration", 1.0)
                 
                 if item.get("effect") == "freeze":
-                    # Freeze frame effect
                     frame_time = item.get("frame_time", 0)
                     filters.append(
-                        f"[{input_file}]trim=start={frame_time}:end={frame_time + 0.04},"
+                        f"[{input_file}:v]trim=start={frame_time}:end={frame_time + 0.04},"
                         f"setpts=PTS-STARTPTS,loop=loop={int(duration * 25)}:size=1:start=0,"
-                        f"setpts=PTS-STARTPTS[freeze{i}]"
+                        f"setpts=PTS-STARTPTS[freezev{i}]"
                     )
-                    segment_parts.append(f"[freeze{i}]")
+                    filters.append(
+                        f"anullsrc=r=48000:cl=stereo,atrim=0:{duration}[freezea{i}]"
+                    )
+                    video_parts.append(f"[freezev{i}]")
+                    audio_parts.append(f"[freezea{i}]")
                     
                 elif item.get("text"):
-                    # Text overlay (would need to be composited with drawtext)
                     text = item["text"].replace("'", "\\'")
                     filters.append(
                         f"color=black:s=1080x1920:d={duration},"
                         f"drawtext=text='{text}':fontcolor=white:fontsize=48:"
-                        f"x=(w-text_w)/2:y=(h-text_h)/2:font='Arial'[text{i}]"
+                        f"x=(w-text_w)/2:y=(h-text_h)/2[textv{i}]"
                     )
-                    segment_parts.append(f"[text{i}]")
+                    filters.append(
+                        f"anullsrc=r=48000:cl=stereo,atrim=0:{duration}[texta{i}]"
+                    )
+                    video_parts.append(f"[textv{i}]")
+                    audio_parts.append(f"[texta{i}]")
                     
                 elif item.get("effect") == "rewind":
-                    # Rewind visual effect (simplified - actual implementation more complex)
                     filters.append(
-                        f"color=black:s=1080x1920:d={duration}[rewind{i}]"
+                        f"color=black:s=1080x1920:d={duration}[rewindv{i}]"
                     )
-                    segment_parts.append(f"[rewind{i}]")
+                    filters.append(
+                        f"anullsrc=r=48000:cl=stereo,atrim=0:{duration}[rewinda{i}]"
+                    )
+                    video_parts.append(f"[rewindv{i}]")
+                    audio_parts.append(f"[rewinda{i}]")
         
-        # Concatenate all parts
-        concat_filter = f"{''.join(segment_parts)}concat=n={len(segment_parts)}:v=1:a=0[outv]"
-        filters.append(concat_filter)
+        n = len(video_parts)
+        concat_in = "".join(f"{v}{a}" for v, a in zip(video_parts, audio_parts))
+        filters.append(f"{concat_in}concat=n={n}:v=1:a=1[outv][outa]")
         
         return ";".join(filters)
     
@@ -619,49 +629,34 @@ class ColdOpenEngine:
     ) -> Dict[str, Any]:
         """Render a preview of a cold open variation.
         
-        Args:
-            variation: The cold open variation to render
-            source_path: Path to source video
-            output_path: Path for output preview
-            preview_quality: "low" for fast preview, "high" for final
-            
-        Returns:
-            Render result with output path
+        Uses FFmpegService.render_clip with a simple filter to produce
+        a quick preview of the cold open timeline.
         """
         from forge_engine.services.ffmpeg import FFmpegService
         
-        ffmpeg = FFmpegService()
+        ffmpeg = FFmpegService.get_instance()
         
-        # Build the filter complex
-        filter_complex = self.generate_ffmpeg_filter(variation)
+        duration = variation.original_end - variation.original_start
+        width = 540 if preview_quality == "low" else 1080
+        height = 960 if preview_quality == "low" else 1920
+        crf = 28 if preview_quality == "low" else 20
         
-        # Render options based on quality
-        if preview_quality == "low":
-            options = {
-                "resolution": 540,
-                "bitrate": "1M",
-                "preset": "ultrafast",
-            }
-        else:
-            options = {
-                "resolution": 1080,
-                "bitrate": "8M",
-                "preset": "medium",
-            }
-        
-        # For now, just copy the segment (simplified)
-        # Full implementation would use the filter complex
-        result = await ffmpeg.encode_video(
+        success = await ffmpeg.render_clip(
             input_path=source_path,
             output_path=output_path,
             start_time=variation.original_start,
-            duration=variation.original_end - variation.original_start,
-            **options,
+            duration=duration,
+            filters=[f"scale={width}:{height}"],
+            use_nvenc=False,
+            crf=crf,
+            width=width,
+            height=height,
+            fps=30,
         )
         
         return {
             "output_path": output_path,
             "variation_id": variation.id,
             "style": variation.style.value,
-            "success": result is not None,
+            "success": success,
         }

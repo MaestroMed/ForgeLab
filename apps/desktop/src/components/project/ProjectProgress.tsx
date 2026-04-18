@@ -37,7 +37,7 @@ export default function ProjectProgress({ projectId, projectStatus }: ProjectPro
   );
 
   // Calculate global progress from all jobs
-  const { globalProgress, currentPhase, phaseProgress, isActive } = useMemo(() => {
+  const { globalProgress, currentPhase, isActive } = useMemo(() => {
     // Find active or most recent job
     const activeJob = projectJobs.find((j) => j.status === 'running' || j.status === 'pending');
     

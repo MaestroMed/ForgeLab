@@ -1,12 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   ChevronLeft, ChevronRight, Check, X, Layout, 
   Type, Play, Music, Settings, Sparkles, Save
 } from 'lucide-react';
-import { useProfileStore, useSubtitleStyleStore, useLayoutEditorStore, useIntroStore, useMusicStore, INTRO_PRESETS } from '@/store';
+import { INTRO_PRESETS } from '@/store';
 import { api } from '@/lib/api';
-import { Button } from '@/components/ui/Button';
 
 interface ProfileWizardProps {
   isOpen: boolean;
@@ -38,7 +37,7 @@ const SUBTITLE_PRESETS = [
   { id: 'gaming', name: 'Gaming', desc: 'Style gaming coloré', color: '#00FF88' },
 ];
 
-export default function ProfileWizard({ isOpen, onClose, onComplete, editProfileId }: ProfileWizardProps) {
+export default function ProfileWizard({ isOpen, onClose, onComplete, editProfileId: _editProfileId }: ProfileWizardProps) {
   const [currentStep, setCurrentStep] = useState(0);
   const [profileName, setProfileName] = useState('');
   const [saving, setSaving] = useState(false);
@@ -49,7 +48,7 @@ export default function ProfileWizard({ isOpen, onClose, onComplete, editProfile
   const [introEnabled, setIntroEnabled] = useState(true);
   const [introPreset, setIntroPreset] = useState('minimal');
   const [musicEnabled, setMusicEnabled] = useState(false);
-  const [musicTheme, setMusicTheme] = useState('');
+  const [musicTheme] = useState('');
   const [autoExportCount, setAutoExportCount] = useState(0);
   const [minScore, setMinScore] = useState(60);
   
@@ -95,11 +94,11 @@ export default function ProfileWizard({ isOpen, onClose, onComplete, editProfile
         is_default: true,
       };
       
-      const response = await api.request('/profiles', {
+      const response = await api.request<{ success: boolean; data?: { id: string }; error?: string }>('/profiles', {
         method: 'POST',
         body: JSON.stringify(profileData),
       });
-      
+
       if (response.success && response.data) {
         onComplete(response.data.id);
       }

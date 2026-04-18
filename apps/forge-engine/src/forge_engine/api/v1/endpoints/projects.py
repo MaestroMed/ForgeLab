@@ -45,6 +45,7 @@ class AnalyzeRequest(BaseModel):
     detect_faces: bool = True
     score_segments: bool = True
     custom_dictionary: Optional[list[str]] = None
+    dictionary_name: Optional[str] = None  # Named dictionary (e.g. "etostark")
 
 
 class CaptionStyleRequest(BaseModel):
@@ -102,6 +103,14 @@ class MusicConfigRequest(BaseModel):
     startOffset: float = 0.0  # Seconds to skip at start of music
 
 
+class JumpCutConfigRequest(BaseModel):
+    enabled: bool = False
+    sensitivity: str = "normal"  # "light", "normal", "aggressive"
+    min_silence_ms: Optional[int] = None  # Override: minimum silence to cut (ms)
+    padding_ms: int = 50  # Padding to keep before/after speech
+    transition: str = "hard"  # "hard", "zoom", "crossfade"
+
+
 class ExportRequest(BaseModel):
     segment_id: str
     variant: str = "A"
@@ -117,6 +126,7 @@ class ExportRequest(BaseModel):
     layout_config: Optional[LayoutConfigRequest] = None
     intro_config: Optional[IntroConfigRequest] = None
     music_config: Optional[MusicConfigRequest] = None
+    jump_cut_config: Optional[JumpCutConfigRequest] = None
 
 
 class GenerateVariantsRequest(BaseModel):
@@ -136,6 +146,7 @@ class ImportUrlRequest(BaseModel):
     quality: str = "best"  # best, 1080, 720, 480
     auto_ingest: bool = True
     auto_analyze: bool = True
+    dictionary_name: Optional[str] = None  # Named dictionary (e.g. "etostark")
 
 
 # Endpoints
@@ -218,6 +229,7 @@ async def import_from_url(
         quality = kwargs.get("quality", "best")
         auto_ingest = kwargs.get("auto_ingest", True)
         auto_analyze = kwargs.get("auto_analyze", True)
+        dictionary_name = kwargs.get("dictionary_name")
         
         async with async_session_maker() as session:
             result = await session.execute(select(Project).where(Project.id == project_id))
@@ -268,6 +280,7 @@ async def import_from_url(
                     handler=ingest_service.run_ingest,
                     project_id=project_id,
                     auto_analyze=auto_analyze,
+                    dictionary_name=dictionary_name,
                 )
             
             return {"downloaded_path": str(downloaded_path)}
@@ -281,6 +294,7 @@ async def import_from_url(
         quality=request.quality,
         auto_ingest=request.auto_ingest,
         auto_analyze=request.auto_analyze,
+        dictionary_name=request.dictionary_name,
     )
     
     return {
@@ -343,23 +357,32 @@ async def list_projects(
     result = await db.execute(query)
     projects = result.scalars().all()
     
-    # Enrich with segment stats
+    # Batch-fetch segment stats for all projects in one query (avoids N+1)
+    project_ids = [p.id for p in projects]
+    stats_map: dict[str, dict] = {}
+    if project_ids:
+        stats_query = (
+            select(
+                Segment.project_id,
+                func.count(Segment.id).label("count"),
+                func.avg(Segment.score_total).label("avg_score"),
+            )
+            .where(Segment.project_id.in_(project_ids))
+            .group_by(Segment.project_id)
+        )
+        stats_result = await db.execute(stats_query)
+        for row in stats_result.all():
+            stats_map[row.project_id] = {
+                "count": row.count,
+                "avg_score": row.avg_score,
+            }
+
     enriched_items = []
     for p in projects:
         item = p.to_dict()
-        
-        # Get segment count and average score
-        stats_query = select(
-            func.count(Segment.id).label("count"),
-            func.avg(Segment.score_total).label("avg_score")
-        ).where(Segment.project_id == p.id)
-        
-        stats_result = await db.execute(stats_query)
-        stats = stats_result.first()
-        
-        item["segmentsCount"] = stats.count if stats else 0
-        item["averageScore"] = round(stats.avg_score, 1) if stats and stats.avg_score else 0
-        
+        stats = stats_map.get(p.id)
+        item["segmentsCount"] = stats["count"] if stats else 0
+        item["averageScore"] = round(stats["avg_score"], 1) if stats and stats["avg_score"] else 0
         enriched_items.append(item)
     
     return {
@@ -501,6 +524,7 @@ async def analyze_project(
         detect_faces=request.detect_faces,
         score_segments=request.score_segments,
         custom_dictionary=request.custom_dictionary,
+        dictionary_name=request.dictionary_name,
     )
     
     # Update project status
@@ -560,17 +584,50 @@ async def get_timeline(
 async def list_segments(
     project_id: str,
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=500),
     sort_by: str = Query("score", regex="^(score|startTime|duration)$"),
     sort_order: str = Query("desc", regex="^(asc|desc)$"),
     min_score: Optional[float] = Query(None, ge=0, le=100),
+    min_duration: Optional[float] = Query(None, ge=0),
+    max_duration: Optional[float] = Query(None, ge=0),
+    search: Optional[str] = Query(None, min_length=1, max_length=200),
+    tags: Optional[str] = Query(None),  # Comma-separated tags
     db: AsyncSession = Depends(get_db)
 ) -> dict:
-    """List segments for a project."""
+    """List segments for a project with advanced filtering and search."""
     query = select(Segment).where(Segment.project_id == project_id)
     
+    # Apply filters
     if min_score is not None:
         query = query.where(Segment.score_total >= min_score)
+    if min_duration is not None:
+        query = query.where(Segment.duration >= min_duration)
+    if max_duration is not None:
+        query = query.where(Segment.duration <= max_duration)
+    
+    # Full-text search on transcript
+    if search:
+        search_term = f"%{search.lower()}%"
+        query = query.where(
+            Segment.transcript.ilike(search_term) | 
+            Segment.topic_label.ilike(search_term) |
+            Segment.hook_text.ilike(search_term)
+        )
+    
+    # Tag filtering (check if any of the requested tags are in score_tags JSON array)
+    if tags:
+        tag_list = [t.strip().lower() for t in tags.split(",") if t.strip()]
+        if tag_list:
+            # SQLite JSON array contains check
+            from sqlalchemy import or_
+            tag_conditions = []
+            for tag in tag_list:
+                # Use JSON contains for SQLite
+                tag_conditions.append(
+                    Segment.score_tags.contains(tag)
+                )
+            if tag_conditions:
+                query = query.where(or_(*tag_conditions))
     
     # Sorting
     sort_column = {
@@ -584,10 +641,21 @@ async def list_segments(
     else:
         query = query.order_by(sort_column.asc())
     
-    # Count
+    # Count with same filters
     count_query = select(func.count()).select_from(Segment).where(Segment.project_id == project_id)
     if min_score is not None:
         count_query = count_query.where(Segment.score_total >= min_score)
+    if min_duration is not None:
+        count_query = count_query.where(Segment.duration >= min_duration)
+    if max_duration is not None:
+        count_query = count_query.where(Segment.duration <= max_duration)
+    if search:
+        search_term = f"%{search.lower()}%"
+        count_query = count_query.where(
+            Segment.transcript.ilike(search_term) | 
+            Segment.topic_label.ilike(search_term) |
+            Segment.hook_text.ilike(search_term)
+        )
     
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
@@ -610,6 +678,212 @@ async def list_segments(
     }
 
 
+@router.get("/{project_id}/segments/tags")
+async def get_segment_tags(
+    project_id: str,
+    db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Get all unique tags used in segments for a project."""
+    result = await db.execute(
+        select(Segment.score_tags).where(Segment.project_id == project_id)
+    )
+    all_tags_lists = result.scalars().all()
+    
+    # Flatten and deduplicate tags
+    unique_tags = set()
+    for tags_list in all_tags_lists:
+        if tags_list:
+            for tag in tags_list:
+                if tag:
+                    unique_tags.add(tag.lower())
+    
+    # Sort alphabetically
+    sorted_tags = sorted(list(unique_tags))
+    
+    return {
+        "success": True,
+        "data": {
+            "tags": sorted_tags,
+            "count": len(sorted_tags),
+        }
+    }
+
+
+@router.get("/{project_id}/segments/stats")
+async def get_segment_stats(
+    project_id: str,
+    db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Get segment statistics for a project including score distribution."""
+    # Get all segments for this project
+    result = await db.execute(
+        select(Segment).where(Segment.project_id == project_id)
+    )
+    segments = result.scalars().all()
+    
+    if not segments:
+        return {
+            "success": True,
+            "data": {
+                "total": 0,
+                "avgScore": 0,
+                "maxScore": 0,
+                "minScore": 0,
+                "avgDuration": 0,
+                "maxDuration": 0,
+                "minDuration": 0,
+                "scoreDistribution": [0, 0, 0, 0, 0],
+                "durationDistribution": [0, 0, 0, 0, 0],
+                "monetizable": 0,
+                "highScore": 0,
+            }
+        }
+    
+    scores = [s.score_total or 0 for s in segments]
+    durations = [s.duration or 0 for s in segments]
+    
+    # Score distribution: 0-20, 20-40, 40-60, 60-80, 80-100
+    score_buckets = [0, 0, 0, 0, 0]
+    for score in scores:
+        if score < 20:
+            score_buckets[0] += 1
+        elif score < 40:
+            score_buckets[1] += 1
+        elif score < 60:
+            score_buckets[2] += 1
+        elif score < 80:
+            score_buckets[3] += 1
+        else:
+            score_buckets[4] += 1
+    
+    # Duration distribution: 0-30s, 30-60s, 60-120s, 120-300s, 300s+
+    duration_buckets = [0, 0, 0, 0, 0]
+    for dur in durations:
+        if dur < 30:
+            duration_buckets[0] += 1
+        elif dur < 60:
+            duration_buckets[1] += 1
+        elif dur < 120:
+            duration_buckets[2] += 1
+        elif dur < 300:
+            duration_buckets[3] += 1
+        else:
+            duration_buckets[4] += 1
+    
+    return {
+        "success": True,
+        "data": {
+            "total": len(segments),
+            "avgScore": round(sum(scores) / len(scores), 1) if scores else 0,
+            "maxScore": max(scores) if scores else 0,
+            "minScore": min(scores) if scores else 0,
+            "avgDuration": round(sum(durations) / len(durations), 1) if durations else 0,
+            "maxDuration": max(durations) if durations else 0,
+            "minDuration": min(durations) if durations else 0,
+            "scoreDistribution": score_buckets,
+            "durationDistribution": duration_buckets,
+            "monetizable": len([d for d in durations if d >= 60]),
+            "highScore": len([s for s in scores if s >= 60]),
+        }
+    }
+
+
+@router.get("/{project_id}/segments/suggestions")
+async def get_segment_suggestions(
+    project_id: str,
+    count: int = Query(5, ge=1, le=20),
+    db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Get smart suggestions for best segments to export.
+    
+    Algorithm:
+    1. Top score segments (highest viral potential)
+    2. Monetizable segments (60s+ duration)
+    3. Diverse tags (avoid repetitive content)
+    """
+    # Get all segments sorted by score
+    result = await db.execute(
+        select(Segment)
+        .where(Segment.project_id == project_id)
+        .order_by(Segment.score_total.desc())
+    )
+    all_segments = result.scalars().all()
+    
+    if not all_segments:
+        return {"success": True, "data": {"suggestions": [], "reasons": {}}}
+    
+    suggestions = []
+    reasons = {}
+    used_tags = set()
+    
+    # Priority 1: Top score segments
+    for seg in all_segments:
+        if len(suggestions) >= count:
+            break
+            
+        score = seg.score_total or 0
+        duration = seg.duration or 0
+        tags = seg.score_tags or []
+        
+        # Check for diversity - avoid segments with same primary tags
+        primary_tag = tags[0].lower() if tags else None
+        if primary_tag and primary_tag in used_tags:
+            continue
+        
+        # Prefer monetizable (60s+) and high score (60+)
+        if score >= 60 and duration >= 60:
+            suggestions.append(seg.to_dict())
+            reasons[seg.id] = "Haute viralité + Monétisable"
+            if primary_tag:
+                used_tags.add(primary_tag)
+    
+    # Priority 2: High score but short
+    for seg in all_segments:
+        if len(suggestions) >= count:
+            break
+        if seg.id in [s['id'] for s in suggestions]:
+            continue
+            
+        score = seg.score_total or 0
+        duration = seg.duration or 0
+        
+        if score >= 70:
+            suggestions.append(seg.to_dict())
+            reasons[seg.id] = f"Score exceptionnel ({int(score)})"
+    
+    # Priority 3: Monetizable with decent score
+    for seg in all_segments:
+        if len(suggestions) >= count:
+            break
+        if seg.id in [s['id'] for s in suggestions]:
+            continue
+            
+        score = seg.score_total or 0
+        duration = seg.duration or 0
+        
+        if duration >= 60 and score >= 50:
+            suggestions.append(seg.to_dict())
+            reasons[seg.id] = "Monétisable"
+    
+    # Fill remaining with top scores
+    for seg in all_segments:
+        if len(suggestions) >= count:
+            break
+        if seg.id in [s['id'] for s in suggestions]:
+            continue
+        
+        suggestions.append(seg.to_dict())
+        reasons[seg.id] = "Top score"
+    
+    return {
+        "success": True,
+        "data": {
+            "suggestions": suggestions[:count],
+            "reasons": reasons,
+        }
+    }
+
+
 @router.get("/{project_id}/segments/{segment_id}")
 async def get_segment(
     project_id: str,
@@ -628,6 +902,128 @@ async def get_segment(
         raise HTTPException(status_code=404, detail="Segment not found")
     
     return {"success": True, "data": segment.to_dict()}
+
+
+class UpdateTranscriptRequest(BaseModel):
+    """Request to update segment transcript."""
+    words: Optional[List[dict]] = None  # [{word, start, end, confidence?}]
+    text: Optional[str] = None
+
+
+@router.put("/{project_id}/segments/{segment_id}/transcript")
+async def update_transcript(
+    project_id: str,
+    segment_id: str,
+    request: UpdateTranscriptRequest,
+    db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Update segment transcript - for correcting transcription errors."""
+    result = await db.execute(
+        select(Segment)
+        .where(Segment.id == segment_id)
+        .where(Segment.project_id == project_id)
+    )
+    segment = result.scalar_one_or_none()
+    
+    if not segment:
+        raise HTTPException(status_code=404, detail="Segment not found")
+    
+    # Update transcript text
+    if request.text is not None:
+        segment.transcript = request.text
+    
+    # Update word timings if provided - store in transcript_segments
+    if request.words is not None:
+        # Build transcript_segments format expected by captions engine
+        # Each segment contains: {text, start, end, words: [{word, start, end}]}
+        segment.transcript_segments = [{
+            "text": " ".join(w.get("word", "") for w in request.words),
+            "start": request.words[0].get("start", 0) if request.words else 0,
+            "end": request.words[-1].get("end", 0) if request.words else 0,
+            "words": request.words,
+        }]
+        # Also update transcript text from words if not provided
+        if request.text is None:
+            segment.transcript = " ".join(w.get("word", "") for w in request.words)
+    
+    await db.commit()
+    await db.refresh(segment)
+    
+    return {
+        "success": True,
+        "data": segment.to_dict(),
+        "message": "Transcript updated successfully"
+    }
+
+
+class AnalyzeJumpCutsRequest(BaseModel):
+    sensitivity: str = "normal"  # "light", "normal", "aggressive"
+    min_silence_ms: Optional[int] = None
+
+
+@router.post("/{project_id}/segments/{segment_id}/analyze-jump-cuts")
+async def analyze_jump_cuts(
+    project_id: str,
+    segment_id: str,
+    request: AnalyzeJumpCutsRequest,
+    db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Analyze a segment for potential jump cuts (preview before export)."""
+    from forge_engine.services.jump_cuts import JumpCutEngine, JumpCutConfig
+    
+    # Get project
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Get segment
+    result = await db.execute(
+        select(Segment)
+        .where(Segment.id == segment_id)
+        .where(Segment.project_id == project_id)
+    )
+    segment = result.scalar_one_or_none()
+    
+    if not segment:
+        raise HTTPException(status_code=404, detail="Segment not found")
+    
+    # Build config
+    config = JumpCutConfig.from_dict({
+        "enabled": True,
+        "sensitivity": request.sensitivity,
+        "min_silence_ms": request.min_silence_ms,
+    })
+    
+    # Run analysis
+    jump_cut_engine = JumpCutEngine.get_instance()
+    
+    try:
+        analysis = await jump_cut_engine.analyze_segment(
+            audio_path=project.source_path,
+            start_time=segment.start_time,
+            duration=segment.duration,
+            config=config,
+        )
+        
+        return {
+            "success": True,
+            "data": {
+                "original_duration": analysis.original_duration,
+                "new_duration": analysis.new_duration,
+                "cuts_count": analysis.cuts_count,
+                "time_saved": analysis.time_saved,
+                "time_saved_percent": analysis.time_saved_percent,
+                "keep_ranges": [
+                    {"start": r.start, "end": r.end, "duration": r.duration}
+                    for r in analysis.keep_ranges
+                ],
+            }
+        }
+    except Exception as e:
+        logger.error(f"Jump cut analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
 @router.post("/{project_id}/segments/{segment_id}/variants")
@@ -696,6 +1092,7 @@ async def export_segment(
     logger.info(f"[API] Export request - layout_config: {request.layout_config}")
     logger.info(f"[API] Export request - intro_config: {request.intro_config}")
     logger.info(f"[API] Export request - music_config: {request.music_config}")
+    logger.info(f"[API] Export request - jump_cut_config: {request.jump_cut_config}")
     
     job = await job_manager.create_job(
         job_type=JobType.EXPORT,
@@ -715,6 +1112,7 @@ async def export_segment(
         layout_config=request.layout_config.model_dump() if request.layout_config else None,
         intro_config=request.intro_config.model_dump() if request.intro_config else None,
         music_config=request.music_config.model_dump() if request.music_config else None,
+        jump_cut_config=request.jump_cut_config.model_dump() if request.jump_cut_config else None,
     )
     
     return {"success": True, "data": {"jobId": job.id}}
@@ -956,6 +1354,35 @@ async def list_artifacts(
     artifacts = result.scalars().all()
     
     return {"success": True, "data": [a.to_dict() for a in artifacts]}
+
+
+@router.get("/{project_id}/artifacts/{artifact_id}/qc")
+async def get_artifact_qc(
+    project_id: str,
+    artifact_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Run QC check on a specific export artifact."""
+    from forge_engine.services.qc import QCService
+    from forge_engine.core.config import settings
+
+    result = await db.execute(
+        select(Artifact)
+        .where(Artifact.id == artifact_id)
+        .where(Artifact.project_id == project_id)
+    )
+    artifact = result.scalar_one_or_none()
+
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    file_path = Path(artifact.path)
+    qc = QCService()
+    report = await qc.run(
+        file_path=file_path,
+        ffprobe_path=settings.FFPROBE_PATH,
+    )
+    return report.to_dict()
 
 
 @router.get("/{project_id}/artifacts/{artifact_id}/file")

@@ -3,7 +3,8 @@
 import logging
 import json
 import asyncio
-from typing import List
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -13,47 +14,197 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# WebSocket message types
+class WSMessageType:
+    # Outbound (server -> client)
+    JOB_UPDATE = "JOB_UPDATE"
+    PROJECT_UPDATE = "PROJECT_UPDATE"
+    ANALYSIS_PROGRESS = "ANALYSIS_PROGRESS"
+    EXPORT_PROGRESS = "EXPORT_PROGRESS"
+    SEGMENT_DISCOVERED = "SEGMENT_DISCOVERED"
+    TRANSCRIPT_CHUNK = "TRANSCRIPT_CHUNK"
+    ERROR = "ERROR"
+    PONG = "PONG"
+    SUBSCRIBED = "SUBSCRIBED"
+    
+    # Inbound (client -> server)
+    PING = "ping"
+    SUBSCRIBE = "subscribe"
+    UNSUBSCRIBE = "unsubscribe"
+
+
+@dataclass
+class WSClient:
+    """Represents a connected WebSocket client."""
+    websocket: WebSocket
+    subscriptions: Set[str] = field(default_factory=set)  # Channels subscribed to
+    project_id: Optional[str] = None  # Current project context
+
+
 class ConnectionManager:
-    """Manage WebSocket connections."""
+    """Enhanced WebSocket connection manager with channels."""
     
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        self.clients: Dict[WebSocket, WSClient] = {}
         self.job_manager = JobManager.get_instance()
         self._listening = False
+    
+    @property
+    def active_connections(self) -> List[WebSocket]:
+        """Backwards compatibility."""
+        return list(self.clients.keys())
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
-        self.active_connections.append(websocket)
-        logger.info(f"Client connected. Total: {len(self.active_connections)}")
-        
-        # Start listening to job updates if not already
-        if not self._listening:
-            self._listening = True
-            # Register global listener
-            # Note: JobManager implementation needs to support a global listener or we iterate
-            # For now, let's assume we can hook into _notify_listeners
-            # But since JobManager is singleton, we can just patch/add a listener
-            pass # We'll handle this by polling or hooking in JobManager
+        self.clients[websocket] = WSClient(websocket=websocket)
+        logger.info(f"Client connected. Total: {len(self.clients)}")
 
     def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-            logger.info(f"Client disconnected. Total: {len(self.active_connections)}")
+        if websocket in self.clients:
+            del self.clients[websocket]
+            logger.info(f"Client disconnected. Total: {len(self.clients)}")
+    
+    async def subscribe(self, websocket: WebSocket, channel: str):
+        """Subscribe a client to a channel."""
+        if websocket in self.clients:
+            self.clients[websocket].subscriptions.add(channel)
+            await websocket.send_json({
+                "type": WSMessageType.SUBSCRIBED,
+                "channel": channel
+            })
+            logger.debug(f"Client subscribed to {channel}")
+    
+    async def unsubscribe(self, websocket: WebSocket, channel: str):
+        """Unsubscribe a client from a channel."""
+        if websocket in self.clients:
+            self.clients[websocket].subscriptions.discard(channel)
+    
+    async def set_project_context(self, websocket: WebSocket, project_id: str):
+        """Set the project context for a client."""
+        if websocket in self.clients:
+            self.clients[websocket].project_id = project_id
+            # Auto-subscribe to project channel
+            await self.subscribe(websocket, f"project:{project_id}")
 
     async def broadcast(self, message: dict):
         """Send message to all connected clients."""
-        if not self.active_connections:
+        if not self.clients:
             return
             
         disconnected = []
-        for connection in self.active_connections:
+        for ws in self.clients:
             try:
-                await connection.send_json(message)
+                await ws.send_json(message)
             except Exception:
-                disconnected.append(connection)
+                disconnected.append(ws)
         
         for conn in disconnected:
             self.disconnect(conn)
+    
+    async def broadcast_to_channel(self, channel: str, message: dict):
+        """Send message only to clients subscribed to a channel."""
+        if not self.clients:
+            return
+        
+        disconnected = []
+        for ws, client in self.clients.items():
+            if channel in client.subscriptions:
+                try:
+                    await ws.send_json(message)
+                except Exception:
+                    disconnected.append(ws)
+        
+        for conn in disconnected:
+            self.disconnect(conn)
+    
+    async def broadcast_to_project(self, project_id: str, message: dict):
+        """Send message to clients watching a specific project."""
+        channel = f"project:{project_id}"
+        await self.broadcast_to_channel(channel, message)
+    
+    async def send_analysis_progress(
+        self,
+        project_id: str,
+        stage: str,
+        progress: float,
+        message: str,
+        data: Optional[dict] = None
+    ):
+        """Send analysis progress update."""
+        payload = {
+            "type": WSMessageType.ANALYSIS_PROGRESS,
+            "payload": {
+                "project_id": project_id,
+                "stage": stage,
+                "progress": progress,
+                "message": message,
+                "data": data or {}
+            }
+        }
+        await self.broadcast_to_project(project_id, payload)
+    
+    async def send_transcript_chunk(
+        self,
+        project_id: str,
+        text: str,
+        start_time: float,
+        end_time: float,
+        is_final: bool = False
+    ):
+        """Send transcript chunk as it's being generated."""
+        payload = {
+            "type": WSMessageType.TRANSCRIPT_CHUNK,
+            "payload": {
+                "project_id": project_id,
+                "text": text,
+                "start_time": start_time,
+                "end_time": end_time,
+                "is_final": is_final
+            }
+        }
+        await self.broadcast_to_project(project_id, payload)
+    
+    async def send_segment_discovered(
+        self,
+        project_id: str,
+        segment_data: dict
+    ):
+        """Send notification when a new segment is discovered."""
+        payload = {
+            "type": WSMessageType.SEGMENT_DISCOVERED,
+            "payload": {
+                "project_id": project_id,
+                "segment": segment_data
+            }
+        }
+        await self.broadcast_to_project(project_id, payload)
+    
+    async def handle_message(self, websocket: WebSocket, data: str):
+        """Handle incoming WebSocket message."""
+        try:
+            message = json.loads(data)
+            msg_type = message.get("type", "").lower()
+            
+            if msg_type == WSMessageType.PING:
+                await websocket.send_json({"type": WSMessageType.PONG})
+            
+            elif msg_type == WSMessageType.SUBSCRIBE:
+                channel = message.get("channel")
+                if channel:
+                    await self.subscribe(websocket, channel)
+            
+            elif msg_type == WSMessageType.UNSUBSCRIBE:
+                channel = message.get("channel")
+                if channel:
+                    await self.unsubscribe(websocket, channel)
+            
+            else:
+                logger.debug(f"Unknown message type: {msg_type}")
+        
+        except json.JSONDecodeError:
+            # Simple text message, treat as ping
+            if data.lower() == "ping":
+                await websocket.send_text("pong")
 
 
 manager = ConnectionManager()
@@ -122,20 +273,68 @@ def broadcast_project_update(project_data: dict):
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     
-    # Register listener if first connection (idempotent)
-    # Ideally this should be done once at startup, but here works too
-    job_mgr = JobManager.get_instance()
-    # We need a way to add a 'global' listener to JobManager
-    # Currently it supports listener by job_id. 
-    # Let's modify JobManager to support global listeners.
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await manager.handle_message(websocket, data)
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+
+@router.websocket("/ws/project/{project_id}")
+async def project_websocket(websocket: WebSocket, project_id: str):
+    """WebSocket endpoint for project-specific updates."""
+    await manager.connect(websocket)
+    await manager.set_project_context(websocket, project_id)
     
     try:
         while True:
-            # Keep connection alive / handle incoming messages if needed
             data = await websocket.receive_text()
-            # We can handle ping/pong here
+            await manager.handle_message(websocket, data)
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+
+@router.websocket("/ws/job/{job_id}")
+async def job_websocket(websocket: WebSocket, job_id: str):
+    """WebSocket endpoint for job-specific updates."""
+    await manager.connect(websocket)
+    await manager.subscribe(websocket, f"job:{job_id}")
+    
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await manager.handle_message(websocket, data)
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+
+# Helper functions for broadcasting from services
+async def broadcast_analysis_progress(
+    project_id: str,
+    stage: str,
+    progress: float,
+    message: str,
+    data: Optional[dict] = None
+):
+    """Broadcast analysis progress from services."""
+    await manager.send_analysis_progress(project_id, stage, progress, message, data)
+
+
+async def broadcast_transcript_chunk(
+    project_id: str,
+    text: str,
+    start_time: float,
+    end_time: float,
+    is_final: bool = False
+):
+    """Broadcast transcript chunk from transcription service."""
+    await manager.send_transcript_chunk(project_id, text, start_time, end_time, is_final)
+
+
+async def broadcast_segment_discovered(project_id: str, segment_data: dict):
+    """Broadcast new segment discovery."""
+    await manager.send_segment_discovered(project_id, segment_data)
 
 
 

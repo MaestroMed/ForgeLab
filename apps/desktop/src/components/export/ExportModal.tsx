@@ -3,13 +3,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   X,
   Download,
-  Settings,
   Image,
   FileText,
   Video,
   Subtitles,
   Folder,
-  Check,
   ChevronDown,
   Loader2,
 } from 'lucide-react';
@@ -118,14 +116,6 @@ export function ExportModal({
     // Always use the latest caption style from store at export time
     const storeState = useSubtitleStyleStore.getState();
     const latestStyle = storeState.style;
-    const presetName = storeState.presetName;
-    
-    console.log('=== EXPORT DEBUG ===');
-    console.log('[ExportModal] Preset actif:', presetName);
-    console.log('[ExportModal] Style complet:', JSON.stringify(latestStyle, null, 2));
-    console.log('[ExportModal] Couleur highlight:', latestStyle.highlightColor);
-    console.log('[ExportModal] Animation:', latestStyle.animation);
-    console.log('====================');
     
     await onExport({ ...options, captionStyle: latestStyle });
     setExporting(false);

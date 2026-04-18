@@ -2,7 +2,12 @@
 
 from fastapi import APIRouter
 
-from forge_engine.api.v1.endpoints import projects, jobs, templates, profiles, capabilities, thumbnails, websockets, channels, monitor
+from forge_engine.api.v1.endpoints import (
+    projects, jobs, templates, profiles, capabilities, thumbnails,
+    websockets, channels, monitor, dictionaries, llm, assistant,
+    emotion, audio, ml_scoring, content, translation, virality,
+    compilation, social, analytics, reviews
+)
 
 api_router = APIRouter()
 
@@ -12,10 +17,25 @@ api_router.include_router(jobs.router, prefix="/jobs", tags=["Jobs"])
 api_router.include_router(templates.router, prefix="/templates", tags=["Templates"])
 api_router.include_router(profiles.router, prefix="/profiles", tags=["Profiles"])
 api_router.include_router(channels.router, prefix="/channels", tags=["Channels"])
+api_router.include_router(dictionaries.router, tags=["Dictionaries"])
 api_router.include_router(capabilities.router, tags=["System"])
 api_router.include_router(thumbnails.router, tags=["Thumbnails"])
 api_router.include_router(websockets.router, tags=["Real-time"])
 api_router.include_router(monitor.router, prefix="/monitor", tags=["Monitor"])
+api_router.include_router(llm.router, prefix="/llm", tags=["AI/LLM"])
+api_router.include_router(assistant.router, prefix="/assistant", tags=["AI Assistant"])
+
+# New AI/ML endpoints
+api_router.include_router(emotion.router, prefix="/emotion", tags=["Emotion Detection"])
+api_router.include_router(audio.router, prefix="/audio", tags=["Audio Analysis"])
+api_router.include_router(ml_scoring.router, prefix="/ml-scoring", tags=["ML Scoring"])
+api_router.include_router(content.router, prefix="/content", tags=["Content Generation"])
+api_router.include_router(translation.router, prefix="/translation", tags=["Translation"])
+api_router.include_router(virality.router, prefix="/virality", tags=["Virality Prediction"])
+api_router.include_router(compilation.router, prefix="/compilation", tags=["Compilation"])
+api_router.include_router(social.router, prefix="/social", tags=["Social Publishing"])
+api_router.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
+api_router.include_router(reviews.router, prefix="/clips", tags=["Clip Review & Queue"])
 
 
 

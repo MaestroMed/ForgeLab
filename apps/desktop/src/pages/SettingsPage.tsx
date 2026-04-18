@@ -8,9 +8,9 @@ import {
   useSubtitleStyleStore, useIntroStore, AmbientTrack
 } from '@/store';
 import { 
-  FolderOpen, Cpu, HardDrive, RefreshCw, Zap, Cloud, Monitor,
+  FolderOpen, HardDrive, RefreshCw, Zap, Cloud, Monitor,
   Palette, Volume2, Key, FileVideo, FlaskConical, Settings, Sun, Moon,
-  Sparkles, Check, Eye, EyeOff, Play, Trash2, Download
+  Sparkles, Check, Eye, EyeOff, Trash2, Download
 } from 'lucide-react';
 
 // Settings sections
@@ -45,7 +45,7 @@ export default function SettingsPage() {
   const { addToast } = useToastStore();
   const [libraryPath, setLibraryPath] = useState('');
   const [capabilities, setCapabilities] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [providers, setProviders] = useState<ProvidersData | null>(null);
   const [currentProvider, setCurrentProvider] = useState('local');
   const [switchingProvider, setSwitchingProvider] = useState(false);

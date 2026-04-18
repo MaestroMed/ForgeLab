@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 import { useAmbientAudioStore, useJobsStore, AmbientTrack } from '@/store';
 
 // Track URLs - relative to public folder
@@ -18,7 +18,7 @@ export const SFX_URLS = {
 };
 
 export default function AmbientAudioProvider() {
-  const { enabled, volume, track, fadeOnActivity, sfxEnabled, sfxVolume } = useAmbientAudioStore();
+  const { enabled, volume, track, fadeOnActivity } = useAmbientAudioStore();
   const { jobs } = useJobsStore();
   
   const audioRef = useRef<HTMLAudioElement | null>(null);

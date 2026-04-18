@@ -132,7 +132,7 @@ class MonitorService:
     PROJECT_STUCK_THRESHOLD_SECONDS = 600  # 10 minutes in transient state = stuck
     LOG_BUFFER_SIZE = 1000  # Keep last 1000 log entries
     HEALTH_CHECK_INTERVAL = 15  # seconds - check more frequently
-    AUTO_RECOVERY_ENABLED = True  # Enable automatic recovery
+    AUTO_RECOVERY_ENABLED = False  # Disabled - was auto-relaunching multiple Whisper instances
     AUTO_RETRY_MAX = 3  # Maximum auto-retry attempts
     
     def __init__(self):

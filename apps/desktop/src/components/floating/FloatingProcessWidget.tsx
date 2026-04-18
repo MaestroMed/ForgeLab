@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
-import { Zap, ChevronDown, ChevronUp, X, Minimize2, Maximize2, GripHorizontal } from 'lucide-react';
+import { Zap, X, Minimize2, Maximize2, GripHorizontal } from 'lucide-react';
 import { useJobsStore, useFloatingWidgetStore, useUIStore } from '@/store';
-import { Progress } from '@/components/ui/Progress';
 
 const JOB_TYPE_ICONS: Record<string, string> = {
   ingest: '📥',
@@ -26,7 +25,7 @@ const JOB_TYPE_LABELS: Record<string, string> = {
 
 export default function FloatingProcessWidget() {
   const { jobs } = useJobsStore();
-  const { visible, collapsed, position, setVisible, setCollapsed, setPosition, toggleCollapsed } = useFloatingWidgetStore();
+  const { visible, collapsed, position, setVisible, setPosition, toggleCollapsed } = useFloatingWidgetStore();
   const { setJobDrawerOpen } = useUIStore();
   const dragControls = useDragControls();
   const constraintsRef = useRef<HTMLDivElement>(null);

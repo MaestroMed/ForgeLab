@@ -1,10 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Link2, Youtube, Twitch, Loader2, Download, Clock, Eye, User, AlertCircle } from 'lucide-react';
+import { X, Link2, Youtube, Twitch, Loader2, Download, Clock, Eye, User, AlertCircle, BookOpen } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { api } from '@/lib/api';
 import { useToastStore, useJobsStore } from '@/store';
 import { formatDuration } from '@/lib/utils';
+
+interface Dictionary {
+  id: string;
+  name: string;
+  description: string;
+  corrections_count: number;
+  hotwords_count: number;
+}
 
 interface VideoInfo {
   id: string;
@@ -34,11 +42,28 @@ export function UrlImportModal({ isOpen, onClose, onImportComplete }: UrlImportM
   const [quality, setQuality] = useState<'best' | '1080' | '720' | '480'>('best');
   const [autoIngest, setAutoIngest] = useState(true);
   const [autoAnalyze, setAutoAnalyze] = useState(true);
+  const [selectedDictionary, setSelectedDictionary] = useState<string>('');
+  const [dictionaries, setDictionaries] = useState<Dictionary[]>([]);
   
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  
+  // Load available dictionaries
+  useEffect(() => {
+    if (isOpen) {
+      api.listDictionaries().then(response => {
+        if (response.success && response.data) {
+          setDictionaries(response.data);
+          // Auto-select first dictionary if available
+          if (response.data.length > 0 && !selectedDictionary) {
+            setSelectedDictionary(response.data[0].id);
+          }
+        }
+      }).catch(console.error);
+    }
+  }, [isOpen]);
   
   // Debounced URL info fetch
   const fetchInfo = useCallback(async (inputUrl: string) => {
@@ -83,7 +108,13 @@ export function UrlImportModal({ isOpen, onClose, onImportComplete }: UrlImportM
     setImporting(true);
     
     try {
-      const response = await api.importFromUrl(url, quality, autoIngest, autoAnalyze);
+      const response = await api.importFromUrl(
+        url, 
+        quality, 
+        autoIngest, 
+        autoAnalyze,
+        selectedDictionary || undefined
+      );
       
       if (response.success && response.data) {
         const { project, jobId } = response.data;
@@ -263,45 +294,76 @@ export function UrlImportModal({ isOpen, onClose, onImportComplete }: UrlImportM
             
             {/* Options */}
             {videoInfo && (
-              <div className="grid grid-cols-2 gap-4">
-                {/* Quality */}
-                <div>
-                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
-                    Qualité
-                  </label>
-                  <select
-                    value={quality}
-                    onChange={(e) => setQuality(e.target.value as typeof quality)}
-                    className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-                  >
-                    <option value="best">Meilleure qualité</option>
-                    <option value="1080">1080p</option>
-                    <option value="720">720p</option>
-                    <option value="480">480p</option>
-                  </select>
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Quality */}
+                  <div>
+                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
+                      Qualité
+                    </label>
+                    <select
+                      value={quality}
+                      onChange={(e) => setQuality(e.target.value as typeof quality)}
+                      className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                    >
+                      <option value="best">Meilleure qualité</option>
+                      <option value="1080">1080p</option>
+                      <option value="720">720p</option>
+                      <option value="480">480p</option>
+                    </select>
+                  </div>
+                  
+                  {/* Options */}
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={autoIngest}
+                        onChange={(e) => setAutoIngest(e.target.checked)}
+                        className="w-4 h-4 rounded border-[var(--border-color)] bg-[var(--bg-secondary)] text-blue-500 focus:ring-blue-500/30"
+                      />
+                      <span className="text-sm text-[var(--text-secondary)]">Auto-ingestion</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={autoAnalyze}
+                        onChange={(e) => setAutoAnalyze(e.target.checked)}
+                        className="w-4 h-4 rounded border-[var(--border-color)] bg-[var(--bg-secondary)] text-blue-500 focus:ring-blue-500/30"
+                      />
+                      <span className="text-sm text-[var(--text-secondary)]">Auto-analyse</span>
+                    </label>
+                  </div>
                 </div>
                 
-                {/* Options */}
-                <div className="space-y-2">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={autoIngest}
-                      onChange={(e) => setAutoIngest(e.target.checked)}
-                      className="w-4 h-4 rounded border-[var(--border-color)] bg-[var(--bg-secondary)] text-blue-500 focus:ring-blue-500/30"
-                    />
-                    <span className="text-sm text-[var(--text-secondary)]">Auto-ingestion</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={autoAnalyze}
-                      onChange={(e) => setAutoAnalyze(e.target.checked)}
-                      className="w-4 h-4 rounded border-[var(--border-color)] bg-[var(--bg-secondary)] text-blue-500 focus:ring-blue-500/30"
-                    />
-                    <span className="text-sm text-[var(--text-secondary)]">Auto-analyse</span>
-                  </label>
-                </div>
+                {/* Dictionary Selector */}
+                {dictionaries.length > 0 && (
+                  <div className="p-4 bg-gradient-to-r from-yellow-500/5 to-orange-500/5 border border-yellow-500/20 rounded-xl">
+                    <div className="flex items-center gap-2 mb-2">
+                      <BookOpen className="w-4 h-4 text-yellow-500" />
+                      <label className="text-sm font-medium text-[var(--text-primary)]">
+                        Dictionnaire
+                      </label>
+                    </div>
+                    <select
+                      value={selectedDictionary}
+                      onChange={(e) => setSelectedDictionary(e.target.value)}
+                      className="w-full px-3 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+                    >
+                      <option value="">Aucun dictionnaire</option>
+                      {dictionaries.map((dict) => (
+                        <option key={dict.id} value={dict.id}>
+                          {dict.name} ({dict.corrections_count} corrections)
+                        </option>
+                      ))}
+                    </select>
+                    {selectedDictionary && (
+                      <p className="mt-2 text-xs text-[var(--text-muted)]">
+                        ✨ Améliore la transcription avec des termes spécifiques au créateur
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>

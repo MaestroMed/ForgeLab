@@ -305,25 +305,15 @@ class TestPipelineE2E:
     @pytest.mark.asyncio
     async def test_caption_generation(self, sample_segment, sample_transcript_segments):
         """Test ASS caption file generation."""
-        from forge_engine.services.captions import CaptionService
+        from forge_engine.services.captions import CaptionEngine
         
-        service = CaptionService()
+        engine = CaptionEngine()
         
-        # Generate captions
-        ass_content = service.generate_ass_captions(
-            segments=sample_transcript_segments,
-            style={
-                "font_family": "Arial",
-                "font_size": 72,
-                "color": "#FFFFFF",
-                "outline_color": "#000000",
-                "outline_width": 3,
-            },
-            clip_start=0,
-            clip_end=60,
+        ass_content = engine.generate_ass(
+            transcript_segments=sample_transcript_segments,
+            word_level=True,
         )
         
-        # Check ASS format
         assert "[Script Info]" in ass_content
         assert "[V4+ Styles]" in ass_content
         assert "[Events]" in ass_content

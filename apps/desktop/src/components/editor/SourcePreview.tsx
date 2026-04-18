@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { useLayoutEditorStore } from '@/store';
-import { Move, Maximize2 } from 'lucide-react';
+import { Move } from 'lucide-react';
 
 interface SourcePreviewProps {
   videoSrc: string;
@@ -71,16 +71,6 @@ export function SourcePreview({
       y: crop.y * containerSize.height,
       width: crop.width * containerSize.width,
       height: crop.height * containerSize.height,
-    };
-  }, [containerSize]);
-
-  // Convert pixels to normalized coords
-  const toNormalized = useCallback((pixels: CropBox) => {
-    return {
-      x: Math.max(0, Math.min(1 - pixels.width / containerSize.width, pixels.x / containerSize.width)),
-      y: Math.max(0, Math.min(1 - pixels.height / containerSize.height, pixels.y / containerSize.height)),
-      width: Math.max(0.1, Math.min(1, pixels.width / containerSize.width)),
-      height: Math.max(0.1, Math.min(1, pixels.height / containerSize.height)),
     };
   }, [containerSize]);
 

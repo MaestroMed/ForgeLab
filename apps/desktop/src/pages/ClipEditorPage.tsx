@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { mediaUrl } from '@/lib/config';
 import {
   ArrowLeft,
   Play,
@@ -13,21 +13,27 @@ import {
   Layers,
   Type,
   Save,
-  Check,
   Music,
-  FolderOpen,
-  Trash2,
+  Scissors,
+  Zap,
+  SlidersHorizontal,
 } from 'lucide-react';
 
-import { useLayoutEditorStore, useSubtitleStyleStore, useToastStore, useIntroStore, useMusicStore, INTRO_PRESETS } from '@/store';
+import { useLayoutEditorStore, useSubtitleStyleStore, useToastStore, useIntroStore, useMusicStore, useSegmentFilterStore, useJumpCutStore } from '@/store';
 import { api } from '@/lib/api';
 import { ExportModal } from '@/components/export/ExportModal';
 import { TemplateStudio } from '@/components/editor/TemplateStudio';
+import { SubtitlePanel } from '@/pages/clip-editor/SubtitlePanel';
+import { IntroPanel } from '@/pages/clip-editor/IntroPanel';
+import { MusicPanel } from '@/pages/clip-editor/MusicPanel';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { Timeline } from '@/components/editor/Timeline';
+import { type TimelineTrack } from '@/components/editor/MultiTrackTimeline';
+import { type AudioTrack } from '@/components/editor/AudioMixer';
 import { Canvas9x16 } from '@/components/editor/Canvas9x16';
 import { SourcePreview } from '@/components/editor/SourcePreview';
 import { WordTiming } from '@/components/editor/KaraokeSubtitles';
+import { SegmentFilterBar, type FilterState, type SegmentStats } from '@/components/segments/SegmentFilterBar';
 
 interface Project {
   id: string;
@@ -55,7 +61,7 @@ export default function ClipEditorPage() {
 
   // Refs
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasContainerRef = useRef<HTMLDivElement>(null);
+  useRef<HTMLDivElement>(null); // canvasContainerRef
 
   // State
   const [project, setProject] = useState<Project | null>(null);
@@ -63,6 +69,25 @@ export default function ClipEditorPage() {
   const [segments, setSegments] = useState<Segment[]>([]);
   const [selectedSegment, setSelectedSegment] = useState<Segment | null>(null);
   const [loading, setLoading] = useState(true);
+  
+  // Segment filter state from persisted store
+  const { 
+    minScore, minDuration, maxDuration, limit, 
+    sortBy, search, selectedTags,
+    setFilters: setStoreFilters,
+    setSearch,
+    setSelectedTags,
+  } = useSegmentFilterStore();
+  
+  const [segmentStats, setSegmentStats] = useState<SegmentStats | null>(null);
+  const [, setTotalFiltered] = useState(0);
+  const [availableTags, setAvailableTags] = useState<string[]>([]);
+  
+  const filters: FilterState = { minScore, minDuration, maxDuration, limit, search, tags: selectedTags };
+  
+  const setFilters = (newFilters: FilterState) => {
+    setStoreFilters(newFilters);
+  };
 
   // Playback
   const [isPlaying, setIsPlaying] = useState(false);
@@ -72,12 +97,25 @@ export default function ClipEditorPage() {
   const [trimEnd, setTrimEnd] = useState(0);
 
   // Stores
-  const { zones, selectedZoneId, presetName, setZones, updateZone, setSelectedZone, applyPreset } = useLayoutEditorStore();
+  const { zones, selectedZoneId, presetName, updateZone, setSelectedZone, applyPreset } = useLayoutEditorStore();
   const { style: subtitleStyle, presetName: subtitlePreset, setStyle: setSubtitleStyle, applyPreset: applySubtitlePreset } = useSubtitleStyleStore();
-  const { config: introConfig, setConfig: setIntroConfig, setEnabled: setIntroEnabled, applyPreset: applyIntroPreset } = useIntroStore();
+  const { config: introConfig, setConfig: setIntroConfig, applyPreset: applyIntroPreset } = useIntroStore();
+  const { config: jumpCutConfig } = useJumpCutStore();
 
   // Active panel
-  const [activePanel, setActivePanel] = useState<'layout' | 'subtitles' | 'intro' | 'music' | 'templates'>('layout');
+  const [activePanel, setActivePanel] = useState<'layout' | 'subtitles' | 'intro' | 'music' | 'jumpcuts' | 'templates' | 'audio'>('layout');
+  
+  // Advanced timeline mode
+  const [, /* useAdvancedTimeline */] = useState(false);
+  
+  // Multi-track timeline state
+  useState<TimelineTrack[]>([]); // timelineTracks
+  
+  // Audio mixer state
+  const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([
+    { id: 'main', name: 'Main Audio', type: 'main', volume: 100, muted: false, solo: false, pan: 0, startTime: 0, duration: 0, fadeIn: 0, fadeOut: 0 },
+    { id: 'music', name: 'Music', type: 'music', volume: 30, muted: false, solo: false, pan: 0, startTime: 0, duration: 0, fadeIn: 0, fadeOut: 0 },
+  ]);
   
   // Music state from store
   const { selectedMusic, musicList, setSelectedMusic, setMusicList } = useMusicStore();
@@ -127,19 +165,6 @@ export default function ClipEditorPage() {
         facecamRatio: facecamZone ? facecamZone.height / 100 : 0.4,
       };
       
-      // Build music config from store
-      const musicState = useMusicStore.getState();
-      const musicConfig = musicState.selectedMusic ? {
-        path: musicState.selectedMusic,
-        volume: musicState.volume,
-        startOffset: musicState.startOffset,
-      } : undefined;
-      
-      console.log('[ClipEditor] Export - layoutConfig:', layoutConfig);
-      console.log('[ClipEditor] Export - captionStyle:', options.captionStyle);
-      console.log('[ClipEditor] Export - introConfig:', introConfig.enabled ? introConfig : 'disabled');
-      console.log('[ClipEditor] Export - musicConfig:', musicConfig);
-      
       const response = await api.exportSegment(project.id, {
         segmentId: selectedSegment.id,
         variant: 'A',
@@ -153,7 +178,7 @@ export default function ClipEditorPage() {
         captionStyle: options.captionStyle,
         layoutConfig,
         introConfig: introConfig.enabled ? introConfig : undefined,
-        musicConfig,
+        jumpCutConfig: jumpCutConfig.enabled ? jumpCutConfig : undefined,
       });
       
       if (response.data?.jobId) {
@@ -174,39 +199,71 @@ export default function ClipEditorPage() {
     }
   };
 
-  // Load data
+  // Load project and timeline on mount
   useEffect(() => {
-    async function load() {
+    async function loadProject() {
+      if (!projectId) return;
+      try {
+        const [projectRes, timelineRes, statsRes, tagsRes] = await Promise.all([
+          api.getProject(projectId),
+          api.getTimeline(projectId),
+          api.getSegmentStats(projectId),
+          api.getSegmentTags(projectId),
+        ]);
+        setProject(projectRes.data ?? null);
+        setTimeline(timelineRes.data);
+        if (statsRes.data) {
+          setSegmentStats(statsRes.data);
+        }
+        if (tagsRes.data?.tags) {
+          setAvailableTags(tagsRes.data.tags);
+        }
+      } catch (err) {
+        console.error('Failed to load project:', err);
+        addToast({ type: 'error', title: 'Erreur', message: 'Impossible de charger le projet' });
+      }
+    }
+    loadProject();
+  }, [projectId, addToast]);
+
+  // Load segments when filters change
+  useEffect(() => {
+    async function loadSegments() {
       if (!projectId) return;
       setLoading(true);
       try {
-        const [projectRes, segmentsRes, timelineRes] = await Promise.all([
-          api.getProject(projectId),
-          api.getSegments(projectId),
-          api.getTimeline(projectId),
-        ]);
-        setProject(projectRes.data);
-        setTimeline(timelineRes.data);
+        const pageSize = limit || 100;
+        const segmentsRes = await api.getSegments(projectId, {
+          pageSize: Math.min(pageSize, 500),
+          sortBy: sortBy === 'time' ? 'startTime' : sortBy,
+          sortOrder: 'desc',
+          minScore: minScore > 0 ? minScore : undefined,
+          minDuration: minDuration > 0 ? minDuration : undefined,
+          maxDuration: maxDuration < 600 ? maxDuration : undefined,
+        });
+        
         const segs = segmentsRes.data?.items || [];
         setSegments(segs);
+        setTotalFiltered(segmentsRes.data?.total || 0);
 
-        // Select segment from URL or first one
-        const segmentId = searchParams.get('segment');
-        const seg = segmentId ? segs.find((s: Segment) => s.id === segmentId) : segs[0];
-        if (seg) {
-          setSelectedSegment(seg);
-          setTrimStart(seg.startTime);
-          setTrimEnd(seg.endTime);
+        // Select segment from URL or first one (only on initial load)
+        if (!selectedSegment && segs.length > 0) {
+          const segmentId = searchParams.get('segment');
+          const seg = segmentId ? segs.find((s: Segment) => s.id === segmentId) : segs[0];
+          if (seg) {
+            setSelectedSegment(seg);
+            setTrimStart(seg.startTime);
+            setTrimEnd(seg.endTime);
+          }
         }
       } catch (err) {
-        console.error('Failed to load:', err);
-        addToast({ type: 'error', title: 'Erreur', message: 'Impossible de charger le projet' });
+        console.error('Failed to load segments:', err);
       } finally {
         setLoading(false);
       }
     }
-    load();
-  }, [projectId, searchParams, addToast]);
+    loadSegments();
+  }, [projectId, minScore, minDuration, maxDuration, limit, sortBy, search, selectedTags, searchParams]);
 
   // Sync video time with selected segment
   useEffect(() => {
@@ -248,52 +305,6 @@ export default function ClipEditorPage() {
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
   }, [currentTime, handlePlayPause, handleSeek]);
-
-  // Handle zone drag
-  const handleZoneDrag = useCallback((zoneId: string, deltaX: number, deltaY: number) => {
-    const zone = zones.find((z) => z.id === zoneId);
-    if (!zone) return;
-    
-    const newX = Math.max(0, Math.min(100 - zone.width, zone.x + (deltaX / CANVAS_WIDTH) * 100));
-    const newY = Math.max(0, Math.min(100 - zone.height, zone.y + (deltaY / CANVAS_HEIGHT) * 100));
-    
-    updateZone(zoneId, { x: newX, y: newY });
-  }, [zones, updateZone]);
-
-  // Handle zone resize
-  const handleZoneResize = useCallback((zoneId: string, corner: string, deltaX: number, deltaY: number) => {
-    const zone = zones.find((z) => z.id === zoneId);
-    if (!zone) return;
-
-    const dw = (deltaX / CANVAS_WIDTH) * 100;
-    const dh = (deltaY / CANVAS_HEIGHT) * 100;
-
-    let newX = zone.x;
-    let newY = zone.y;
-    let newW = zone.width;
-    let newH = zone.height;
-
-    if (corner.includes('right')) {
-      newW = Math.max(10, Math.min(100 - zone.x, zone.width + dw));
-    }
-    if (corner.includes('left')) {
-      const maxDelta = zone.width - 10;
-      const clampedDw = Math.max(-maxDelta, Math.min(zone.x, -dw));
-      newX = zone.x - clampedDw;
-      newW = zone.width + clampedDw;
-    }
-    if (corner.includes('bottom')) {
-      newH = Math.max(10, Math.min(100 - zone.y, zone.height + dh));
-    }
-    if (corner.includes('top')) {
-      const maxDelta = zone.height - 10;
-      const clampedDh = Math.max(-maxDelta, Math.min(zone.y, -dh));
-      newY = zone.y - clampedDh;
-      newH = zone.height + clampedDh;
-    }
-
-    updateZone(zoneId, { x: newX, y: newY, width: newW, height: newH });
-  }, [zones, updateZone]);
 
   if (loading) {
     return (
@@ -364,39 +375,62 @@ export default function ClipEditorPage() {
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* LEFT: Mini segment list */}
-        <div className="w-48 border-r border-white/10 bg-[#0d0d0d] flex flex-col">
-          <div className="p-3 border-b border-white/10">
-            <h3 className="text-sm font-medium text-gray-400">Segments</h3>
+        {/* LEFT: Mini segment list with filters */}
+        <div className="w-56 border-r border-white/10 bg-[#0d0d0d] flex flex-col">
+          <div className="p-2 border-b border-white/10">
+            <h3 className="text-sm font-medium text-gray-400 mb-2">Segments</h3>
           </div>
+          
+          {/* Compact Filter Bar */}
+          <SegmentFilterBar
+            stats={segmentStats}
+            filters={filters}
+            onFiltersChange={setFilters}
+            filteredCount={segments.length}
+            loading={loading}
+            availableTags={availableTags}
+            onSearchChange={setSearch}
+            onTagsChange={setSelectedTags}
+          />
+          
           <div className="flex-1 overflow-auto p-2 space-y-1">
-            {segments.map((seg) => (
-              <button
-                key={seg.id}
-                onClick={() => {
-                  setSelectedSegment(seg);
-                  setTrimStart(seg.startTime);
-                  setTrimEnd(seg.endTime);
-                }}
-                className={`w-full p-2 rounded-lg text-left text-xs transition-colors ${
-                  selectedSegment?.id === seg.id
-                    ? 'bg-blue-500/20 border border-blue-500'
-                    : 'hover:bg-white/5 border border-transparent'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <span className={`w-6 h-6 rounded flex items-center justify-center text-xs font-bold ${
-                    (seg.score?.total || 0) >= 60 ? 'bg-green-500' : 'bg-gray-600'
-                  }`}>
-                    {seg.score?.total || 0}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="truncate font-medium">{seg.topicLabel || 'Segment'}</div>
-                    <div className="text-gray-500">{formatDuration(seg.duration)}</div>
+            {loading ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : segments.length === 0 ? (
+              <div className="text-center py-8 text-gray-500 text-xs">
+                Aucun segment
+              </div>
+            ) : (
+              segments.map((seg) => (
+                <button
+                  key={seg.id}
+                  onClick={() => {
+                    setSelectedSegment(seg);
+                    setTrimStart(seg.startTime);
+                    setTrimEnd(seg.endTime);
+                  }}
+                  className={`w-full p-2 rounded-lg text-left text-xs transition-colors ${
+                    selectedSegment?.id === seg.id
+                      ? 'bg-blue-500/20 border border-blue-500'
+                      : 'hover:bg-white/5 border border-transparent'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className={`w-6 h-6 rounded flex items-center justify-center text-xs font-bold ${
+                      (seg.score?.total || 0) >= 60 ? 'bg-green-500' : 'bg-gray-600'
+                    }`}>
+                      {seg.score?.total || 0}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="truncate font-medium">{seg.topicLabel || 'Segment'}</div>
+                      <div className="text-gray-500">{formatDuration(seg.duration)}</div>
+                    </div>
                   </div>
-                </div>
-              </button>
-            ))}
+                </button>
+              ))
+            )}
           </div>
         </div>
 
@@ -407,7 +441,7 @@ export default function ClipEditorPage() {
             {/* Source Preview (16:9) */}
             <div className="flex-1 flex flex-col bg-[#111] rounded-xl overflow-hidden border border-white/10">
               <SourcePreview
-                videoSrc={`http://localhost:8420/media/${projectId}/proxy`}
+                videoSrc={mediaUrl(projectId!, 'proxy')}
                 currentTime={currentTime}
                 isPlaying={isPlaying}
                 videoSize={videoSize}
@@ -421,7 +455,7 @@ export default function ClipEditorPage() {
               </div>
               <div className="relative" style={{ width: CANVAS_WIDTH, height: CANVAS_HEIGHT }}>
                 <Canvas9x16
-                  videoSrc={`http://localhost:8420/media/${projectId}/proxy`}
+                  videoSrc={mediaUrl(projectId!, 'proxy')}
                   currentTime={currentTime}
                   isPlaying={isPlaying}
                   currentSubtitle={selectedSegment?.transcript || ''}
@@ -496,6 +530,8 @@ export default function ClipEditorPage() {
               { id: 'subtitles', icon: Type, label: 'Sous-titres' },
               { id: 'intro', icon: Play, label: 'Intro' },
               { id: 'music', icon: Music, label: 'Musique' },
+              { id: 'audio', icon: SlidersHorizontal, label: 'Audio Mix' },
+              { id: 'jumpcuts', icon: Zap, label: 'Jump Cuts' },
               { id: 'templates', icon: Save, label: 'Templates' },
             ].map((tab) => {
               const Icon = tab.icon;
@@ -538,6 +574,10 @@ export default function ClipEditorPage() {
                 presetName={subtitlePreset}
                 onStyleChange={setSubtitleStyle}
                 onApplyPreset={applySubtitlePreset}
+                wordTimings={wordTimings}
+                transcript={selectedSegment?.transcript || ''}
+                projectId={projectId || ''}
+                segmentId={selectedSegment?.id || ''}
               />
             )}
             {activePanel === 'intro' && (
@@ -558,6 +598,19 @@ export default function ClipEditorPage() {
                 musicRef={musicRef}
               />
             )}
+            {activePanel === 'audio' && (
+              <AudioMixerPanel 
+                audioTracks={audioTracks}
+                onTracksChange={setAudioTracks}
+              />
+            )}
+            {activePanel === 'jumpcuts' && (
+              <JumpCutPanel
+                projectId={projectId || ''}
+                segmentId={selectedSegment?.id || ''}
+                segmentDuration={selectedSegment?.duration || 0}
+              />
+            )}
             {activePanel === 'templates' && (
               <TemplateStudio />
             )}
@@ -573,190 +626,6 @@ export default function ClipEditorPage() {
         duration={clipDuration}
         onExport={handleExport}
       />
-    </div>
-  );
-}
-
-// Zone renderer with drag & resize
-function ZoneRenderer({
-  zone,
-  videoRef,
-  canvasWidth,
-  canvasHeight,
-  isSelected,
-  onSelect,
-  onDrag,
-  onResize,
-}: {
-  zone: { id: string; type: string; x: number; y: number; width: number; height: number };
-  videoRef: React.RefObject<HTMLVideoElement>;
-  canvasWidth: number;
-  canvasHeight: number;
-  isSelected: boolean;
-  onSelect: () => void;
-  onDrag: (dx: number, dy: number) => void;
-  onResize: (corner: string, dx: number, dy: number) => void;
-}) {
-  const [isDragging, setIsDragging] = useState(false);
-  const [isResizing, setIsResizing] = useState<string | null>(null);
-  const lastPos = useRef({ x: 0, y: 0 });
-
-  const style = {
-    left: `${zone.x}%`,
-    top: `${zone.y}%`,
-    width: `${zone.width}%`,
-    height: `${zone.height}%`,
-  };
-
-  const handleMouseDown = (e: React.MouseEvent, action: 'drag' | string) => {
-    e.stopPropagation();
-    onSelect();
-    lastPos.current = { x: e.clientX, y: e.clientY };
-    if (action === 'drag') {
-      setIsDragging(true);
-    } else {
-      setIsResizing(action);
-    }
-  };
-
-  useEffect(() => {
-    if (!isDragging && !isResizing) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const dx = e.clientX - lastPos.current.x;
-      const dy = e.clientY - lastPos.current.y;
-      lastPos.current = { x: e.clientX, y: e.clientY };
-
-      if (isDragging) {
-        onDrag(dx, dy);
-      } else if (isResizing) {
-        onResize(isResizing, dx, dy);
-      }
-    };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-      setIsResizing(null);
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isDragging, isResizing, onDrag, onResize]);
-
-  const borderColor = zone.type === 'facecam' ? 'border-purple-500' : 'border-blue-500';
-  const bgColor = zone.type === 'facecam' ? 'bg-purple-500/20' : 'bg-blue-500/20';
-
-  return (
-    <div
-      className={`absolute overflow-hidden transition-shadow ${isSelected ? 'ring-2 ring-white z-10' : ''}`}
-      style={style}
-      onClick={(e) => {
-        e.stopPropagation();
-        onSelect();
-      }}
-    >
-      {/* Video crop */}
-      <div className={`absolute inset-0 ${bgColor} flex items-center justify-center`}>
-        {videoRef.current && (
-          <video
-            className="w-full h-full object-cover"
-            src={videoRef.current.src}
-            ref={(el) => {
-              if (el && videoRef.current) {
-                el.currentTime = videoRef.current.currentTime;
-                el.muted = true;
-                // Sync playback
-                const sync = () => {
-                  if (videoRef.current) el.currentTime = videoRef.current.currentTime;
-                };
-                videoRef.current.addEventListener('timeupdate', sync);
-              }
-            }}
-          />
-        )}
-      </div>
-
-      {/* Label */}
-      <div className={`absolute top-1 left-1 px-2 py-0.5 rounded text-xs font-medium uppercase ${
-        zone.type === 'facecam' ? 'bg-purple-500' : 'bg-blue-500'
-      }`}>
-        {zone.type}
-      </div>
-
-      {/* Selection handles */}
-      {isSelected && (
-        <>
-          {/* Drag handle */}
-          <div
-            className="absolute inset-0 cursor-move"
-            onMouseDown={(e) => handleMouseDown(e, 'drag')}
-          />
-
-          {/* Resize corners */}
-          {['top-left', 'top-right', 'bottom-left', 'bottom-right'].map((corner) => (
-            <div
-              key={corner}
-              className={`absolute w-3 h-3 bg-white rounded-sm cursor-${corner.replace('-', '')}-resize`}
-              style={{
-                [corner.includes('top') ? 'top' : 'bottom']: '-4px',
-                [corner.includes('left') ? 'left' : 'right']: '-4px',
-              }}
-              onMouseDown={(e) => handleMouseDown(e, corner)}
-            />
-          ))}
-
-          {/* Edge handles */}
-          {['top', 'bottom', 'left', 'right'].map((edge) => (
-            <div
-              key={edge}
-              className={`absolute bg-white/50 ${
-                edge === 'top' || edge === 'bottom'
-                  ? 'h-1 left-3 right-3 cursor-ns-resize'
-                  : 'w-1 top-3 bottom-3 cursor-ew-resize'
-              }`}
-              style={{ [edge]: '-2px' }}
-              onMouseDown={(e) => handleMouseDown(e, edge)}
-            />
-          ))}
-        </>
-      )}
-    </div>
-  );
-}
-
-// Subtitle overlay
-function SubtitleOverlay({ text, style }: { text: string; style: any }) {
-  if (!text) return null;
-
-  const positionStyle = {
-    top: style.position === 'top' ? '10%' : style.position === 'center' ? '50%' : undefined,
-    bottom: style.position === 'bottom' ? '15%' : undefined,
-    transform: style.position === 'center' ? 'translateY(-50%)' : undefined,
-  };
-
-  return (
-    <div
-      className="absolute left-4 right-4 text-center z-30 pointer-events-none"
-      style={positionStyle}
-    >
-      <span
-        style={{
-          fontFamily: style.fontFamily,
-          fontSize: style.fontSize * 0.5, // Scale down for preview
-          fontWeight: style.fontWeight,
-          color: style.color,
-          backgroundColor: style.backgroundColor,
-          WebkitTextStroke: style.outlineWidth > 0 ? `${style.outlineWidth * 0.5}px ${style.outlineColor}` : undefined,
-          padding: '4px 12px',
-          borderRadius: '4px',
-        }}
-      >
-        {text}
-      </span>
     </div>
   );
 }
@@ -986,1057 +855,299 @@ function LayoutPanel({
   );
 }
 
-// Subtitle panel
-function SubtitlePanel({
-  style,
-  presetName,
-  onStyleChange,
-  onApplyPreset,
+// Jump Cut Panel
+function JumpCutPanel({
+  projectId,
+  segmentId,
+  segmentDuration: _segmentDuration,
 }: {
-  style: any;
-  presetName: string;
-  onStyleChange: (updates: any) => void;
-  onApplyPreset: (preset: string) => void;
+  projectId: string;
+  segmentId: string;
+  segmentDuration: number;
 }) {
-  const presets = [
-    { id: 'viral_pro', label: '⭐ World Class', color: '#00FF00' },  // Default - Hormozi/MrBeast level
-    { id: 'viral', label: 'Viral', color: '#00BFFF' },
-    { id: 'impact', label: 'Impact', color: '#FF0000' },
-    { id: 'clean', label: 'Clean', color: '#FFFFFF' },
-    { id: 'karaoke', label: 'Karaoké', color: '#FFD700' },
-    { id: 'mrbeast', label: 'MrBeast', color: '#FF0000' },
-  ];
+  const {
+    config,
+    analysis,
+    analyzing,
+    setEnabled,
+    setSensitivity,
+    setTransition,
+    setAnalysis,
+    setAnalyzing 
+  } = useJumpCutStore();
+  const { addToast } = useToastStore();
 
-  const fonts = [
-    { id: 'Inter', label: 'Inter', style: 'font-sans' },
-    { id: 'Impact', label: 'Impact', style: 'font-impact' },
-    { id: 'Montserrat', label: 'Montserrat', style: 'font-montserrat' },
-    { id: 'Poppins', label: 'Poppins', style: 'font-poppins' },
-    { id: 'Oswald', label: 'Oswald', style: 'font-oswald' },
-    { id: 'Bebas Neue', label: 'Bebas Neue', style: 'font-bebas' },
-    { id: 'Bangers', label: 'Bangers', style: 'font-bangers' },
-    { id: 'Permanent Marker', label: 'Permanent Marker', style: 'font-marker' },
-    { id: 'Anton', label: 'Anton', style: 'font-anton' },
-    { id: 'Righteous', label: 'Righteous', style: 'font-righteous' },
-  ];
-
-  const positions = [
-    { id: 'top', label: 'Haut' },
-    { id: 'center', label: 'Centre' },
-    { id: 'bottom', label: 'Bas' },
-  ];
-
-  const animations = [
-    { id: 'none', label: 'Aucune' },
-    { id: 'fade', label: 'Fondu' },
-    { id: 'pop', label: 'Pop ⭐' },
-    { id: 'bounce', label: 'Rebond 🔥' },
-    { id: 'glow', label: 'Glow ✨' },
-    { id: 'wave', label: 'Wave 🌊' },
-    { id: 'typewriter', label: 'Machine' },
-  ];
-
-  return (
-    <div className="space-y-6">
-      {/* Presets */}
-      <div>
-        <h4 className="text-sm font-medium text-gray-400 mb-3">Style</h4>
-        <div className="grid grid-cols-2 gap-2">
-          {presets.map((preset) => (
-            <button
-              key={preset.id}
-              onClick={() => onApplyPreset(preset.id)}
-              className={`p-3 rounded-lg transition-colors ${
-                presetName === preset.id
-                  ? 'bg-blue-500/20 border border-blue-500'
-                  : 'bg-white/5 border border-white/10 hover:bg-white/10'
-              }`}
-            >
-              <div
-                className="w-full h-6 rounded mb-2 flex items-center justify-center text-xs font-bold"
-                style={{ backgroundColor: preset.color === '#FFFFFF' ? '#333' : preset.color + '30', color: preset.color }}
-              >
-                Aa
-              </div>
-              <span className="text-xs">{preset.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Font selector with preview */}
-      <div>
-        <label className="text-sm font-medium text-gray-400 block mb-2">Police</label>
-        <div className="space-y-1 max-h-40 overflow-auto bg-white/5 rounded-lg p-2">
-          {fonts.map((font) => (
-            <button
-              key={font.id}
-              onClick={() => onStyleChange({ fontFamily: font.id })}
-              className={`w-full p-2 rounded-lg text-left transition-colors flex items-center justify-between ${
-                style.fontFamily === font.id
-                  ? 'bg-blue-500/30 border border-blue-500'
-                  : 'hover:bg-white/10 border border-transparent'
-              }`}
-            >
-              <span 
-                className="text-white text-lg"
-                style={{ fontFamily: font.id }}
-              >
-                {font.label}
-              </span>
-              <span 
-                className="text-xs text-gray-500"
-                style={{ fontFamily: font.id }}
-              >
-                Abc
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Font size */}
-      <div>
-        <label className="text-sm font-medium text-gray-400 block mb-2">
-          Taille: {style.fontSize}px
-        </label>
-        <input
-          type="range"
-          min="48"
-          max="120"
-          value={style.fontSize}
-          onChange={(e) => onStyleChange({ fontSize: Number(e.target.value) })}
-          className="w-full"
-        />
-      </div>
-
-      {/* Colors */}
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="text-xs text-gray-500 block mb-1">Couleur texte</label>
-          <input
-            type="color"
-            value={style.color}
-            onChange={(e) => onStyleChange({ color: e.target.value })}
-            className="w-full h-8 rounded cursor-pointer"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-gray-500 block mb-1">Couleur highlight</label>
-          <input
-            type="color"
-            value={style.highlightColor}
-            onChange={(e) => onStyleChange({ highlightColor: e.target.value })}
-            className="w-full h-8 rounded cursor-pointer"
-          />
-        </div>
-      </div>
-
-      {/* Position */}
-      <div>
-        <label className="text-sm font-medium text-gray-400 block mb-2">Position</label>
-        <div className="flex gap-2">
-          {positions.map((pos) => (
-            <button
-              key={pos.id}
-              onClick={() => onStyleChange({ position: pos.id, positionY: undefined })}
-              className={`flex-1 py-2 rounded-lg text-sm transition-colors ${
-                style.position === pos.id && !style.positionY
-                  ? 'bg-blue-500 text-white'
-                  : 'bg-white/5 text-gray-400 hover:bg-white/10'
-              }`}
-            >
-              {pos.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Custom Y Position */}
-      <div>
-        <label className="text-sm font-medium text-gray-400 block mb-2">
-          Hauteur personnalisée: {style.positionY ?? 'Auto'}
-          {style.positionY && <span className="text-xs text-gray-500 ml-2">(0=haut, 960=milieu, 1920=bas)</span>}
-        </label>
-        <div className="flex items-center gap-2">
-          <input
-            type="range"
-            min="0"
-            max="1920"
-            step="10"
-            value={style.positionY ?? 960}
-            onChange={(e) => onStyleChange({ positionY: Number(e.target.value) })}
-            className="flex-1"
-          />
-          <input
-            type="number"
-            min="0"
-            max="1920"
-            value={style.positionY ?? ''}
-            placeholder="Auto"
-            onChange={(e) => onStyleChange({ positionY: e.target.value ? Number(e.target.value) : undefined })}
-            className="w-16 bg-white/5 border border-white/10 rounded px-2 py-1 text-sm text-center"
-          />
-        </div>
-        <div className="flex justify-between text-xs text-gray-500 mt-1">
-          <span>↑ Haut</span>
-          <span>Entre cam/content (~750)</span>
-          <span>Bas ↓</span>
-        </div>
-      </div>
-
-      {/* Animation */}
-      <div>
-        <label className="text-sm font-medium text-gray-400 block mb-2">Animation</label>
-        <select
-          value={style.animation}
-          onChange={(e) => onStyleChange({ animation: e.target.value })}
-          className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm"
-        >
-          {animations.map((anim) => (
-            <option key={anim.id} value={anim.id}>{anim.label}</option>
-          ))}
-        </select>
-      </div>
-
-      {/* Outline */}
-      <div>
-        <label className="text-sm font-medium text-gray-400 block mb-2">
-          Contour: {style.outlineWidth}px
-        </label>
-        <input
-          type="range"
-          min="0"
-          max="6"
-          value={style.outlineWidth}
-          onChange={(e) => onStyleChange({ outlineWidth: Number(e.target.value) })}
-          className="w-full"
-        />
-      </div>
-
-      {/* Words per line - WORLD CLASS: 2-4 for viral content */}
-      <div>
-        <label className="text-sm font-medium text-gray-400 block mb-2">
-          Mots par ligne: {style.wordsPerLine || 3}
-        </label>
-        <input
-          type="range"
-          min="2"
-          max="8"
-          value={style.wordsPerLine || 3}
-          onChange={(e) => onStyleChange({ wordsPerLine: Number(e.target.value) })}
-          className="w-full"
-        />
-        <div className="flex justify-between text-xs text-gray-500 mt-1">
-          <span>2 (Ultra viral)</span>
-          <span>5 (Standard)</span>
-          <span>8 (Dense)</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Intro panel - Enhanced with live preview
-function IntroPanel({
-  config,
-  segmentTitle,
-  onConfigChange,
-  onApplyPreset,
-}: {
-  config: any;
-  segmentTitle: string;
-  onConfigChange: (updates: any) => void;
-  onApplyPreset: (preset: string) => void;
-}) {
-  const [activeSection, setActiveSection] = useState<'style' | 'text' | 'animation'>('style');
-  const [animPhase, setAnimPhase] = useState<'hidden' | 'enter' | 'wobble' | 'exit'>('hidden');
-
-  // Initialize title with segment title if empty
-  useEffect(() => {
-    if (config && !config.title && segmentTitle) {
-      onConfigChange({ title: segmentTitle });
+  const handleAnalyze = async () => {
+    if (!projectId || !segmentId) {
+      addToast({ type: 'error', title: 'Erreur', message: 'Sélectionne un segment d\'abord' });
+      return;
     }
-  }, [segmentTitle, config]);
 
-  // Guard against undefined config
-  if (!config) {
-    return (
-      <div className="p-4 text-center text-gray-400">
-        <p>Chargement de la configuration...</p>
-      </div>
-    );
-  }
-
-  // Trigger preview animation - adapts to selected animation type
-  const playPreview = () => {
-    setAnimPhase('hidden');
-    setTimeout(() => setAnimPhase('enter'), 100);
-    setTimeout(() => setAnimPhase('wobble'), 600);
-    setTimeout(() => setAnimPhase('exit'), (config.duration || 2) * 1000 - 400);
-    setTimeout(() => setAnimPhase('hidden'), (config.duration || 2) * 1000 + 300);
-  };
-
-  // Get label animation styles based on selected animation type
-  const getLabelStyle = (): React.CSSProperties => {
-    const animType = config.animation || 'fade';
-    
-    // Base transition
-    const baseStyle: React.CSSProperties = {
-      transition: 'all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
-    };
-
-    // Animation-specific styles for each phase
-    switch (animType) {
-      case 'fade':
-        switch (animPhase) {
-          case 'hidden': return { ...baseStyle, opacity: 0 };
-          case 'enter': return { ...baseStyle, opacity: 1 };
-          case 'wobble': return { ...baseStyle, opacity: 1 };
-          case 'exit': return { ...baseStyle, opacity: 0, transition: 'all 0.6s ease-out' };
-          default: return baseStyle;
-        }
-
-      case 'zoom':
-        switch (animPhase) {
-          case 'hidden': return { ...baseStyle, transform: 'scale(0.3)', opacity: 0 };
-          case 'enter': return { ...baseStyle, transform: 'scale(1)', opacity: 1 };
-          case 'wobble': return { ...baseStyle, transform: 'scale(1)', opacity: 1, animation: 'pulse 1.5s ease-in-out infinite' };
-          case 'exit': return { ...baseStyle, transform: 'scale(1.5)', opacity: 0, transition: 'all 0.4s ease-in' };
-          default: return baseStyle;
-        }
-
-      case 'slide':
-        switch (animPhase) {
-          case 'hidden': return { ...baseStyle, transform: 'translateY(100%)', opacity: 0 };
-          case 'enter': return { ...baseStyle, transform: 'translateY(0)', opacity: 1 };
-          case 'wobble': return { ...baseStyle, transform: 'translateY(0)', opacity: 1 };
-          case 'exit': return { ...baseStyle, transform: 'translateY(-100%)', opacity: 0, transition: 'all 0.4s ease-in' };
-          default: return baseStyle;
-        }
-
-      case 'swoosh':
-      default:
-        switch (animPhase) {
-          case 'hidden': return { ...baseStyle, transform: 'translateX(-120%) rotate(-5deg)', opacity: 0 };
-          case 'enter': return { ...baseStyle, transform: 'translateX(0) rotate(0deg)', opacity: 1 };
-          case 'wobble': return { ...baseStyle, transform: 'translateX(0) rotate(0deg)', opacity: 1, animation: 'wobble 2s ease-in-out infinite' };
-          case 'exit': return { ...baseStyle, transform: 'translateX(120%) rotate(5deg)', opacity: 0, transition: 'all 0.4s ease-in' };
-          default: return baseStyle;
-        }
-    }
-  };
-
-  // Preset visual configs
-  const VISUAL_PRESETS = [
-    { key: 'minimal', label: 'Minimal', icon: '◯', gradient: 'from-gray-600 to-gray-800', desc: 'Épuré & pro' },
-    { key: 'neon', label: 'Néon', icon: '⚡', gradient: 'from-cyan-500 to-blue-600', desc: 'Vibrant & flashy' },
-    { key: 'gaming', label: 'Gaming', icon: '🎮', gradient: 'from-purple-600 to-pink-600', desc: 'Dynamique' },
-    { key: 'elegant', label: 'Élégant', icon: '✨', gradient: 'from-amber-500 to-orange-600', desc: 'Raffiné' },
-  ];
-
-  // Font options with preview
-  const FONTS = [
-    { value: 'Inter', label: 'Inter', style: 'font-sans' },
-    { value: 'Montserrat', label: 'Montserrat', style: 'font-sans font-bold' },
-    { value: 'Space Grotesk', label: 'Space Grotesk', style: 'font-mono' },
-    { value: 'Playfair Display', label: 'Playfair', style: 'font-serif italic' },
-    { value: 'Oswald', label: 'Oswald', style: 'font-sans uppercase tracking-wider' },
-    { value: 'Bebas Neue', label: 'Bebas', style: 'font-sans uppercase tracking-widest' },
-  ];
-
-  // Animation options
-  const ANIMATIONS = [
-    { value: 'fade', label: 'Fondu', icon: '○', desc: 'Apparition douce' },
-    { value: 'swoosh', label: 'Swoosh', icon: '➜', desc: 'Étiquette animée' },
-    { value: 'zoom', label: 'Zoom', icon: '◎', desc: 'Effet d\'échelle' },
-    { value: 'slide', label: 'Glisser', icon: '↑', desc: 'Entrée par le bas' },
-  ];
-
-  return (
-    <div className="space-y-4">
-      {/* CSS for animations */}
-      <style>{`
-        @keyframes wobble {
-          0%, 100% { transform: translateX(0) rotate(0deg); }
-          25% { transform: translateX(0) rotate(-1deg); }
-          75% { transform: translateX(0) rotate(1deg); }
-        }
-        @keyframes pulse {
-          0%, 100% { transform: scale(1); }
-          50% { transform: scale(1.03); }
-        }
-        @keyframes shimmer {
-          0% { background-position: -200% 0; }
-          100% { background-position: 200% 0; }
-        }
-      `}</style>
-
-      {/* Live Preview Card */}
-      <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-gray-900 to-black border border-white/10">
-        {/* Preview container - 9:16 aspect ratio scaled down */}
-        <div 
-          className="relative mx-auto bg-black overflow-hidden"
-          style={{ width: '100%', aspectRatio: '9/12' }}
-        >
-          {/* Video background simulation (blurred) */}
-          <div 
-            className="absolute inset-0"
-            style={{ 
-              background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f0f23 100%)',
-              filter: `blur(${config.backgroundBlur || 15}px)`,
-              transform: 'scale(1.1)', // Prevent blur edge artifacts
-            }}
-          />
-          
-          {/* Overlay for depth */}
-          <div className="absolute inset-0 bg-black/30" />
-          
-          {/* Animated Label/Étiquette */}
-          <div className="absolute inset-0 flex items-center justify-center p-3 overflow-hidden">
-            <div 
-              className="relative"
-              style={getLabelStyle()}
-            >
-              {/* Label background with gradient */}
-              <div 
-                className="relative px-5 py-4 rounded-2xl shadow-2xl"
-                style={{
-                  background: `linear-gradient(135deg, ${config.badgeColor || '#00FF88'}15, ${config.titleColor || '#FFFFFF'}10)`,
-                  border: `2px solid ${config.badgeColor || '#00FF88'}40`,
-                  backdropFilter: 'blur(10px)',
-                  boxShadow: `0 10px 40px ${config.badgeColor || '#00FF88'}30, 0 0 60px ${config.badgeColor || '#00FF88'}10`,
-                }}
-              >
-                {/* Shimmer effect */}
-                <div 
-                  className="absolute inset-0 rounded-2xl opacity-30"
-                  style={{
-                    background: `linear-gradient(90deg, transparent, ${config.titleColor || '#FFFFFF'}20, transparent)`,
-                    backgroundSize: '200% 100%',
-                    animation: animPhase === 'wobble' ? 'shimmer 3s infinite' : 'none',
-                  }}
-                />
-                
-                {/* Badge/Pseudo at top */}
-                {(config.badgeText || '@etostark') && (
-                  <div 
-                    className="text-center text-xs font-bold uppercase tracking-widest mb-1"
-                    style={{ color: config.badgeColor || '#00FF88' }}
-                  >
-                    {config.badgeText || '@etostark'}
-                  </div>
-                )}
-                
-                {/* Title */}
-                <h2 
-                  className="text-center font-bold leading-tight"
-                  style={{ 
-                    color: config.titleColor || '#FFFFFF',
-                    fontSize: `${Math.min((config.titleSize || 72) / 4, 20)}px`,
-                    fontFamily: config.titleFont || 'Montserrat',
-                    textShadow: `0 2px 20px ${config.titleColor || '#FFFFFF'}50`,
-                  }}
-                >
-                  {config.title || 'Titre du clip'}
-                </h2>
-                
-                {/* Decorative line */}
-                <div 
-                  className="mt-2 mx-auto h-0.5 rounded-full"
-                  style={{ 
-                    width: '60%',
-                    background: `linear-gradient(90deg, transparent, ${config.badgeColor || '#00FF88'}, transparent)`,
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Duration indicator */}
-          <div className="absolute bottom-2 right-2 px-2 py-0.5 bg-black/60 rounded text-[10px] text-white/70">
-            {config.duration || 2}s
-          </div>
-          
-          {/* Phase indicator for debug */}
-          <div className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/60 rounded text-[10px] text-white/50">
-            {animPhase === 'hidden' ? '⏸️' : animPhase === 'enter' ? '➡️' : animPhase === 'wobble' ? '〰️' : '⬅️'}
-          </div>
-        </div>
-
-        {/* Play preview button */}
-        <button
-          onClick={playPreview}
-          className="absolute top-2 right-2 p-2.5 bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 rounded-full transition-all shadow-lg group"
-        >
-          <Play className="w-4 h-4 text-white group-hover:scale-110 transition-transform" />
-        </button>
-
-        {/* Enable toggle overlay */}
-        <div className="absolute top-2 left-2">
-          <button
-            onClick={() => onConfigChange({ enabled: !config.enabled })}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-              config.enabled 
-                ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
-                : 'bg-white/10 text-gray-400 border border-white/10'
-            }`}
-          >
-            <div className={`w-2 h-2 rounded-full ${config.enabled ? 'bg-green-400' : 'bg-gray-500'}`} />
-            {config.enabled ? 'Activé' : 'Désactivé'}
-          </button>
-        </div>
-      </div>
-
-      {/* Section tabs */}
-      <div className="flex gap-1 p-1 bg-white/5 rounded-lg">
-        {[
-          { key: 'style', label: '🎨 Style' },
-          { key: 'text', label: '✏️ Texte' },
-          { key: 'animation', label: '🎬 Anim' },
-        ].map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveSection(tab.key as any)}
-            className={`flex-1 py-2 px-3 rounded-md text-xs font-medium transition-all ${
-              activeSection === tab.key 
-                ? 'bg-blue-500 text-white shadow-lg' 
-                : 'text-gray-400 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Style Section */}
-      {activeSection === 'style' && (
-        <div className="space-y-4">
-          {/* Visual Presets */}
-          <div>
-            <label className="text-xs font-medium text-gray-500 uppercase tracking-wider block mb-2">Presets</label>
-            <div className="grid grid-cols-2 gap-2">
-              {VISUAL_PRESETS.map((preset) => (
-                <button
-                  key={preset.key}
-                  onClick={() => onApplyPreset(preset.key)}
-                  className={`relative overflow-hidden p-3 rounded-xl border transition-all group ${
-                    config.animation === (INTRO_PRESETS as any)[preset.key]?.animation
-                      ? 'border-blue-500 ring-2 ring-blue-500/20'
-                      : 'border-white/10 hover:border-white/30'
-                  }`}
-                >
-                  <div className={`absolute inset-0 bg-gradient-to-br ${preset.gradient} opacity-20 group-hover:opacity-30 transition-opacity`} />
-                  <div className="relative">
-                    <span className="text-lg">{preset.icon}</span>
-                    <div className="text-sm font-medium text-white mt-1">{preset.label}</div>
-                    <div className="text-[10px] text-gray-400">{preset.desc}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Colors */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase tracking-wider block mb-2">Titre</label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  value={config.titleColor || '#FFFFFF'}
-                  onChange={(e) => onConfigChange({ titleColor: e.target.value })}
-                  className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent"
-                />
-                <input
-                  type="text"
-                  value={config.titleColor || '#FFFFFF'}
-                  onChange={(e) => onConfigChange({ titleColor: e.target.value })}
-                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs font-mono"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-gray-500 uppercase tracking-wider block mb-2">Badge</label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  value={config.badgeColor || '#00FF88'}
-                  onChange={(e) => onConfigChange({ badgeColor: e.target.value })}
-                  className="w-10 h-10 rounded-lg cursor-pointer border-0 bg-transparent"
-                />
-                <input
-                  type="text"
-                  value={config.badgeColor || '#00FF88'}
-                  onChange={(e) => onConfigChange({ badgeColor: e.target.value })}
-                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs font-mono"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Background blur */}
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Flou arrière-plan</label>
-              <span className="text-xs text-gray-400">{config.backgroundBlur ?? 15}px</span>
-            </div>
-            <input
-              type="range"
-              min="0"
-              max="40"
-              value={config.backgroundBlur ?? 15}
-              onChange={(e) => onConfigChange({ backgroundBlur: Number(e.target.value) })}
-              className="w-full accent-blue-500"
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Text Section */}
-      {activeSection === 'text' && (
-        <div className="space-y-4">
-          {/* Title input */}
-          <div>
-            <label className="text-xs font-medium text-gray-500 uppercase tracking-wider block mb-2">Titre principal</label>
-            <input
-              type="text"
-              value={config.title || ''}
-              onChange={(e) => onConfigChange({ title: e.target.value })}
-              placeholder="Titre accrocheur..."
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
-            />
-          </div>
-
-          {/* Badge input */}
-          <div>
-            <label className="text-xs font-medium text-gray-500 uppercase tracking-wider block mb-2">Badge (@pseudo)</label>
-            <input
-              type="text"
-              value={config.badgeText || ''}
-              onChange={(e) => onConfigChange({ badgeText: e.target.value })}
-              placeholder="@votrepseudo"
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
-            />
-          </div>
-
-          {/* Font selector */}
-          <div>
-            <label className="text-xs font-medium text-gray-500 uppercase tracking-wider block mb-2">Police</label>
-            <div className="grid grid-cols-3 gap-2">
-              {FONTS.map((font) => (
-                <button
-                  key={font.value}
-                  onClick={() => onConfigChange({ titleFont: font.value })}
-                  className={`p-2 rounded-lg border text-center transition-all ${
-                    config.titleFont === font.value
-                      ? 'border-blue-500 bg-blue-500/10'
-                      : 'border-white/10 hover:border-white/20'
-                  }`}
-                >
-                  <span className={`text-sm ${font.style}`}>{font.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Title size */}
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Taille</label>
-              <span className="text-xs text-gray-400">{config.titleSize || 72}px</span>
-            </div>
-            <input
-              type="range"
-              min="48"
-              max="120"
-              value={config.titleSize || 72}
-              onChange={(e) => onConfigChange({ titleSize: Number(e.target.value) })}
-              className="w-full accent-blue-500"
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Animation Section */}
-      {activeSection === 'animation' && (
-        <div className="space-y-4">
-          {/* Animation type */}
-          <div>
-            <label className="text-xs font-medium text-gray-500 uppercase tracking-wider block mb-2">Type d'animation</label>
-            <div className="grid grid-cols-2 gap-2">
-              {ANIMATIONS.map((anim) => (
-                <button
-                  key={anim.value}
-                  onClick={() => onConfigChange({ animation: anim.value })}
-                  className={`p-3 rounded-xl border text-left transition-all ${
-                    config.animation === anim.value
-                      ? 'border-blue-500 bg-blue-500/10'
-                      : 'border-white/10 hover:border-white/20'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="text-xl opacity-60">{anim.icon}</span>
-                    <div>
-                      <div className="text-sm font-medium">{anim.label}</div>
-                      <div className="text-[10px] text-gray-400">{anim.desc}</div>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Duration */}
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Durée de l'intro</label>
-              <span className="text-xs text-gray-400">{config.duration || 2}s</span>
-            </div>
-            <input
-              type="range"
-              min="1"
-              max="5"
-              step="0.5"
-              value={config.duration || 2}
-              onChange={(e) => onConfigChange({ duration: Number(e.target.value) })}
-              className="w-full accent-blue-500"
-            />
-            <div className="flex justify-between text-[10px] text-gray-500 mt-1">
-              <span>1s</span>
-              <span>3s</span>
-              <span>5s</span>
-            </div>
-          </div>
-
-          {/* Preview button */}
-          <button
-            onClick={playPreview}
-            className="w-full py-3 bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 rounded-xl text-sm font-medium text-white transition-all flex items-center justify-center gap-2"
-          >
-            <Play className="w-4 h-4" />
-            Prévisualiser l'animation
-          </button>
-        </div>
-      )}
-
-      {/* Status indicator */}
-      <div className={`p-3 rounded-xl border transition-all ${
-        config.enabled 
-          ? 'bg-green-500/5 border-green-500/20' 
-          : 'bg-white/5 border-white/10'
-      }`}>
-        <div className="flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${config.enabled ? 'bg-green-400 animate-pulse' : 'bg-gray-500'}`} />
-          <span className="text-xs text-gray-400">
-            {config.enabled 
-              ? `Intro de ${config.duration || 2}s sera ajoutée à l'export`
-              : 'Intro désactivée'
-            }
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Music panel - Library of MP3s for testing with clips
-function MusicPanel({
-  selectedMusic,
-  musicList,
-  onMusicSelect,
-  onMusicListUpdate,
-  videoRef,
-  musicRef,
-}: {
-  selectedMusic: string | null;
-  musicList: string[];
-  onMusicSelect: (path: string | null) => void;
-  onMusicListUpdate: (list: string[]) => void;
-  videoRef: React.RefObject<HTMLVideoElement>;
-  musicRef: React.MutableRefObject<HTMLAudioElement | null>;
-}) {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const { volume, startOffset, setVolume, setStartOffset } = useMusicStore();
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Sync music with video playback
-  useEffect(() => {
-    if (!musicRef.current || !selectedMusic) return;
-    
-    const video = videoRef.current;
-    if (!video) return;
-
-    const handlePlay = () => {
-      if (musicRef.current) {
-        musicRef.current.currentTime = startOffset;
-        musicRef.current.play();
-        setIsPlaying(true);
+    setAnalyzing(true);
+    try {
+      const result = await api.analyzeJumpCuts(projectId, segmentId, {
+        sensitivity: config.sensitivity,
+      });
+      
+      if (result.data) {
+        setAnalysis(result.data);
+        addToast({ 
+          type: 'success', 
+          title: 'Analyse terminée', 
+          message: `${result.data.cuts_count} cuts détectés (-${result.data.time_saved_percent.toFixed(0)}%)`
+        });
       }
-    };
-
-    const handlePause = () => {
-      if (musicRef.current) {
-        musicRef.current.pause();
-        setIsPlaying(false);
-      }
-    };
-
-    const handleSeek = () => {
-      if (musicRef.current) {
-        // Sync music position with video (with offset)
-        musicRef.current.currentTime = Math.max(0, startOffset);
-      }
-    };
-
-    video.addEventListener('play', handlePlay);
-    video.addEventListener('pause', handlePause);
-    video.addEventListener('seeked', handleSeek);
-
-    return () => {
-      video.removeEventListener('play', handlePlay);
-      video.removeEventListener('pause', handlePause);
-      video.removeEventListener('seeked', handleSeek);
-    };
-  }, [selectedMusic, musicRef, videoRef, startOffset]);
-
-  // Update volume
-  useEffect(() => {
-    if (musicRef.current) {
-      musicRef.current.volume = volume;
-    }
-  }, [volume, musicRef]);
-
-  const handleAddFiles = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
-
-    const newPaths: string[] = [];
-    for (let i = 0; i < files.length; i++) {
-      newPaths.push(files[i].path);
-    }
-    onMusicListUpdate([...musicList, ...newPaths]);
-    e.target.value = ''; // Reset input
-  };
-
-  const selectMusic = (path: string) => {
-    onMusicSelect(path);
-    
-    // Create audio element
-    if (musicRef.current) {
-      musicRef.current.pause();
-    }
-    const audio = new Audio(`file:///${path.replace(/\\/g, '/')}`);
-    audio.volume = volume;
-    musicRef.current = audio;
-  };
-
-  const removeMusic = (path: string) => {
-    onMusicListUpdate(musicList.filter(m => m !== path));
-    if (selectedMusic === path) {
-      onMusicSelect(null);
-      if (musicRef.current) {
-        musicRef.current.pause();
-        musicRef.current = null;
-      }
+    } catch (err) {
+      console.error('Jump cut analysis failed:', err);
+      addToast({ type: 'error', title: 'Erreur', message: 'L\'analyse a échoué' });
+    } finally {
+      setAnalyzing(false);
     }
   };
-
-  const clearSelection = () => {
-    onMusicSelect(null);
-    if (musicRef.current) {
-      musicRef.current.pause();
-      musicRef.current = null;
-    }
-    setIsPlaying(false);
-  };
-
-  const getFileName = (path: string) => {
-    return path.split(/[/\\]/).pop() || path;
-  };
-
-  // Preset sound effects (to be added to assets/sounds/)
-  const SOUND_PRESETS = [
-    { id: 'none', label: 'Aucun son', icon: '🔇' },
-    { id: 'swoosh', label: 'Swoosh', icon: '💨', file: 'swoosh.mp3' },
-    { id: 'pop', label: 'Pop', icon: '💥', file: 'pop.mp3' },
-    { id: 'ding', label: 'Ding', icon: '🔔', file: 'ding.mp3' },
-    { id: 'whoosh', label: 'Whoosh', icon: '🌊', file: 'whoosh.mp3' },
-  ];
 
   return (
     <div className="space-y-5">
-      {/* Header */}
+      {/* Header with toggle */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-white">Musique & Sons</h3>
-          <p className="text-xs text-gray-500 mt-0.5">Ajoute ta musique TikTok préférée</p>
+          <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+            <Zap className="w-4 h-4 text-yellow-400" />
+            Jump Cuts
+          </h3>
+          <p className="text-xs text-gray-500 mt-0.5">Supprime les silences automatiquement</p>
         </div>
         <button
-          onClick={handleAddFiles}
-          className="px-3 py-1.5 bg-gradient-to-r from-pink-500 to-purple-500 hover:from-pink-600 hover:to-purple-600 rounded-lg text-xs font-medium text-white transition-all flex items-center gap-1.5"
+          onClick={() => setEnabled(!config.enabled)}
+          className={`relative w-12 h-6 rounded-full transition-colors ${
+            config.enabled ? 'bg-yellow-500' : 'bg-gray-600'
+          }`}
         >
-          <FolderOpen className="w-3.5 h-3.5" />
-          Ajouter
+          <div 
+            className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+              config.enabled ? 'translate-x-7' : 'translate-x-1'
+            }`}
+          />
         </button>
       </div>
 
-      {/* Hidden file input */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="audio/*,.mp3,.wav,.ogg,.m4a"
-        multiple
-        className="hidden"
-        onChange={handleFileSelect}
-      />
-
-      {/* Current selection */}
-      {selectedMusic && (
-        <div className="p-3 rounded-xl bg-gradient-to-r from-pink-500/10 to-purple-500/10 border border-pink-500/20">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-xl bg-gradient-to-r from-pink-500 to-purple-500 flex items-center justify-center ${isPlaying ? 'animate-pulse' : ''}`}>
-              <Music className="w-5 h-5 text-white" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-white truncate">{getFileName(selectedMusic)}</p>
-              <p className="text-xs text-pink-400/70">Sélectionné - Joue avec la vidéo</p>
-            </div>
-            <button
-              onClick={clearSelection}
-              className="p-2 hover:bg-white/5 rounded-lg transition-colors"
-            >
-              <Trash2 className="w-4 h-4 text-gray-400 hover:text-red-400" />
-            </button>
-          </div>
-
-          {/* Volume control */}
-          <div className="mt-3 flex items-center gap-3">
-            <Volume2 className="w-4 h-4 text-gray-400" />
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={volume}
-              onChange={(e) => setVolume(Number(e.target.value))}
-              className="flex-1 accent-pink-500"
-            />
-            <span className="text-xs text-gray-400 w-8">{Math.round(volume * 100)}%</span>
-          </div>
-
-          {/* Start offset */}
-          <div className="mt-3 flex items-center gap-3">
-            <SkipForward className="w-4 h-4 text-gray-400" />
-            <div className="flex-1">
-              <label className="text-xs text-gray-500 block mb-1">Démarrer à</label>
-              <input
-                type="number"
-                min="0"
-                step="0.5"
-                value={startOffset}
-                onChange={(e) => setStartOffset(Number(e.target.value))}
-                className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs"
-              />
-            </div>
-            <span className="text-xs text-gray-400">{startOffset}s</span>
-          </div>
-        </div>
-      )}
-
-      {/* Music library */}
-      <div>
-        <label className="text-xs font-medium text-gray-500 uppercase tracking-wider block mb-2">
-          Ma bibliothèque ({musicList.length})
-        </label>
-        
-        {musicList.length === 0 ? (
-          <div className="p-6 rounded-xl border border-dashed border-white/10 text-center">
-            <Music className="w-8 h-8 mx-auto text-gray-500 mb-2" />
-            <p className="text-sm text-gray-400">Pas encore de musique</p>
-            <p className="text-xs text-gray-500 mt-1">Clique sur "Ajouter" pour importer tes MP3</p>
-          </div>
-        ) : (
-          <div className="space-y-2 max-h-48 overflow-auto">
-            {musicList.map((path, index) => (
-              <div
-                key={index}
-                onClick={() => selectMusic(path)}
-                className={`p-2.5 rounded-lg cursor-pointer transition-all flex items-center gap-2.5 ${
-                  selectedMusic === path 
-                    ? 'bg-pink-500/20 border border-pink-500/30' 
-                    : 'bg-white/5 hover:bg-white/10 border border-transparent'
-                }`}
-              >
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                  selectedMusic === path 
-                    ? 'bg-gradient-to-r from-pink-500 to-purple-500' 
-                    : 'bg-white/10'
-                }`}>
-                  <Music className="w-4 h-4 text-white" />
-                </div>
-                <span className="flex-1 text-sm text-gray-300 truncate">{getFileName(path)}</span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeMusic(path);
-                  }}
-                  className="p-1 hover:bg-white/10 rounded transition-colors opacity-0 group-hover:opacity-100"
-                >
-                  <Trash2 className="w-3.5 h-3.5 text-gray-500 hover:text-red-400" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Intro Sound Effects */}
-      <div>
-        <label className="text-xs font-medium text-gray-500 uppercase tracking-wider block mb-2">
-          Son d'intro
-        </label>
-        <p className="text-xs text-gray-600 mb-3">Ajoute des MP3 dans assets/sounds/ pour les voir ici</p>
+      {/* Sensitivity */}
+      <div className="p-4 bg-white/5 rounded-xl border border-white/10">
+        <label className="text-sm font-medium text-white block mb-3">Sensibilité</label>
         <div className="grid grid-cols-3 gap-2">
-          {SOUND_PRESETS.map((preset) => (
+          {([
+            { id: 'light', label: 'Léger', desc: '600ms+', color: 'green' },
+            { id: 'normal', label: 'Normal', desc: '400ms+', color: 'yellow' },
+            { id: 'aggressive', label: 'Agressif', desc: '250ms+', color: 'red' },
+          ] as const).map((opt) => (
             <button
-              key={preset.id}
-              className="p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 transition-all text-center"
-              title={preset.label}
+              key={opt.id}
+              onClick={() => setSensitivity(opt.id)}
+              className={`p-2 rounded-lg text-center transition-all ${
+                config.sensitivity === opt.id
+                  ? opt.color === 'green' ? 'bg-green-500/20 border-2 border-green-500/50 text-green-400'
+                  : opt.color === 'yellow' ? 'bg-yellow-500/20 border-2 border-yellow-500/50 text-yellow-400'
+                  : 'bg-red-500/20 border-2 border-red-500/50 text-red-400'
+                  : 'bg-white/5 border border-white/10 text-gray-400 hover:bg-white/10'
+              }`}
             >
-              <span className="text-lg">{preset.icon}</span>
-              <p className="text-[10px] text-gray-400 mt-1">{preset.label}</p>
+              <span className="text-xs font-medium block">{opt.label}</span>
+              <span className="text-[10px] opacity-60">{opt.desc}</span>
             </button>
           ))}
         </div>
       </div>
 
-      {/* Tips */}
+      {/* Transition style */}
+      <div className="p-4 bg-white/5 rounded-xl border border-white/10">
+        <label className="text-sm font-medium text-white block mb-3">Style de transition</label>
+        <div className="grid grid-cols-3 gap-2">
+          {([
+            { id: 'hard', label: 'Hard Cut', icon: '✂️' },
+            { id: 'zoom', label: 'Zoom', icon: '🔍' },
+            { id: 'crossfade', label: 'Fondu', icon: '🌊' },
+          ] as const).map((opt) => (
+            <button
+              key={opt.id}
+              onClick={() => setTransition(opt.id)}
+              className={`p-2.5 rounded-lg text-center transition-all ${
+                config.transition === opt.id
+                  ? 'bg-blue-500/20 border-2 border-blue-500/50 text-blue-400'
+                  : 'bg-white/5 border border-white/10 text-gray-400 hover:bg-white/10'
+              }`}
+            >
+              <span className="text-lg block mb-0.5">{opt.icon}</span>
+              <span className="text-[10px] font-medium">{opt.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Analyze button */}
+      <button
+        onClick={handleAnalyze}
+        disabled={analyzing || !segmentId}
+        className={`w-full py-3 rounded-xl font-medium text-sm transition-all flex items-center justify-center gap-2 ${
+          analyzing
+            ? 'bg-yellow-500/20 text-yellow-400 cursor-wait'
+            : 'bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 text-white'
+        }`}
+      >
+        {analyzing ? (
+          <>
+            <div className="w-4 h-4 border-2 border-yellow-400/30 border-t-yellow-400 rounded-full animate-spin" />
+            Analyse en cours...
+          </>
+        ) : (
+          <>
+            <Scissors className="w-4 h-4" />
+            Analyser les silences
+          </>
+        )}
+      </button>
+
+      {/* Analysis results */}
+      {analysis && (
+        <div className="p-4 bg-gradient-to-br from-yellow-500/10 to-orange-500/10 rounded-xl border border-yellow-500/20">
+          <div className="flex items-center gap-2 mb-3">
+            <Zap className="w-4 h-4 text-yellow-400" />
+            <span className="text-sm font-medium text-white">Résultats</span>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div className="bg-black/30 rounded-lg p-2.5 text-center">
+              <span className="text-lg font-bold text-yellow-400">{analysis.cuts_count}</span>
+              <span className="text-[10px] text-gray-400 block">cuts détectés</span>
+            </div>
+            <div className="bg-black/30 rounded-lg p-2.5 text-center">
+              <span className="text-lg font-bold text-green-400">-{analysis.time_saved_percent.toFixed(0)}%</span>
+              <span className="text-[10px] text-gray-400 block">temps économisé</span>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-gray-400">
+              {formatTime(analysis.original_duration)} → {formatTime(analysis.new_duration)}
+            </span>
+            <span className="text-yellow-400 font-medium">
+              -{analysis.time_saved.toFixed(1)}s
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Info box */}
       <div className="p-3 rounded-xl bg-blue-500/5 border border-blue-500/20">
-        <p className="text-xs text-blue-400">
-          💡 <strong>Astuce:</strong> La musique se synchronise automatiquement avec la lecture vidéo. 
-          Elle sera incluse dans l'export final.
+        <p className="text-[10px] text-blue-400/80">
+          <strong>💡 Jump Cuts</strong> : Détecte et supprime automatiquement les pauses et silences 
+          pour un contenu plus dynamique. Style viral à la MrBeast !
         </p>
       </div>
     </div>
   );
 }
 
-// Helper: get current subtitle word
-function getCurrentSubtitle(transcript: string, time: number, duration: number): string {
-  if (!transcript || duration <= 0) return '';
-  const words = transcript.split(' ');
-  const wordsPerSecond = words.length / duration;
-  const wordIndex = Math.floor(time * wordsPerSecond);
-  
-  // Show a few words around current position
-  const start = Math.max(0, wordIndex - 2);
-  const end = Math.min(words.length, wordIndex + 5);
-  return words.slice(start, end).join(' ');
+// Audio Mixer Panel Component
+function AudioMixerPanel({ 
+  audioTracks, 
+  onTracksChange 
+}: { 
+  audioTracks: AudioTrack[];
+  onTracksChange: (tracks: AudioTrack[]) => void;
+}) {
+  const handleVolumeChange = (trackId: string, volume: number) => {
+    onTracksChange(
+      audioTracks.map(t => t.id === trackId ? { ...t, volume } : t)
+    );
+  };
+
+  const handleMuteToggle = (trackId: string) => {
+    onTracksChange(
+      audioTracks.map(t => t.id === trackId ? { ...t, muted: !t.muted } : t)
+    );
+  };
+
+  const handleSoloToggle = (trackId: string) => {
+    onTracksChange(
+      audioTracks.map(t => t.id === trackId ? { ...t, solo: !t.solo } : t)
+    );
+  };
+
+  const handlePanChange = (trackId: string, pan: number) => {
+    onTracksChange(
+      audioTracks.map(t => t.id === trackId ? { ...t, pan } : t)
+    );
+  };
+
+  return (
+    <div className="p-4 space-y-4">
+      <h3 className="text-sm font-semibold text-white mb-4">Audio Mixer</h3>
+      
+      {audioTracks.map(track => (
+        <div key={track.id} className="bg-white/5 rounded-lg p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-white">{track.name}</span>
+            <div className="flex gap-1">
+              <button
+                onClick={() => handleMuteToggle(track.id)}
+                className={`px-2 py-1 text-xs rounded ${
+                  track.muted ? 'bg-red-500/30 text-red-400' : 'bg-white/10 text-gray-400'
+                }`}
+              >
+                M
+              </button>
+              <button
+                onClick={() => handleSoloToggle(track.id)}
+                className={`px-2 py-1 text-xs rounded ${
+                  track.solo ? 'bg-yellow-500/30 text-yellow-400' : 'bg-white/10 text-gray-400'
+                }`}
+              >
+                S
+              </button>
+            </div>
+          </div>
+          
+          {/* Volume slider */}
+          <div className="space-y-1">
+            <div className="flex justify-between text-xs text-gray-500">
+              <span>Volume</span>
+              <span>{track.volume}%</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={track.volume}
+              onChange={e => handleVolumeChange(track.id, parseInt(e.target.value))}
+              className="w-full accent-cyan-500"
+            />
+          </div>
+          
+          {/* Pan slider */}
+          <div className="space-y-1">
+            <div className="flex justify-between text-xs text-gray-500">
+              <span>Pan</span>
+              <span>{track.pan > 0 ? `R${track.pan}` : track.pan < 0 ? `L${Math.abs(track.pan)}` : 'C'}</span>
+            </div>
+            <input
+              type="range"
+              min={-100}
+              max={100}
+              value={track.pan}
+              onChange={e => handlePanChange(track.id, parseInt(e.target.value))}
+              className="w-full accent-purple-500"
+            />
+          </div>
+        </div>
+      ))}
+      
+      <div className="pt-4 border-t border-white/10">
+        <p className="text-xs text-gray-500">
+          Ajustez le volume et le panoramique de chaque piste audio.
+          M = Mute, S = Solo
+        </p>
+      </div>
+    </div>
+  );
 }
 
 function formatDuration(seconds: number): string {

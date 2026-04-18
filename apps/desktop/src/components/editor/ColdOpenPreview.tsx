@@ -5,7 +5,7 @@
  * allowing users to compare and select the best hook.
  */
 
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Play,
@@ -15,19 +15,9 @@ import {
   Sparkles,
   Clock,
   ArrowRight,
-  Shuffle,
   Trophy,
   Beaker,
 } from 'lucide-react';
-import { useClipEditorStore } from '@/store';
-
-interface ColdOpenHook {
-  start_time: number;
-  end_time: number;
-  text: string;
-  score: number;
-  reasons: string[];
-}
 
 interface TimelineItem {
   type: 'hook' | 'segment' | 'transition';
@@ -115,20 +105,6 @@ export function ColdOpenPreview({
       video.pause();
       setIsPlaying(false);
     }
-  };
-
-  // Format time
-  const formatTime = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  // Retention color
-  const getRetentionColor = (retention: number): string => {
-    if (retention >= 0.7) return 'text-emerald-400';
-    if (retention >= 0.5) return 'text-amber-400';
-    return 'text-gray-400';
   };
 
   return (
@@ -324,7 +300,7 @@ function VariationCard({
   // Calculate timeline visualization
   const timelineSegments = useMemo(() => {
     let currentOffset = 0;
-    return variation.timeline.map((item, i) => {
+    return variation.timeline.map((item, _i) => {
       const duration = item.duration || (item.end && item.start ? item.end - item.start : 0);
       const segment = {
         ...item,

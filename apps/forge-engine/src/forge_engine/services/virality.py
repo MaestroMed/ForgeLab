@@ -1,8 +1,13 @@
-"""Virality scoring service."""
+"""Virality scoring service with LLM-enhanced analysis."""
 
+import asyncio
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from forge_engine.services.llm_local import LocalLLMService, LLMScoreResult
+    from forge_engine.services.emotion_detection import EmotionDetectionService, EmotionAnalysisResult
 
 logger = logging.getLogger(__name__)
 
@@ -180,12 +185,85 @@ class ViralityScorer:
         (r"\b(blue side|red side|side selection|avantage)\b", "esport_community"),
     ]
     
-    def __init__(self):
+    def __init__(self, use_llm: bool = True):
         # Clip duration range: 30s to 3min30
         self.min_duration = 30       # Minimum 30s
         self.max_duration = 210      # Max 3min30
         self.optimal_duration = 60   # Sweet spot for TikTok
         self.target_durations = [30, 45, 60, 75, 90, 120, 150, 180, 210]  # Sliding windows
+        
+        # LLM integration
+        self.use_llm = use_llm
+        self._llm_service: Optional["LocalLLMService"] = None
+        self._llm_available: Optional[bool] = None
+        
+        # Emotion detection integration
+        self._emotion_service: Optional["EmotionDetectionService"] = None
+        self._emotion_available: Optional[bool] = None
+        self._emotion_cache: Dict[str, "EmotionAnalysisResult"] = {}
+    
+    async def _get_llm_service(self) -> Optional["LocalLLMService"]:
+        """Get LLM service if available."""
+        if not self.use_llm:
+            return None
+        
+        if self._llm_service is None:
+            try:
+                from forge_engine.services.llm_local import LocalLLMService
+                self._llm_service = LocalLLMService.get_instance()
+                self._llm_available = await self._llm_service.check_availability()
+            except Exception as e:
+                logger.warning(f"LLM service not available: {e}")
+                self._llm_available = False
+        
+        return self._llm_service if self._llm_available else None
+    
+    def _get_emotion_service(self) -> Optional["EmotionDetectionService"]:
+        """Get emotion detection service if available."""
+        if self._emotion_service is None:
+            try:
+                from forge_engine.services.emotion_detection import EmotionDetectionService
+                self._emotion_service = EmotionDetectionService.get_instance()
+                self._emotion_available = self._emotion_service.is_available()
+            except Exception as e:
+                logger.warning(f"Emotion detection service not available: {e}")
+                self._emotion_available = False
+        
+        return self._emotion_service if self._emotion_available else None
+    
+    async def analyze_emotions_for_video(
+        self,
+        video_path: str,
+        duration: float,
+        cache_key: Optional[str] = None
+    ) -> Optional["EmotionAnalysisResult"]:
+        """
+        Analyze emotions for a video and cache the result.
+        
+        Args:
+            video_path: Path to video file
+            duration: Video duration
+            cache_key: Optional cache key (e.g., project_id)
+        
+        Returns:
+            EmotionAnalysisResult or None
+        """
+        # Check cache
+        if cache_key and cache_key in self._emotion_cache:
+            return self._emotion_cache[cache_key]
+        
+        service = self._get_emotion_service()
+        if not service:
+            return None
+        
+        try:
+            result = await service.analyze_video(video_path, duration)
+            if result and cache_key:
+                self._emotion_cache[cache_key] = result
+            return result
+        except Exception as e:
+            logger.error(f"Emotion analysis failed: {e}")
+            return None
     
     def generate_segments(
         self,
@@ -295,7 +373,7 @@ class ViralityScorer:
         audio_data: Optional[Dict[str, Any]] = None,
         scene_data: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
-        """Score all candidate segments."""
+        """Score all candidate segments (sync wrapper)."""
         scored = []
         
         for segment in segments:
@@ -311,6 +389,164 @@ class ViralityScorer:
         scored.sort(key=lambda x: x["score"]["total"], reverse=True)
         
         return scored
+    
+    async def score_segments_async(
+        self,
+        segments: List[Dict[str, Any]],
+        transcript_data: Optional[Dict[str, Any]] = None,
+        audio_data: Optional[Dict[str, Any]] = None,
+        scene_data: Optional[Dict[str, Any]] = None,
+        emotion_data: Optional["EmotionAnalysisResult"] = None,
+        use_llm: bool = True,
+        use_emotions: bool = True
+    ) -> List[Dict[str, Any]]:
+        """Score all candidate segments with optional LLM and emotion enhancement."""
+        # First, apply heuristic scoring
+        scored = self.score_segments(segments, transcript_data, audio_data, scene_data)
+        
+        # Enhance with emotion data if available
+        if use_emotions and emotion_data:
+            logger.info("Enhancing segments with emotion analysis...")
+            emotion_service = self._get_emotion_service()
+            if emotion_service:
+                for segment in scored:
+                    emotion_scores = emotion_service.get_emotion_score_for_segment(
+                        emotion_data,
+                        segment.get("start_time", 0),
+                        segment.get("end_time", 0)
+                    )
+                    self._merge_emotion_scores(segment, emotion_scores)
+        
+        # If LLM is enabled, enhance top segments with LLM analysis
+        if use_llm and self.use_llm:
+            llm = await self._get_llm_service()
+            if llm:
+                # Only score top 50 segments with LLM to save time
+                top_segments = scored[:50]
+                logger.info(f"Enhancing {len(top_segments)} segments with LLM scoring...")
+                
+                llm_results = await llm.batch_score_segments(
+                    [{"transcript": s.get("transcript", ""), "duration": s.get("duration", 60)} 
+                     for s in top_segments],
+                    max_concurrent=3
+                )
+                
+                # Merge LLM scores with heuristic scores
+                for i, (segment, llm_result) in enumerate(zip(top_segments, llm_results)):
+                    if llm_result:
+                        self._merge_llm_scores(segment, llm_result)
+                
+                # Re-sort after LLM enhancement
+                scored.sort(key=lambda x: x["score"]["total"], reverse=True)
+                logger.info("LLM scoring complete")
+        
+        return scored
+    
+    def _merge_emotion_scores(
+        self,
+        segment: Dict[str, Any],
+        emotion_scores: Dict[str, Any]
+    ) -> None:
+        """Merge emotion detection scores into segment score."""
+        score = segment.get("score", {})
+        
+        emotion_score = emotion_scores.get("emotion_score", 0)
+        emotion_tags = emotion_scores.get("emotion_tags", [])
+        peak_emotion = emotion_scores.get("peak_emotion")
+        
+        # Add emotion contribution to tension/surprise score
+        # Blend: 70% original, 30% emotion
+        original_tension = score.get("tension_surprise", 0)
+        score["tension_surprise"] = (original_tension * 0.7) + (emotion_score * 0.3)
+        score["tension_surprise"] = min(score["tension_surprise"], 15)
+        
+        # Recalculate total
+        score["total"] = min(100, (
+            score.get("hook_strength", 0) +
+            score.get("payoff", 0) +
+            score.get("humour_reaction", 0) +
+            score.get("tension_surprise", 0) +
+            score.get("clarity_autonomy", 0) +
+            score.get("rhythm", 0)
+        ))
+        
+        # Add emotion metadata
+        score["emotion_enhanced"] = True
+        score["peak_emotion"] = peak_emotion
+        
+        # Merge tags
+        existing_tags = set(score.get("tags", []))
+        existing_tags.update(emotion_tags)
+        score["tags"] = list(existing_tags)[:10]
+        
+        # Add reason if significant emotion detected
+        if peak_emotion and peak_emotion != "neutral":
+            reason = f"Peak emotion: {peak_emotion}"
+            if reason not in score.get("reasons", []):
+                score["reasons"] = score.get("reasons", [])[:4] + [reason]
+        
+        segment["score"] = score
+    
+    def _merge_llm_scores(
+        self, 
+        segment: Dict[str, Any], 
+        llm_result: "LLMScoreResult"
+    ) -> None:
+        """Merge LLM scores with heuristic scores."""
+        score = segment.get("score", {})
+        
+        # Calculate LLM contribution (weighted average)
+        # LLM scores are 0-10, scale to match our weights
+        llm_humor = (llm_result.humor_score / 10) * 15  # Max 15 for humour
+        llm_surprise = (llm_result.surprise_score / 10) * 15  # Max 15 for tension
+        llm_hook = (llm_result.hook_score / 10) * 25  # Max 25 for hook
+        llm_clarity = (llm_result.clarity_score / 10) * 15  # Max 15 for clarity
+        
+        # Blend heuristic and LLM scores (60% heuristic, 40% LLM)
+        blend_ratio = 0.4
+        
+        score["humour_reaction"] = (
+            score.get("humour_reaction", 0) * (1 - blend_ratio) + 
+            llm_humor * blend_ratio
+        )
+        score["tension_surprise"] = (
+            score.get("tension_surprise", 0) * (1 - blend_ratio) + 
+            llm_surprise * blend_ratio
+        )
+        score["hook_strength"] = (
+            score.get("hook_strength", 0) * (1 - blend_ratio) + 
+            llm_hook * blend_ratio
+        )
+        score["clarity_autonomy"] = (
+            score.get("clarity_autonomy", 0) * (1 - blend_ratio) + 
+            llm_clarity * blend_ratio
+        )
+        
+        # Recalculate total
+        score["total"] = min(100, (
+            score.get("hook_strength", 0) +
+            score.get("payoff", 0) +
+            score.get("humour_reaction", 0) +
+            score.get("tension_surprise", 0) +
+            score.get("clarity_autonomy", 0) +
+            score.get("rhythm", 0)
+        ))
+        
+        # Add LLM metadata
+        score["llm_enhanced"] = True
+        score["llm_reasoning"] = llm_result.reasoning
+        score["llm_engagement"] = llm_result.engagement_score
+        
+        # Merge LLM tags with existing tags
+        existing_tags = set(score.get("tags", []))
+        llm_tags = set(llm_result.tags)
+        score["tags"] = list(existing_tags | llm_tags)[:10]
+        
+        # Add reasoning to existing reasons
+        if llm_result.reasoning and llm_result.reasoning not in score.get("reasons", []):
+            score["reasons"] = score.get("reasons", [])[:4] + [f"LLM: {llm_result.reasoning}"]
+        
+        segment["score"] = score
     
     def _score_segment(
         self,

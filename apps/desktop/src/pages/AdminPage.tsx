@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
   Eye, RefreshCw, Cpu, HardDrive, MemoryStick, Activity,
   AlertTriangle, CheckCircle, XCircle, Clock, Trash2,
-  Play, Square, RotateCcw, Terminal, Loader2, Zap
+  Play, RotateCcw, Terminal, Loader2, Zap
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';

@@ -1,5 +1,5 @@
-import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import { useLayoutEditorStore, useSubtitleStyleStore } from '@/store';
+import { useRef, useEffect, useState } from 'react';
+import { useLayoutEditorStore } from '@/store';
 import { motion, useDragControls } from 'framer-motion';
 import { KaraokeSubtitles, WordTiming, parseTranscriptToWords } from './KaraokeSubtitles';
 import { useVideoSync, VideoSyncController } from '@/hooks/useVideoSync';
@@ -25,7 +25,7 @@ export function Canvas9x16({
   currentTime,
   isPlaying,
   currentSubtitle,
-  highlightedWord,
+  highlightedWord: _highlightedWord,
   faceDetections = [],
   wordTimings = [],
   clipStartTime = 0,
@@ -37,7 +37,6 @@ export function Canvas9x16({
 }: Canvas9x16Props) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const { zones, selectedZoneId, setSelectedZone, updateZone } = useLayoutEditorStore();
-  const { style } = useSubtitleStyleStore();
   const [canvasRect, setCanvasRect] = useState<DOMRect | null>(null);
 
   // Use unified video sync controller
@@ -94,72 +93,12 @@ export function Canvas9x16({
   // Register zone videos for sync
   useEffect(() => {
     const zoneVideos = document.querySelectorAll('video.zone-video');
-    const cleanups: (() => void)[] = [];
-    
+
     zoneVideos.forEach((el) => {
-      const cleanup = syncVideo(el as HTMLVideoElement);
-      if (cleanup) cleanups.push(cleanup);
+      syncVideo(el as HTMLVideoElement);
     });
-    
-    return () => {
-      cleanups.forEach(fn => fn());
-    };
   }, [syncVideo, zones]);
 
-
-  const renderSubtitle = () => {
-    if (!currentSubtitle) return null;
-
-    const positionClass = {
-      bottom: 'bottom-16',
-      center: 'top-1/2 -translate-y-1/2',
-      top: 'top-16',
-    }[style.position];
-
-    const words = currentSubtitle.split(' ');
-
-    return (
-      <div className={`absolute left-8 right-8 ${positionClass} text-center z-20 pointer-events-none`}>
-        <motion.p
-          initial={{ opacity: 0.8, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="inline-block px-4 py-2 rounded-lg"
-          style={{
-            fontFamily: style.fontFamily,
-            fontSize: `${style.fontSize / 2.5}px`, // Scale down for preview
-            fontWeight: style.fontWeight,
-            color: style.color,
-            backgroundColor: style.backgroundColor,
-            textShadow: style.outlineWidth > 0
-              ? `
-                -${style.outlineWidth}px -${style.outlineWidth}px 0 ${style.outlineColor},
-                ${style.outlineWidth}px -${style.outlineWidth}px 0 ${style.outlineColor},
-                -${style.outlineWidth}px ${style.outlineWidth}px 0 ${style.outlineColor},
-                ${style.outlineWidth}px ${style.outlineWidth}px 0 ${style.outlineColor}
-              `
-              : 'none',
-            lineHeight: 1.4,
-          }}
-        >
-          {words.map((word, i) => {
-            const isHighlighted = word.toLowerCase().replace(/[.,!?]/g, '') === highlightedWord?.toLowerCase().replace(/[.,!?]/g, '');
-            return (
-              <span
-                key={i}
-                className="transition-all duration-100 inline-block mx-1"
-                style={{
-                  color: isHighlighted ? style.highlightColor : style.color,
-                  transform: isHighlighted && style.animation === 'pop' ? 'scale(1.2)' : 'scale(1)',
-                }}
-              >
-                {word}
-              </span>
-            );
-          })}
-        </motion.p>
-      </div>
-    );
-  };
 
   return (
     <div
@@ -237,7 +176,7 @@ function DraggableZone({
   isSelected: boolean, 
   videoSrc: string,
   canvasRect: DOMRect | null,
-  faceRect?: { x: number, y: number, width: number, height: number } | null,
+  faceRect?: { x: number; y: number; width: number; height: number; center?: { x: number; y: number }; zoomFactor?: number } | null,
   onSelect: () => void,
   onUpdate: (u: any) => void
 }) {

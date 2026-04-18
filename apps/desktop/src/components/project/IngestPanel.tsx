@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Upload, CheckCircle, Film, Music, Clock, Layers } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
@@ -6,7 +6,7 @@ import { Card, CardContent } from '@/components/ui/Card';
 import { Progress } from '@/components/ui/Progress';
 import { api } from '@/lib/api';
 import { formatDuration } from '@/lib/utils';
-import { useJobsStore } from '@/store';
+import { useJobsStore, useToastStore } from '@/store';
 import { useShallow } from 'zustand/react/shallow';
 
 interface IngestPanelProps {
@@ -27,6 +27,7 @@ interface IngestPanelProps {
 }
 
 export default function IngestPanel({ project, onJobStart, onComplete }: IngestPanelProps) {
+  const { addToast } = useToastStore();
   // Use shallow selector to ensure re-renders when job properties change
   const activeJob = useJobsStore(
     useShallow((state) => {
@@ -56,6 +57,11 @@ export default function IngestPanel({ project, onJobStart, onComplete }: IngestP
       }
     } catch (error) {
       console.error('Ingest failed:', error);
+      addToast({
+        type: 'error',
+        title: 'Erreur d\'ingestion',
+        message: error instanceof Error ? error.message : 'Impossible de démarrer l\'ingestion',
+      });
     }
   };
 

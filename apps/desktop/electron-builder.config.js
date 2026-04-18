@@ -35,8 +35,20 @@ module.exports = {
     '!**/node_modules/.bin',
   ],
   
-  // Extra resources (not in asar)
+  // Extra resources (not in asar) - ALL-IN-ONE BUNDLE
   extraResources: [
+    // Python embedded with all dependencies
+    {
+      from: 'resources/python',
+      to: 'python',
+      filter: ['**/*', '!**/__pycache__/**', '!**/get-pip.py'],
+    },
+    // FFmpeg binaries
+    {
+      from: 'resources/ffmpeg',
+      to: 'ffmpeg',
+      filter: ['ffmpeg.exe', 'ffprobe.exe'],  // Skip ffplay to save space
+    },
     // FORGE Engine (Python backend)
     {
       from: '../forge-engine/src',
@@ -47,15 +59,17 @@ module.exports = {
       from: '../forge-engine/requirements.txt',
       to: 'forge-engine/requirements.txt',
     },
-    {
-      from: '../forge-engine/requirements-minimal.txt',
-      to: 'forge-engine/requirements-minimal.txt',
-    },
     // Assets (audio, music, etc.)
     {
       from: '../../assets',
       to: 'assets',
       filter: ['**/*', '!**/.gitkeep'],
+    },
+    // Fonts (for FFmpeg subtitle rendering)
+    {
+      from: 'resources/fonts',
+      to: 'fonts',
+      filter: ['*.ttf', '*.woff2'],
     },
   ],
   

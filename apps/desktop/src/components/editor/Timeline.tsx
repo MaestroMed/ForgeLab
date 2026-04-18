@@ -24,7 +24,6 @@ export function Timeline({
     playbackTime,
     trimStart,
     trimEnd,
-    zoom,
     setTrimRange,
     setPlaybackTime,
   } = useClipEditorStore();

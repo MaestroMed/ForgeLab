@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Filter, SortAsc, SortDesc, Clock, Zap, Grid, List } from 'lucide-react';
+import { Filter, SortAsc, SortDesc, Clock, Zap, Grid, List, Play, Scissors } from 'lucide-react';
 import { SegmentCard } from './SegmentCard';
 
 interface Segment {
@@ -15,6 +15,8 @@ interface Segment {
     total: number;
     hook_strength: number;
     payoff: number;
+    tension_surprise?: number;
+    humour_reaction?: number;
     reasons: string[];
     tags: string[];
   };
@@ -329,26 +331,6 @@ function formatDuration(seconds: number): string {
   const secs = Math.floor(seconds % 60);
   return `${mins}m ${secs}s`;
 }
-
-interface Segment {
-  id: string;
-  start_time: number;
-  end_time: number;
-  duration: number;
-  transcript?: string;
-  topic_label?: string;
-  hook_text?: string;
-  score?: {
-    total: number;
-    hook_strength: number;
-    payoff: number;
-    tension_surprise?: number;
-    humour_reaction?: number;
-    reasons: string[];
-    tags: string[];
-  };
-}
-
 
 
 

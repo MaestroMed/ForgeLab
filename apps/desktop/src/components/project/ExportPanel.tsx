@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Download, Play, Pause, FolderOpen, CheckCircle, Clock, FileVideo, X, Trash2, Volume2, VolumeX, Maximize2, RefreshCw } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Download, Play, Pause, FolderOpen, CheckCircle, X, Volume2, VolumeX, RefreshCw } from 'lucide-react';
+import { ENGINE_BASE_URL } from '@/lib/config';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Progress } from '@/components/ui/Progress';
-import { api } from '@/lib/api';
-import { formatDuration, formatFileSize, formatDate } from '@/lib/utils';
+import { SkeletonRow } from '@/components/ui/Skeleton';
+import { useArtifacts, QUERY_KEYS } from '@/lib/queries';
+import { formatFileSize, formatDate } from '@/lib/utils';
 import { useJobsStore, useToastStore } from '@/store';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -27,11 +30,31 @@ interface Artifact {
 }
 
 export default function ExportPanel({ project }: ExportPanelProps) {
+  const queryClient = useQueryClient();
   const { addToast } = useToastStore();
-  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
-  const [loading, setLoading] = useState(true);
   const [selectedVideo, setSelectedVideo] = useState<Artifact | null>(null);
   const previousJobStatusRef = useRef<Record<string, string>>({});
+
+  // React Query: fetch artifacts
+  const {
+    data: artifactsData,
+    isLoading: loading,
+    isError: artifactsError,
+    refetch: refetchArtifacts,
+  } = useArtifacts(project.id);
+
+  const artifacts: Artifact[] = (artifactsData?.data || []) as Artifact[];
+
+  // Show error toast when artifacts fail to load
+  useEffect(() => {
+    if (artifactsError) {
+      addToast({
+        type: 'error',
+        title: 'Erreur de chargement',
+        message: 'Impossible de charger les exports.',
+      });
+    }
+  }, [artifactsError, addToast]);
 
   // Get export jobs for this project via WebSocket-synced store
   const exportJobs = useJobsStore(
@@ -42,31 +65,16 @@ export default function ExportPanel({ project }: ExportPanelProps) {
 
   const activeJob = exportJobs.find((j) => j.status === 'running');
 
-  // Watch for job completion via WebSocket
+  // Watch for job completion via WebSocket — invalidate artifacts cache
   useEffect(() => {
     exportJobs.forEach((job) => {
       const prevStatus = previousJobStatusRef.current[job.id];
       if (prevStatus === 'running' && job.status === 'completed') {
-        loadArtifacts();
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.artifacts(project.id) });
       }
       previousJobStatusRef.current[job.id] = job.status;
     });
-  }, [exportJobs]);
-
-  useEffect(() => {
-    loadArtifacts();
-  }, [project.id]);
-
-  const loadArtifacts = async () => {
-    try {
-      const response = await api.listArtifacts(project.id);
-      setArtifacts(response.data || []);
-    } catch (error) {
-      console.error('Failed to load artifacts:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  }, [exportJobs, queryClient, project.id]);
 
   const openInFolder = async (path: string) => {
     if (window.forge) {
@@ -125,7 +133,7 @@ export default function ExportPanel({ project }: ExportPanelProps) {
               Exports ({Object.keys(groupedArtifacts).length})
             </h3>
             <button
-              onClick={loadArtifacts}
+              onClick={() => refetchArtifacts()}
               className="p-2 rounded-lg hover:bg-white/5 transition-colors text-gray-400 hover:text-gray-200"
               title="Actualiser"
             >
@@ -136,10 +144,7 @@ export default function ExportPanel({ project }: ExportPanelProps) {
           {loading ? (
             <div className="space-y-4">
               {[...Array(3)].map((_, i) => (
-                <div
-                  key={i}
-                  className="h-24 bg-[var(--bg-tertiary)] rounded-xl animate-pulse"
-                />
+                <SkeletonRow key={i} />
               ))}
             </div>
           ) : Object.keys(groupedArtifacts).length === 0 ? (
@@ -215,7 +220,7 @@ function ExportCard({
   if (!video) return null;
 
   // Use backend API to serve videos (works in both Electron and browser)
-  const baseUrl = window.forge?.getApiUrl?.() || 'http://localhost:8420';
+  const baseUrl = ENGINE_BASE_URL;
   const videoUrl = `${baseUrl}/v1/projects/${projectId}/artifacts/${video.id}/file`;
   const coverUrl = cover ? `${baseUrl}/v1/projects/${projectId}/artifacts/${cover.id}/file` : null;
 
@@ -328,7 +333,7 @@ function VideoPlayerModal({
   const [isMuted, setIsMuted] = useState(false);
 
   // Use backend API to serve videos
-  const baseUrl = window.forge?.getApiUrl?.() || 'http://localhost:8420';
+  const baseUrl = ENGINE_BASE_URL;
   const videoUrl = `${baseUrl}/v1/projects/${projectId}/artifacts/${video.id}/file`;
 
   useEffect(() => {

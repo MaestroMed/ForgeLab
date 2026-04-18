@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # App info
     VERSION: str = "1.0.0"
     APP_NAME: str = "FORGE Engine"
-    DEBUG: bool = True  # Dev mode
+    DEBUG: bool = False  # Set FORGE_DEBUG=true in .env for dev mode
     
     # Server
     HOST: str = "127.0.0.1"
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     FFMPEG_PROXY_PRESET: str = "p1"  # Ultra-fast for proxy
     
     # Whisper TURBO - Auto-optimized based on GPU VRAM
-    WHISPER_MODEL: str = "large-v3"  # Best quality (or "distil-large-v3" for speed)
+    WHISPER_MODEL: str = "large-v3"  # Use FORGE_WHISPER_MODEL=small in .env for fast testing
     WHISPER_DEVICE: str = "cuda"  # GPU enabled
     WHISPER_COMPUTE_TYPE: str = "int8_float16"  # INT8 quantization (faster + less VRAM)
     WHISPER_LANGUAGE: str = "fr"  # Default language (FR for streaming content)
@@ -65,10 +65,52 @@ class Settings(BaseSettings):
     OUTPUT_HEIGHT: int = 1920
     OUTPUT_FPS: int = 30
     OUTPUT_CRF: int = 23
+
+    # Export pipeline
+    EXPORT_SINGLE_PASS: bool = True  # Use single-pass FFmpeg pipeline (faster)
+
+    # Platform-specific export presets
+    PLATFORM_PRESETS: dict = {
+        "tiktok": {
+            "width": 1080, "height": 1920, "fps": 30,
+            "max_duration": 60, "crf": 23,
+            "codec": "libx264", "audio_bitrate": "192k",
+            "target_lufs": -14, "max_file_mb": 287,
+            "description": "TikTok (max 60s, 287MB)",
+        },
+        "youtube_shorts": {
+            "width": 1080, "height": 1920, "fps": 30,
+            "max_duration": 60, "crf": 20,
+            "codec": "libx264", "audio_bitrate": "192k",
+            "target_lufs": -14, "max_file_mb": 256000,
+            "description": "YouTube Shorts (max 60s)",
+        },
+        "instagram_reels": {
+            "width": 1080, "height": 1920, "fps": 30,
+            "max_duration": 90, "crf": 23,
+            "codec": "libx264", "audio_bitrate": "128k",
+            "target_lufs": -16, "max_file_mb": 4096,
+            "description": "Instagram Reels (max 90s, 4GB)",
+        },
+        "twitter": {
+            "width": 1080, "height": 1920, "fps": 30,
+            "max_duration": 140, "crf": 25,
+            "codec": "libx264", "audio_bitrate": "128k",
+            "target_lufs": -16, "max_file_mb": 512,
+            "description": "Twitter/X (max 140s, 512MB)",
+        },
+    }
+
+    # Local LLM (Ollama)
+    LLM_ENABLED: bool = True
+    LLM_OLLAMA_URL: str = "http://127.0.0.1:11434"
+    LLM_MODEL: str = "llama3.2"
+    LLM_TIMEOUT: int = 120
+    LLM_MAX_CONCURRENT: int = 3
     
     class Config:
         env_prefix = "FORGE_"
-        env_file = ".env"
+        env_file = Path(__file__).parent.parent.parent.parent / ".env"  # apps/forge-engine/.env
         case_sensitive = True
     
     def __init__(self, **kwargs):
@@ -98,10 +140,6 @@ if os.environ.get("FORGE_FORCE_CPU"):
     settings.FORCE_CPU = True
     settings.WHISPER_DEVICE = "cpu"
     settings.WHISPER_COMPUTE_TYPE = "float32"
-
-
-
-
 
 
 

@@ -7,7 +7,7 @@ FORGE/LAB est un atelier de viralité local qui transforme des VODs (streams, po
 ## Architecture
 
 ### FORGE Engine (Backend Python)
-- FastAPI sur localhost:7860
+- FastAPI sur localhost:8420
 - SQLite pour la persistance
 - Job queue locale asynchrone
 - FFmpeg pour le traitement vidéo
@@ -124,7 +124,7 @@ Variables d'environnement :
 - `FORGE_LIBRARY_PATH` - Chemin du dossier library
 - `FORGE_FORCE_CPU` - Forcer le mode CPU
 - `FORGE_WHISPER_MODEL` - Modèle Whisper (default: large-v3)
-- `FORGE_PORT` - Port du serveur (default: 7860)
+- `FORGE_PORT` - Port du serveur (default: 8420)
 
 
 

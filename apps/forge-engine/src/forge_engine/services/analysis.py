@@ -14,6 +14,7 @@ from forge_engine.core.database import async_session_maker
 from forge_engine.core.jobs import Job, JobManager
 from forge_engine.models import Project, Segment
 from forge_engine.services.transcription import TranscriptionService
+from forge_engine.services.dictionary import get_dictionary_service
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,8 @@ class AnalysisService:
         analyze_audio: bool = True,
         detect_faces: bool = True,
         score_segments: bool = True,
-        custom_dictionary: Optional[List[str]] = None
+        custom_dictionary: Optional[List[str]] = None,
+        dictionary_name: Optional[str] = None  # Named dictionary (e.g. "etostark")
     ) -> Dict[str, Any]:
         """Run the analysis pipeline."""
         job_manager = JobManager.get_instance()
@@ -152,13 +154,47 @@ class AnalysisService:
                         transcribe_language = language or settings.WHISPER_LANGUAGE
                         logger.info("Transcribing with language: %s", transcribe_language)
                         
+                        # Load dictionary if specified
+                        whisper_prompt = None
+                        dict_hotwords = []
+                        if dictionary_name:
+                            dict_service = get_dictionary_service()
+                            whisper_prompt = dict_service.get_whisper_prompt(dictionary_name)
+                            dict_hotwords = dict_service.get_hotwords(dictionary_name)
+                            logger.info("Using dictionary '%s' with %d hotwords", dictionary_name, len(dict_hotwords))
+                        
+                        # Merge custom_dictionary with hotwords from named dictionary
+                        all_dictionary = list(set((custom_dictionary or []) + dict_hotwords))
+                        
                         transcript_data = await self.transcription.transcribe(
                             project.audio_path,
                             language=transcribe_language,
                             word_timestamps=True,
-                            custom_dictionary=custom_dictionary,
+                            initial_prompt=whisper_prompt,
+                            custom_dictionary=all_dictionary if all_dictionary else None,
                             progress_callback=transcribe_progress
                         )
+                        
+                        # Apply dictionary corrections to transcript
+                        if dictionary_name and transcript_data.get("segments"):
+                            dict_service = get_dictionary_service()
+                            for segment in transcript_data["segments"]:
+                                # Correct segment text
+                                if segment.get("text"):
+                                    segment["text"] = dict_service.apply_corrections(
+                                        segment["text"], dictionary_name
+                                    )
+                                # Correct word-level timing
+                                if segment.get("words"):
+                                    segment["words"] = dict_service.apply_corrections_to_words(
+                                        segment["words"], dictionary_name
+                                    )
+                            # Correct full text
+                            if transcript_data.get("text"):
+                                transcript_data["text"] = dict_service.apply_corrections(
+                                    transcript_data["text"], dictionary_name
+                                )
+                            logger.info("Applied dictionary corrections to transcript")
                         
                         # Validate transcription result
                         if not transcript_data or not transcript_data.get("segments"):

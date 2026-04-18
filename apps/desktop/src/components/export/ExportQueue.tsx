@@ -5,18 +5,16 @@ import {
   XCircle, 
   Clock, 
   Loader2, 
-  Folder, 
+  Folder,
   Play,
   Trash2,
   X,
   FileVideo,
-  ExternalLink,
 } from 'lucide-react';
 import { useJobsStore } from '@/store';
 import { useShallow } from 'zustand/react/shallow';
 import { Progress } from '@/components/ui/Progress';
 import { Button } from '@/components/ui/Button';
-import { formatDuration } from '@/lib/utils';
 
 interface ExportQueueProps {
   projectId?: string;
@@ -44,16 +42,16 @@ export default function ExportQueue({ projectId }: ExportQueueProps) {
   const hasJobs = exportJobs.length > 0;
 
   const handleOpenFolder = (outputPath?: string) => {
-    if (outputPath && window.electron) {
+    if (outputPath && (window as any).electron) {
       // Open folder in file explorer
-      window.electron.shell.showItemInFolder(outputPath);
+      (window as any).electron.shell.showItemInFolder(outputPath);
     }
   };
 
   const handlePlayVideo = (outputPath?: string) => {
-    if (outputPath && window.electron) {
+    if (outputPath && (window as any).electron) {
       // Open video with default player
-      window.electron.shell.openPath(outputPath);
+      (window as any).electron.shell.openPath(outputPath);
     }
   };
 

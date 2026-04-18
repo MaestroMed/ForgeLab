@@ -1,13 +1,17 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useHotkeys } from 'react-hotkeys-hook';
-import { Plus, Search, FolderOpen, Clock, Film, Layers, TrendingUp, Calendar, Link2, MoreVertical, Play, Trash2, FolderOpen as FolderIcon, Pencil } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { ENGINE_BASE_URL } from '@/lib/config';
+import { Plus, Search, FolderOpen, Film, Layers, TrendingUp, Calendar, Link2, MoreVertical, Play, Trash2, FolderOpen as FolderIcon } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
+import { SkeletonProjectCard } from '@/components/ui/Skeleton';
 import { UrlImportModal } from '@/components/import/UrlImportModal';
 import ProjectProgress from '@/components/project/ProjectProgress';
 import { api } from '@/lib/api';
+import { useProjects, QUERY_KEYS } from '@/lib/queries';
 import { formatDuration } from '@/lib/utils';
 import { useToastStore, useJobsStore, useProjectsStore } from '@/store';
 
@@ -26,52 +30,47 @@ interface Project {
 
 export default function HomePage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { addToast } = useToastStore();
   const { addJob } = useJobsStore();
   const { projects: storeProjects, lastUpdate, setProjects: setStoreProjects } = useProjectsStore();
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [importing, setImporting] = useState(false);
   const [urlModalOpen, setUrlModalOpen] = useState(false);
-  
-  // Keyboard shortcuts
+
+  // React Query: fetch projects
+  const { data: projectsData, isLoading: loading, isError: projectsError } = useProjects(search || undefined);
+  const projects: Project[] = (projectsData?.data?.items || []) as Project[];
+
+  // Show error toast when projects fail to load
+  useEffect(() => {
+    if (projectsError) {
+      addToast({
+        type: 'error',
+        title: 'Erreur de chargement',
+        message: 'Impossible de charger les projets. Vérifiez que le serveur est démarré.',
+      });
+    }
+  }, [projectsError, addToast]);
+
+  // Sync to global store for WebSocket updates compatibility
+  useEffect(() => {
+    if (projects.length > 0) {
+      setStoreProjects(projects);
+    }
+  }, [projects, setStoreProjects]);
+
+  // Keyword shortcuts
   useHotkeys('ctrl+i, meta+i', () => handleImport(), { preventDefault: true });
   useHotkeys('ctrl+u, meta+u', () => setUrlModalOpen(true), { preventDefault: true });
-
-  const loadProjects = useCallback(async () => {
-    try {
-      const response = await api.listProjects(1, 50, search || undefined);
-      const loadedProjects = response.data?.items || [];
-      setProjects(loadedProjects);
-      // Also update the global store so WebSocket updates work
-      setStoreProjects(loadedProjects);
-    } catch (error) {
-      console.error('Failed to load projects:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [search, setStoreProjects]);
-
-  useEffect(() => {
-    loadProjects();
-  }, [loadProjects]);
 
   // Sync local state with store updates from WebSocket
   useEffect(() => {
     if (lastUpdate > 0 && storeProjects.length > 0) {
-      // Merge store updates into local projects
-      setProjects((prev) => {
-        const updated = prev.map((p) => {
-          const storeProject = storeProjects.find((sp) => sp.id === p.id);
-          return storeProject ? { ...p, ...storeProject } : p;
-        });
-        // Add any new projects from store that aren't in local state
-        const newProjects = storeProjects.filter((sp) => !prev.find((p) => p.id === sp.id));
-        return [...updated, ...newProjects as Project[]];
-      });
+      // Invalidate queries to pick up WebSocket-driven changes
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
     }
-  }, [lastUpdate, storeProjects]);
+  }, [lastUpdate, storeProjects, queryClient]);
 
   const handleImport = async () => {
     if (!window.forge) {
@@ -104,9 +103,12 @@ export default function HomePage() {
         message: `"${projectName}" a été importé`,
       });
 
+      // Invalidate projects cache
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
+
       // Start ingest
       const ingestResponse = await api.ingestProject(project.id);
-      
+
       if (ingestResponse.data?.jobId) {
         addJob({
           id: ingestResponse.data.jobId,
@@ -173,10 +175,7 @@ export default function HomePage() {
         {loading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {[...Array(8)].map((_, i) => (
-              <div
-                key={i}
-                className="h-48 bg-[var(--bg-tertiary)] rounded-xl animate-pulse"
-              />
+              <SkeletonProjectCard key={i} />
             ))}
           </div>
         ) : projects.length === 0 ? (
@@ -194,7 +193,7 @@ export default function HomePage() {
                 index={index}
                 onClick={() => navigate(`/project/${project.id}`)}
                 onDelete={() => {
-                  setProjects((prev) => prev.filter((p) => p.id !== project.id));
+                  queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
                 }}
               />
             ))}
@@ -207,7 +206,7 @@ export default function HomePage() {
         isOpen={urlModalOpen}
         onClose={() => setUrlModalOpen(false)}
         onImportComplete={(projectId) => {
-          loadProjects();
+          queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
           navigate(`/project/${projectId}`);
         }}
       />
@@ -311,8 +310,7 @@ function ProjectCard({
   };
 
   // Use API endpoint for thumbnails (works in both web and Electron)
-  const baseUrl = window.forge?.getApiUrl?.() || 'http://localhost:8420';
-  const thumbnailUrl = `${baseUrl}/v1/projects/${project.id}/thumbnail?time=${(project.duration || 60) / 2}&width=320&height=180`;
+  const thumbUrl = `${ENGINE_BASE_URL}/v1/projects/${project.id}/thumbnail?time=${(project.duration || 60) / 2}&width=320&height=180`;
 
   return (
     <motion.div
@@ -327,7 +325,7 @@ function ProjectCard({
         {/* Thumbnail */}
         <div className="aspect-video bg-[var(--bg-tertiary)] relative overflow-hidden flex items-center justify-center">
           <img
-            src={thumbnailUrl}
+            src={thumbUrl}
             alt={project.name}
             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
             onError={(e) => {

@@ -60,6 +60,7 @@ class Job:
     message: str = ""
     error: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)  # For warnings, jump cuts, etc.
     created_at: datetime = field(default_factory=datetime.utcnow)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
@@ -80,6 +81,7 @@ class Job:
             "message": self.message,
             "error": self.error,
             "result": self.result,
+            "metadata": self.metadata,
             "created_at": self.created_at.isoformat(),
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
@@ -109,10 +111,8 @@ class JobManager:
         self._handlers: Dict[str, Callable] = {}
         self._running = False
         self._workers: List[asyncio.Task] = []
-        # Allow 2 workers for parallel project processing
-        # Worker 0: High priority (downloads, ingests, exports)
-        # Worker 1: Low priority (analysis, rendering)
-        self._max_workers = 2
+        self._max_workers = 1  # Single worker to avoid SQLite race conditions
+        self._pick_lock = asyncio.Lock()  # Mutex for job picking
         self._listeners: Dict[str, List[Callable[[Job], None]]] = {}
         self._main_loop: Optional[asyncio.AbstractEventLoop] = None
         self._last_progress: Dict[str, tuple] = {}  # job_id -> (progress, timestamp)
@@ -141,15 +141,25 @@ class JobManager:
         
         self._running = True
         
-        # Reset any stuck "running" jobs to "pending" on startup
+        # Mark orphaned "running" jobs as FAILED so they don't auto-restart.
+        # Users can manually retry individual jobs from the UI.
         async with async_session_maker() as db:
-            await db.execute(
-                update(JobRecord)
-                .where(JobRecord.status == JobStatus.RUNNING.value)
-                .values(status=JobStatus.PENDING.value)
+            result = await db.execute(
+                select(JobRecord).where(JobRecord.status == JobStatus.RUNNING.value)
             )
-            await db.commit()
-            logger.info("Reset stuck jobs to pending")
+            orphaned = result.scalars().all()
+            if orphaned:
+                await db.execute(
+                    update(JobRecord)
+                    .where(JobRecord.status == JobStatus.RUNNING.value)
+                    .values(
+                        status=JobStatus.FAILED.value,
+                        error="Server restarted while job was running",
+                        completed_at=datetime.utcnow()
+                    )
+                )
+                await db.commit()
+                logger.info("Marked %d orphaned running jobs as failed", len(orphaned))
 
         for i in range(self._max_workers):
             worker = asyncio.create_task(self._worker(i))
@@ -172,11 +182,12 @@ class JobManager:
         logger.info("Job manager stopped")
     
     async def _worker(self, worker_id: int) -> None:
-        """Worker loop polling DB with priority-based job selection."""
-        logger.info("Worker %d started", worker_id)
+        """Worker loop polling DB for pending jobs.
         
-        # Worker 0 handles high-priority jobs, Worker 1 handles any
-        high_priority_types = [JobType.DOWNLOAD.value, JobType.INGEST.value, JobType.EXPORT.value]
+        Uses an asyncio.Lock to guarantee only one worker picks a given job,
+        even though SQLite does not support SELECT FOR UPDATE.
+        """
+        logger.info("Worker %d started", worker_id)
         
         while self._running:
             try:
@@ -184,55 +195,25 @@ class JobManager:
                 handler = None
                 kwargs = {}
                 
-                # Transaction to get and lock next job
-                async with async_session_maker() as db:
-                    # Find pending jobs created in last 24 hours
-                    cutoff = datetime.utcnow() - timedelta(hours=24)
-                    
-                    # Build query with priority ordering
-                    from sqlalchemy import case
-                    
-                    # Create priority expression for SQL ordering
-                    priority_order = case(
-                        {
-                            JobType.DOWNLOAD.value: 1,
-                            JobType.INGEST.value: 2,
-                            JobType.EXPORT.value: 3,
-                            JobType.RENDER_FINAL.value: 4,
-                            JobType.ANALYZE.value: 5,
-                            JobType.RENDER_PROXY.value: 6,
-                            JobType.GENERATE_VARIANTS.value: 7,
-                        },
-                        value=JobRecord.type,
-                        else_=10
-                    )
-                    
-                    # Worker 0: prioritize high-priority jobs
-                    # Worker 1+: take any available job
-                    if worker_id == 0:
-                        # High-priority worker - prefer downloads/ingests/exports
-                        result = await db.execute(
-                            select(JobRecord)
-                            .where(JobRecord.status == JobStatus.PENDING.value)
-                            .where(JobRecord.created_at > cutoff)
-                            .where(JobRecord.type.in_(high_priority_types))
-                            .order_by(priority_order, JobRecord.created_at)
-                            .limit(1)
-                        )
-                        record = result.scalar_one_or_none()
+                async with self._pick_lock:
+                    async with async_session_maker() as db:
+                        cutoff = datetime.utcnow() - timedelta(hours=24)
                         
-                        # If no high-priority jobs, fall back to any
-                        if not record:
-                            result = await db.execute(
-                                select(JobRecord)
-                                .where(JobRecord.status == JobStatus.PENDING.value)
-                                .where(JobRecord.created_at > cutoff)
-                                .order_by(priority_order, JobRecord.created_at)
-                                .limit(1)
-                            )
-                            record = result.scalar_one_or_none()
-                    else:
-                        # Other workers - take any job by priority
+                        from sqlalchemy import case
+                        priority_order = case(
+                            {
+                                JobType.DOWNLOAD.value: 1,
+                                JobType.INGEST.value: 2,
+                                JobType.EXPORT.value: 3,
+                                JobType.RENDER_FINAL.value: 4,
+                                JobType.ANALYZE.value: 5,
+                                JobType.RENDER_PROXY.value: 6,
+                                JobType.GENERATE_VARIANTS.value: 7,
+                            },
+                            value=JobRecord.type,
+                            else_=10
+                        )
+                        
                         result = await db.execute(
                             select(JobRecord)
                             .where(JobRecord.status == JobStatus.PENDING.value)
@@ -241,26 +222,24 @@ class JobManager:
                             .limit(1)
                         )
                         record = result.scalar_one_or_none()
-                    
-                    if record:
-                        job_id = record.id
-                        job_type = record.type
-                        project_id = record.project_id
-                        kwargs = record.result if record.result else {}
                         
-                        # Lock it
-                        record.status = JobStatus.RUNNING.value
-                        record.started_at = datetime.utcnow()
-                        await db.commit()
-                        
-                        priority = JOB_PRIORITY.get(job_type, 10)
-                        logger.info("Worker %d picked up job %s (%s, priority=%d)", 
-                                   worker_id, job_id[:8], job_type, priority)
-                        
-                        handler = self._handlers.get(job_type)
+                        if record:
+                            job_id = record.id
+                            job_type = record.type
+                            project_id = record.project_id
+                            kwargs = record.result if record.result else {}
+                            
+                            record.status = JobStatus.RUNNING.value
+                            record.started_at = datetime.utcnow()
+                            await db.commit()
+                            
+                            priority = JOB_PRIORITY.get(job_type, 10)
+                            logger.info("Worker picked up job %s (%s, priority=%d)",
+                                        job_id[:8], job_type, priority)
+                            
+                            handler = self._handlers.get(job_type)
                 
                 if job_id and handler:
-                    # Reconstruct transient Job object for the handler
                     job = Job(
                         id=job_id,
                         type=JobType(job_type),
@@ -269,11 +248,9 @@ class JobManager:
                         _handler=handler,
                         _kwargs=kwargs
                     )
-                    
                     await self._execute_job(job)
                 else:
-                    # No job, sleep (worker 1 sleeps a bit longer)
-                    await asyncio.sleep(1 if worker_id == 0 else 3)
+                    await asyncio.sleep(2)
                     
             except asyncio.CancelledError:
                 break
@@ -316,14 +293,18 @@ class JobManager:
                 raise ValueError(f"No handler for job type {job.type}")
 
         except Exception as e:
-            logger.exception("Job %s failed: %s", job.id, e)
+            import traceback
+            error_msg = str(e) or repr(e)
+            full_traceback = traceback.format_exc()
+            logger.error("Job %s failed with error: %s", job.id, error_msg)
+            logger.error("Full traceback:\n%s", full_traceback)
             async with async_session_maker() as db:
                 await db.execute(
                     update(JobRecord)
                     .where(JobRecord.id == job.id)
                     .values(
                         status=JobStatus.FAILED.value,
-                        error=str(e),
+                        error=error_msg if error_msg else full_traceback[:500],
                         completed_at=datetime.utcnow()
                     )
                 )

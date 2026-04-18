@@ -50,7 +50,6 @@ interface UseVideoSyncOptions {
 
 const DEFAULT_FPS = 30;
 const SYNC_THRESHOLD = 0.05; // 50ms threshold for sync
-const RAF_INTERVAL = 1000 / 60; // ~16.67ms for 60fps updates
 
 export function useVideoSync(options: UseVideoSyncOptions = {}): VideoSyncController {
   const {

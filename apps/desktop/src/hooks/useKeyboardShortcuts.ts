@@ -17,8 +17,6 @@ export function useKeyboardShortcuts() {
   const { setShortcutsModalOpen, setCurrentPanel } = useUIStore();
   const { toggleTheme } = useThemeStore();
 
-  const { undo, redo } = useLayoutEditorStore.temporal?.getState() || { undo: () => {}, redo: () => {} };
-
   // Play/Pause
   useHotkeys('space', (e) => {
     e.preventDefault();
@@ -41,7 +39,7 @@ export function useKeyboardShortcuts() {
   useHotkeys('o', () => setTrimRange(trimStart, playbackTime), [playbackTime, trimStart]);
 
   // Zoom
-  useHotkeys('ctrl+wheel', (e) => {
+  useHotkeys('ctrl+wheel', (_e) => {
     // Note: wheel event handling might be better in the component directly, 
     // but hotkeys hook supports it? Not standard hotkey. 
     // Usually 'ctrl++' or 'ctrl+-'

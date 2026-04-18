@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 DATABASE_URL = f"sqlite+aiosqlite:///{settings.DATABASE_PATH}"
 engine = create_async_engine(
     DATABASE_URL,
-    echo=settings.DEBUG,
+    echo=False,  # Disabled SQL echo to avoid flooding logs and blocking requests
     future=True,
 )
 
@@ -33,7 +33,10 @@ class Base(DeclarativeBase):
 
 async def init_db() -> None:
     """Initialize the database, creating tables if needed."""
-    from forge_engine.models import project, job, template, profile
+    # Import all models so their tables are registered with Base.metadata
+    from forge_engine.models import (  # noqa: F401
+        project, job, template, profile, segment, artifact, channel, review
+    )
     
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

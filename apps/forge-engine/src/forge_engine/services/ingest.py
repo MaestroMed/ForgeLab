@@ -32,7 +32,8 @@ class IngestService:
         extract_audio: bool = True,
         audio_track: int = 0,
         normalize_audio: bool = True,
-        auto_analyze: bool = True
+        auto_analyze: bool = True,
+        dictionary_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """Run the ingestion pipeline."""
         job_manager = JobManager.get_instance()
@@ -261,8 +262,9 @@ class IngestService:
                     analyze_audio=True,
                     detect_faces=True,
                     score_segments=True,
+                    dictionary_name=dictionary_name,
                 )
-                logger.info("Analysis job created for project %s", project_id)
+                logger.info("Analysis job created for project %s (dictionary: %s)", project_id, dictionary_name or "none")
             
             return {
                 "project_id": project_id,

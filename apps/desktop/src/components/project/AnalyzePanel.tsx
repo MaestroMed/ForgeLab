@@ -1,11 +1,11 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Search, CheckCircle, Mic, Film, UserCircle, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Progress } from '@/components/ui/Progress';
 import { api } from '@/lib/api';
-import { useJobsStore } from '@/store';
+import { useJobsStore, useToastStore } from '@/store';
 import { useShallow } from 'zustand/react/shallow';
 
 interface AnalyzePanelProps {
@@ -19,6 +19,7 @@ interface AnalyzePanelProps {
 }
 
 export default function AnalyzePanel({ project, onJobStart, onComplete }: AnalyzePanelProps) {
+  const { addToast } = useToastStore();
   // Use shallow selector to ensure re-renders when job properties change
   const activeJob = useJobsStore(
     useShallow((state) => {
@@ -51,6 +52,11 @@ export default function AnalyzePanel({ project, onJobStart, onComplete }: Analyz
       }
     } catch (error) {
       console.error('Analysis failed:', error);
+      addToast({
+        type: 'error',
+        title: 'Erreur d\'analyse',
+        message: error instanceof Error ? error.message : 'Impossible de démarrer l\'analyse',
+      });
     }
   };
 
@@ -212,7 +218,7 @@ export default function AnalyzePanel({ project, onJobStart, onComplete }: Analyz
                           customDictionary: lines,
                         }));
                       }}
-                      onBlur={(e) => {
+                      onBlur={(_e) => {
                         // Clean up empty lines only when leaving the field
                         setOptions((o) => ({
                           ...o,

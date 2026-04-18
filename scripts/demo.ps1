@@ -17,7 +17,7 @@ Write-Host "╚═════════════════════�
 Write-Host ""
 
 # Check if engine is running
-$enginePort = 7860
+$enginePort = 8420
 try {
     $response = Invoke-WebRequest -Uri "http://localhost:$enginePort/health" -UseBasicParsing -TimeoutSec 2
     Write-Host "✓ FORGE Engine is running on port $enginePort" -ForegroundColor Green

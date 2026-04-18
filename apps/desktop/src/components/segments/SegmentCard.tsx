@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Play, Clock, Zap, MessageSquare, Scissors, Star } from 'lucide-react';
+import { Play, Clock, Zap, Scissors, Star } from 'lucide-react';
 
 interface Segment {
   id: string;
@@ -13,6 +13,8 @@ interface Segment {
     total: number;
     hook_strength: number;
     payoff: number;
+    tension_surprise?: number;
+    humour_reaction?: number;
     reasons: string[];
     tags: string[];
   };

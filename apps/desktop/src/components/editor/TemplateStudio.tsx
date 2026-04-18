@@ -1,15 +1,12 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
   Save,
-  FolderOpen,
   Trash2,
   Copy,
-  Plus,
   Check,
   X,
   Layers,
-  Type,
   Star,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
@@ -92,8 +89,8 @@ export function TemplateStudio() {
   };
 
   const handleLoadTemplate = (template: Template) => {
-    setZones(template.layout.zones);
-    setSubtitleStyle(template.subtitles);
+    setZones(template.layout.zones as any);
+    setSubtitleStyle(template.subtitles as any);
     setSelectedId(template.id);
   };
 
@@ -275,7 +272,7 @@ function TemplateCard({
       <div className="flex items-center gap-3">
         {/* Preview mini */}
         <div className="w-10 h-16 bg-black rounded overflow-hidden flex-shrink-0 relative">
-          {template.layout.zones.map((zone, i) => (
+          {template.layout.zones.map((zone, _i) => (
             <div
               key={zone.id}
               className={`absolute ${

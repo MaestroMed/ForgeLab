@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Play, Download, Wand2, Clock, Tag, Lightbulb, Zap } from 'lucide-react';
+import { Download, Wand2, Clock, Lightbulb, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
 import { ScoreBar, ScoreCircle } from '@/components/ui/ScoreBar';
@@ -39,7 +39,7 @@ interface SegmentDetailProps {
 export default function SegmentDetail({
   segment,
   projectId,
-  onExport,
+  onExport: _onExport,
 }: SegmentDetailProps) {
   const { addJob } = useJobsStore();
   const { addToast } = useToastStore();

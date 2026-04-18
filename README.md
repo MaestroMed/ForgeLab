@@ -1,118 +1,185 @@
-# FORGE/LAB
+# 🔥 FORGE LAB
 
-**Atelier de viralité local** — Transformez vos VODs en clips verticaux viraux, prêts pour TikTok, Shorts et Reels.
+<div align="center">
 
-![FORGE/LAB](docs/assets/banner.png)
+![FORGE LAB](https://img.shields.io/badge/FORGE-LAB-00BFFF?style=for-the-badge&logo=electron&logoColor=white)
+![Version](https://img.shields.io/badge/version-1.0.0-brightgreen?style=for-the-badge)
+![Platform](https://img.shields.io/badge/platform-Windows%20|%20macOS%20|%20Linux-blue?style=for-the-badge)
 
-## Fonctionnalités
+**🎬 AI-Powered Viral Clip Creator**
 
-- **Import local** : Glissez-déposez n'importe quelle VOD (mp4, mkv, mov)
-- **Analyse virale** : Détection automatique des meilleurs moments avec scoring explicable
-- **Layout intelligent** : Détection facecam, composition 9:16 automatique
-- **Sous-titres premium** : Styles modernes, karaoke word-level, safe zones
-- **Variants A/B/C** : Génération de multiples versions pour tester
-- **Export complet** : Vidéo + cover + sous-titres + description + hashtags
+*Transform long-form content into viral clips with AI analysis and one-click export.*
 
-## Prérequis
+</div>
 
-- **Node.js** 18+
-- **pnpm** 8+
-- **Python** 3.11+
-- **FFmpeg** (avec support libass et optionnellement NVENC)
+---
 
-## Démarrage rapide
+## ✨ Features
+
+### 🧠 AI-Powered Analysis
+- **Automatic Segmentation** - AI identifies the most viral moments
+- **Virality Scoring** - Each segment gets a 0-100 virality score
+- **Hook Detection** - Finds natural hooks and cold opens
+
+### 🎨 World-Class Subtitles
+- **Karaoke-Style Animation** - Word-by-word highlight sync
+- **Multiple Presets** - Viral Pro, MrBeast, Clean, Minimal
+- **Full Customization** - Font, colors, size, animations, position
+
+### 🎬 Professional Editing
+- **9:16 Vertical Clips** - Perfect for TikTok, Reels, Shorts
+- **Cold Open Intro** - Automatic hook sequence with animations
+- **Batch Export** - Export multiple clips simultaneously
+
+### 🖥️ Beautiful UI
+- **Westworld Theme** - Immersive dark mode with cyan accents
+- **Floating Widget** - Track active jobs from anywhere
+- **Ambient Audio** - Optional background soundscapes
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- **Windows 10/11** (64-bit)
+- **NVIDIA GPU** with CUDA support (recommended)
+- **8GB+ RAM**
+- **FFmpeg** (included in installer)
+
+### Installation
+
+1. Download the latest release from [Releases](https://github.com/MaestroMed/ForgeLab/releases)
+2. Run `FORGE LAB Setup.exe`
+3. Follow the installation wizard
+4. Launch FORGE LAB from desktop shortcut
+
+### First Run
+
+1. **Import a video** - Paste a YouTube URL or drag a local file
+2. **Analyze** - AI will find the best moments
+3. **Review segments** - Browse and select clips
+4. **Customize** - Adjust subtitles and intro
+5. **Export** - One-click export to vertical format
+
+---
+
+## 🛠️ Development
+
+### Project Structure
+
+```
+ForgeLab/
+├── apps/
+│   ├── desktop/          # Electron + React frontend
+│   │   ├── src/          # React components & pages
+│   │   ├── electron/     # Main process
+│   │   └── e2e/          # Playwright tests
+│   └── forge-engine/     # Python FastAPI backend
+│       ├── src/          # API & services
+│       └── tests/        # Pytest tests
+├── packages/
+│   └── shared/           # Shared types & schemas
+└── docs/                 # Documentation
+```
+
+### Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Frontend | React 18 + TypeScript + Tailwind CSS |
+| Desktop | Electron 28 |
+| Backend | Python 3.11 + FastAPI |
+| AI | OpenAI Whisper (transcription) |
+| Video | FFmpeg + NVENC (GPU encoding) |
+| Database | SQLite |
+| State | Zustand |
+| Animations | Framer Motion |
+
+### Development Setup
 
 ```bash
-# Cloner et installer
-git clone <repo> && cd forge-lab
+# Install dependencies
 pnpm install
 
-# Configurer Python (une seule fois)
+# Start development (frontend + backend)
+cd apps/desktop
+npm run dev:electron
+
+# Or run separately:
+# Terminal 1 - Backend
 cd apps/forge-engine
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1  # Windows
-pip install -r requirements.txt
-cd ../..
+python -m uvicorn forge_engine.main:app --reload --port 8420
 
-# Lancer en dev
-pnpm dev
+# Terminal 2 - Frontend
+cd apps/desktop
+npm run dev
 ```
 
-Ou utilisez le script de setup :
-
-```powershell
-.\scripts\setup.ps1
-```
-
-## Architecture
-
-```
-forge-lab/
-├── apps/
-│   ├── desktop/         # Electron + React (LAB UI)
-│   └── forge-engine/    # Python FastAPI (FORGE Engine)
-├── packages/
-│   └── shared/          # Types partagés TS + Zod
-├── docs/                # Documentation
-└── scripts/             # Scripts utilitaires
-```
-
-## Commandes
-
-| Commande | Description |
-|----------|-------------|
-| `pnpm dev` | Lance desktop + engine en dev |
-| `pnpm build` | Build production |
-| `pnpm test` | Exécute les tests |
-| `pnpm lint` | Vérifie le code |
-
-## Configuration
-
-### Dossier Library
-
-Par défaut, FORGE stocke les projets dans `~/FORGE_LIBRARY`. Personnalisable via :
-- Variable d'environnement `FORGE_LIBRARY_PATH`
-- Settings de l'application
-
-### GPU (NVENC)
-
-FORGE détecte automatiquement les GPU NVIDIA et utilise NVENC si disponible. Pour forcer le mode CPU :
+### Build for Production
 
 ```bash
-FORGE_FORCE_CPU=1 pnpm dev
+cd apps/desktop
+
+# Windows installer
+npm run build:win
+
+# macOS DMG
+npm run build:mac
+
+# Linux AppImage
+npm run build:linux
 ```
 
-Vérifiez vos capacités FFmpeg :
+---
 
-```powershell
-.\scripts\check-ffmpeg.ps1
-```
+## ⌨️ Keyboard Shortcuts
 
-## Demo
+| Shortcut | Action |
+|----------|--------|
+| `Space` | Play/Pause |
+| `←` / `→` | Seek ±5 seconds |
+| `↑` / `↓` | Volume |
+| `F` | Toggle fullscreen video |
+| `F11` | Toggle fullscreen app |
+| `D` | Cycle themes |
+| `M` | Mute |
+| `E` | Export current segment |
+| `Esc` | Close modal / Exit fullscreen |
 
-Pour tester avec une vidéo :
+---
 
-```powershell
-.\scripts\demo.ps1 -VideoPath "C:\path\to\video.mp4" -ClipCount 3
-```
+## 🎨 Themes
 
-## Documentation
+FORGE LAB includes three beautiful themes:
 
-- [Spécification fonctionnelle](docs/functional_spec.md)
-- [Design Language](docs/design_language.md)
-- [Architecture Pipeline](docs/pipeline.md)
-- [Système de plugins](docs/plugin_system.md)
-- [Troubleshooting](docs/troubleshooting.md)
+1. **Light** - Clean and bright
+2. **Dark** - Easy on the eyes
+3. **Westworld** - Immersive cyberpunk aesthetic with grid overlays and scan lines
 
-## Licence
+Press `D` to cycle through themes or configure in Settings.
 
-Propriétaire — Tous droits réservés.
+---
 
+## 📜 License
 
+MIT License - See [LICENSE](LICENSE) for details.
 
+---
 
+## 🤝 Contributing
 
+Contributions are welcome! Please read our contributing guidelines first.
 
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing`)
+5. Open a Pull Request
 
+---
 
+## 📞 Support
 
+- **Issues**: [GitHub Issues](https://github.com/MaestroMed/ForgeLab/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/MaestroMed/ForgeLab/discussions)---<div align="center">**Made with ❤️ by FORGE LAB Team***Transform content. Go viral.*</div>

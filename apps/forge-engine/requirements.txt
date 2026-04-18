@@ -31,6 +31,21 @@ httpx>=0.25.0
 aiofiles>=23.2.0
 watchfiles>=0.21.0
 
+# AI/ML (Phase 1 - World Class)
+# Local LLM - Ollama client (uses HTTP, no extra deps needed)
+# Emotion detection (optional - install for face emotion features)
+# deepface>=0.0.79  # Requires tensorflow, heavy
+# fer>=22.4.0       # Lighter alternative to deepface
+
+# ML Scoring
+scikit-learn>=1.3.0
+
+# Translation (optional - for multilingual subtitles)
+# argostranslate>=1.9.0  # Offline translation
+
+# Audio event detection enhancements
+# torchaudio>=2.1.0  # Advanced audio classification (requires PyTorch)
+
 # Dev dependencies (optional)
 # pytest>=7.4.0
 # pytest-asyncio>=0.21.0

@@ -19,7 +19,7 @@ pip install -r requirements.txt
 
 ```bash
 # Lancer le serveur en mode dev
-python -m uvicorn forge_engine.main:app --reload --host 127.0.0.1 --port 7860
+python -m uvicorn forge_engine.main:app --reload --host 127.0.0.1 --port 8420
 
 # Ou via pnpm depuis la racine
 pnpm --filter @forge-lab/engine dev
@@ -37,7 +37,7 @@ pytest tests -v --cov=src/forge_engine
 
 ## API
 
-Documentation disponible sur `http://localhost:7860/docs` en mode dev.
+Documentation disponible sur `http://localhost:8420/docs` en mode dev.
 
 ## Structure
 

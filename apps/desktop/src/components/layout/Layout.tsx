@@ -1,5 +1,6 @@
-import { ReactNode, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { ReactNode, useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import Sidebar from './Sidebar';
 import TitleBar from './TitleBar';
 import StatusBar from './StatusBar';
@@ -7,6 +8,7 @@ import JobDrawer from './JobDrawer';
 import ShortcutsModal from '@/components/ui/ShortcutsModal';
 import FloatingProcessWidget from '../floating/FloatingProcessWidget';
 import AmbientAudioProvider from '../ambient/AmbientAudioProvider';
+import { AIChat, AIChatToggle } from '@/components/assistant/AIChat';
 import { useThemeStore, useUIStore } from '@/store';
 
 interface LayoutProps {
@@ -17,10 +19,18 @@ export default function Layout({ children }: LayoutProps) {
   const { theme } = useThemeStore();
   const { setFullscreen } = useUIStore();
   const isWestworld = theme === 'westworld';
+  const location = useLocation();
+  
+  // AI Chat state
+  const [isAIChatOpen, setIsAIChatOpen] = useState(false);
+  
+  // Extract project ID from URL if in editor
+  const projectIdMatch = location.pathname.match(/\/editor\/([^/]+)/);
+  const currentProjectId = projectIdMatch ? projectIdMatch[1] : undefined;
 
   // Listen for fullscreen changes from Electron
   useEffect(() => {
-    const cleanup = window.forge?.onFullscreenChange?.((isFullscreen) => {
+    const cleanup = (window.forge as any)?.onFullscreenChange?.((isFullscreen: boolean) => {
       setFullscreen(isFullscreen);
     });
     return () => cleanup?.();
@@ -71,6 +81,22 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Ambient audio provider (invisible) */}
       <AmbientAudioProvider />
+      
+      {/* AI Assistant Chat */}
+      <AnimatePresence>
+        {isAIChatOpen && (
+          <AIChat 
+            isOpen={isAIChatOpen} 
+            onClose={() => setIsAIChatOpen(false)}
+            projectId={currentProjectId}
+          />
+        )}
+      </AnimatePresence>
+      
+      {/* AI Chat Toggle Button */}
+      <AIChatToggle 
+        onClick={() => setIsAIChatOpen(!isAIChatOpen)} 
+      />
     </div>
   );
 }

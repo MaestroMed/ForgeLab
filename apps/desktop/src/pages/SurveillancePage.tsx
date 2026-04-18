@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Eye, Plus, Twitch, Youtube, Loader2, RefreshCw, Check,
-  Clock, Download, X, MoreVertical, Trash2, Settings2
+  Eye, Plus, Twitch, Youtube, Loader2, RefreshCw,
+  Clock, Download, X, Trash2
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';

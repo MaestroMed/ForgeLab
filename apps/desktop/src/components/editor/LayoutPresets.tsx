@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { useLayoutEditorStore } from '@/store';
-import { Monitor, Square, Columns, PictureInPicture, Video } from 'lucide-react';
+import { Monitor, Columns, PictureInPicture, Video } from 'lucide-react';
 
 const PRESETS = [
   {

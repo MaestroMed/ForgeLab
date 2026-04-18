@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Optional
 
 from forge_engine.services.ffmpeg import FFmpegService
 from forge_engine.core.config import settings
+from forge_engine.core.fonts import resolve_font_ffmpeg
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +189,7 @@ class IntroEngine:
         # Base drawtext parameters
         base_params = [
             f"text='{text}'",
-            f"fontfile={self._get_font_path(font)}",
+            f"fontfile={resolve_font_ffmpeg(font)}",
             f"fontsize={size}",
             f"fontcolor={color}",
             f"x={x}",
@@ -218,71 +219,6 @@ class IntroEngine:
             base_params.append(f"alpha='if(lt(t,{fade_in}),t/{fade_in},1)'")
         
         return f"drawtext={':'.join(base_params)}"
-    
-    def _get_font_path(self, font_name: str) -> str:
-        """Get font path for FFmpeg with robust fallback detection.
-        
-        On Windows, we need to provide full path to font files.
-        Falls back to a common system font if not found.
-        """
-        import platform
-        import os
-        
-        # Map font names to possible file names
-        font_map = {
-            "Inter": ["Inter-Bold.ttf", "Inter-SemiBold.ttf", "Inter-Medium.ttf", "Inter.ttf"],
-            "Montserrat": ["Montserrat-Bold.ttf", "Montserrat-SemiBold.ttf", "Montserrat-ExtraBold.ttf", "montserrat-bold.ttf"],
-            "Space Grotesk": ["SpaceGrotesk-Bold.ttf", "SpaceGrotesk-SemiBold.ttf", "Space Grotesk Bold.ttf"],
-            "Playfair Display": ["PlayfairDisplay-Bold.ttf", "Playfair Display Bold.ttf"],
-            "Oswald": ["Oswald-Bold.ttf", "Oswald-SemiBold.ttf", "oswald-bold.ttf"],
-            "Bebas Neue": ["BebasNeue-Regular.ttf", "BebasNeue-Bold.ttf", "Bebas Neue.ttf"],
-            "Arial": ["arial.ttf", "Arial.ttf", "arialbd.ttf"],
-            "Impact": ["impact.ttf", "Impact.ttf"],
-        }
-        
-        # Generate additional variations
-        base_name = font_name.replace(" ", "")
-        variations = font_map.get(font_name, [
-            f"{base_name}-Bold.ttf",
-            f"{base_name}-SemiBold.ttf",
-            f"{base_name}-ExtraBold.ttf",
-            f"{base_name}-Regular.ttf",
-            f"{base_name}.ttf",
-            f"{font_name.lower().replace(' ', '-')}-bold.ttf",
-        ])
-        
-        if platform.system() == "Windows":
-            # Search directories (in order of priority)
-            search_dirs = [
-                Path("C:/Windows/Fonts"),
-                Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft/Windows/Fonts",
-                Path(os.environ.get("USERPROFILE", "")) / "AppData/Local/Microsoft/Windows/Fonts",
-            ]
-            
-            # Try each variation in each directory
-            for fonts_dir in search_dirs:
-                if not fonts_dir.exists():
-                    continue
-                    
-                for font_file in variations:
-                    font_path = fonts_dir / font_file
-                    if font_path.exists():
-                        result = str(font_path).replace("\\", "/").replace(":", "\\\\:")
-                        logger.info(f"[Intro] Found font: {font_name} -> {font_path}")
-                        return result
-            
-            # Fallback: try Impact (always available, good for titles)
-            impact_path = Path("C:/Windows/Fonts/impact.ttf")
-            if impact_path.exists():
-                logger.warning(f"[Intro] Font '{font_name}' not found, using Impact as fallback")
-                return "C\\\\:/Windows/Fonts/impact.ttf"
-            
-            # Final fallback to Arial
-            logger.warning(f"[Intro] Font '{font_name}' not found, using Arial as fallback")
-            return "C\\\\:/Windows/Fonts/arial.ttf"
-        else:
-            # On Linux/Mac, just return the font name and let fontconfig handle it
-            return font_name
     
     def _hex_to_ffmpeg_color(self, hex_color: str) -> str:
         """Convert hex color to FFmpeg format (0xRRGGBB or color name)."""
@@ -396,22 +332,27 @@ class IntroEngine:
         # 2. Apply blur to one stream for intro duration, then blend to clean
         # 3. Overlay text on top
         # 4. Keep audio unchanged
+        #
+        # IMPORTANT: We ensure consistent pixel format (yuv420p) throughout
+        # to avoid format mismatches between boxblur output and overlay input.
         
         filters = []
         
-        # Split input video
-        filters.append("[0:v]split[blur_in][clean]")
+        # Split input video (ensure consistent format first)
+        filters.append("[0:v]format=yuv420p,split[blur_in][clean]")
         
         # Apply blur and create crossfade effect
         # Blur fades out as we transition to clean video
+        # Use format=yuv420p after boxblur to ensure overlay compatibility
         filters.append(
-            f"[blur_in]boxblur={blur}:5,"
+            f"[blur_in]boxblur={blur}:5,format=yuv420p,"
             f"fade=t=out:st={intro_duration - fade_out}:d={fade_out}:alpha=1[blurred]"
         )
         
         # Overlay blurred on clean - blurred fades away revealing clean
+        # The format=yuv420p ensures both streams have identical pixel format
         filters.append(
-            f"[clean][blurred]overlay=0:0:enable='lte(t,{intro_duration})'[bg_with_blur]"
+            f"[clean][blurred]overlay=0:0:format=yuv420:enable='lte(t,{intro_duration})'[bg_with_blur]"
         )
         
         # Title text with animation
@@ -470,7 +411,11 @@ class IntroEngine:
             str(output_path)
         ]
         
-        logger.info(f"Applying intro overlay: {' '.join(cmd)}")
+        # Log detailed config for debugging
+        logger.info(f"[Intro] Config: duration={intro_duration}s, title='{title[:30]}...', badge='{badge_text}', animation={animation}")
+        logger.info(f"[Intro] Font path resolved: {self._get_font_path(title_font)}")
+        logger.info(f"[Intro] Input: {clip_path}, Output: {output_path}")
+        logger.debug(f"[Intro] Full FFmpeg command: {' '.join(cmd)}")
         
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -479,10 +424,21 @@ class IntroEngine:
         )
         
         stdout, stderr = await proc.communicate()
+        stderr_text = stderr.decode(errors='replace')
         
         if proc.returncode != 0:
-            logger.error(f"Intro overlay failed: {stderr.decode(errors='replace')[:1000]}")
-            raise RuntimeError(f"Intro overlay failed: {stderr.decode(errors='replace')[:500]}")
+            # Log full stderr for debugging
+            logger.error(f"[Intro] FFmpeg failed with return code {proc.returncode}")
+            logger.error(f"[Intro] FFmpeg stderr:\n{stderr_text}")
+            logger.error(f"[Intro] Config was: title='{title}', font='{title_font}', animation='{animation}'")
+            
+            # Check for common errors
+            if "No such file" in stderr_text or "font" in stderr_text.lower():
+                raise RuntimeError(f"Intro failed: Font not found. Try using 'Arial' or 'Impact'. Details: {stderr_text[:200]}")
+            elif "filter" in stderr_text.lower():
+                raise RuntimeError(f"Intro failed: FFmpeg filter error. {stderr_text[:200]}")
+            else:
+                raise RuntimeError(f"Intro overlay failed: {stderr_text[:300]}")
         
         if progress_callback:
             progress_callback(100.0)
@@ -506,7 +462,7 @@ class IntroEngine:
     ) -> str:
         """Build drawtext filter for overlay intro with GLOW effect (fades in then out)."""
         
-        font_path = self._get_font_path(font)
+        font_path = resolve_font_ffmpeg(font)
         visible_end = intro_duration
         
         # Alpha expression: fade in, stay, fade out

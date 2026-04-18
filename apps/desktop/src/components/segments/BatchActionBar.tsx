@@ -1,8 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { Download, Trash2, Tag, X, CheckSquare } from 'lucide-react';
+import { Download, Trash2, X, CheckSquare } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { useBatchSelectionStore } from '@/store';
-import { api } from '@/lib/api';
 
 interface BatchActionBarProps {
   projectId: string;
@@ -11,11 +10,11 @@ interface BatchActionBarProps {
 }
 
 export default function BatchActionBar({
-  projectId,
+  projectId: _projectId,
   onExportSelected,
   onDeleteSelected,
 }: BatchActionBarProps) {
-  const { selectedIds, clearSelection, isSelectionMode, setSelectionMode } =
+  const { selectedIds, clearSelection, isSelectionMode, setSelectionMode: _setSelectionMode } =
     useBatchSelectionStore();
 
   const count = selectedIds.size;

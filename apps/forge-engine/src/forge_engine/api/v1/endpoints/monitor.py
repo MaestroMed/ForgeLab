@@ -265,3 +265,73 @@ async def restart_project_workflow(project_id: str, from_step: str = "ingest") -
             }
         }
 
+
+@router.get("/pipeline")
+async def get_pipeline_status() -> dict:
+    """Get auto-pipeline and scheduler status."""
+    from forge_engine.services.auto_pipeline import AutoPipelineService
+    from forge_engine.services.publish_scheduler import PublishSchedulerService
+    
+    pipeline = AutoPipelineService.get_instance()
+    scheduler = PublishSchedulerService.get_instance()
+    
+    return {
+        "success": True,
+        "data": {
+            "autoPipeline": pipeline.get_status(),
+            "publishScheduler": scheduler.get_status(),
+        }
+    }
+
+
+@router.post("/pipeline/start")
+async def start_pipeline() -> dict:
+    """Manually start the auto-pipeline and scheduler."""
+    from forge_engine.services.auto_pipeline import AutoPipelineService
+    from forge_engine.services.publish_scheduler import PublishSchedulerService
+    
+    pipeline = AutoPipelineService.get_instance()
+    scheduler = PublishSchedulerService.get_instance()
+    
+    await pipeline.start()
+    await scheduler.start()
+    
+    return {
+        "success": True,
+        "message": "Auto-pipeline and scheduler started",
+    }
+
+
+@router.post("/pipeline/stop")
+async def stop_pipeline() -> dict:
+    """Manually stop the auto-pipeline and scheduler."""
+    from forge_engine.services.auto_pipeline import AutoPipelineService
+    from forge_engine.services.publish_scheduler import PublishSchedulerService
+    
+    pipeline = AutoPipelineService.get_instance()
+    scheduler = PublishSchedulerService.get_instance()
+    
+    await pipeline.stop()
+    await scheduler.stop()
+    
+    return {
+        "success": True,
+        "message": "Auto-pipeline and scheduler stopped",
+    }
+
+
+@router.post("/recovery/enable")
+async def enable_recovery() -> dict:
+    """Enable auto-recovery for stuck jobs and projects."""
+    monitor = MonitorService.get_instance()
+    monitor.AUTO_RECOVERY_ENABLED = True
+    return {"success": True, "message": "Auto-recovery enabled"}
+
+
+@router.post("/recovery/disable")
+async def disable_recovery() -> dict:
+    """Disable auto-recovery."""
+    monitor = MonitorService.get_instance()
+    monitor.AUTO_RECOVERY_ENABLED = False
+    return {"success": True, "message": "Auto-recovery disabled"}
+

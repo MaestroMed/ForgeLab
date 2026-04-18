@@ -1,3 +1,6 @@
+/* World Class Font - Anton - Must be first */
+@import '@fontsource/anton';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

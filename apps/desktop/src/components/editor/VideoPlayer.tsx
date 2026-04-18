@@ -23,7 +23,7 @@ import {
   Maximize2,
   Settings,
 } from 'lucide-react';
-import { useVideoSync, VideoSyncController, VideoState } from '@/hooks/useVideoSync';
+import { useVideoSync, VideoSyncController } from '@/hooks/useVideoSync';
 
 interface VideoPlayerProps {
   src: string;
@@ -73,7 +73,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(({
   const [volume, setVolume] = useState(1);
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [, setIsFullscreen] = useState(false);
   const [isHovering, setIsHovering] = useState(false);
   const hideControlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 

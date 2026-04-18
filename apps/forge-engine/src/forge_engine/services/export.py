@@ -1,7 +1,21 @@
-"""Export service for generating complete export packs."""
+"""Export service for generating complete export packs.
 
+Pipeline order (Phase 0 corrected):
+  1. Analyze jump cuts on SOURCE audio (VAD needs original audio)
+  2. Detect cold open hooks from transcript
+  3. Render clip (source -> 9:16 + captions) -> temp.mp4
+  4. Apply jump cuts on RENDERED clip (not source!) with segment_start=0
+  5. Apply cold open reorder on rendered clip
+  6. Apply intro overlay on rendered clip
+  7. Mix music if configured
+  8. Validate output with ffprobe
+  9. Record artifacts
+"""
+
+import asyncio
 import json
 import logging
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -15,6 +29,10 @@ from forge_engine.models import Project, Segment, Artifact, Template
 from forge_engine.services.render import RenderService
 from forge_engine.services.captions import CaptionEngine
 from forge_engine.services.intro import IntroEngine
+from forge_engine.services.jump_cuts import JumpCutEngine, JumpCutConfig
+from forge_engine.services.cold_open import ColdOpenEngine
+from forge_engine.services.pipeline_builder import PipelineSinglePass, PipelineConfig
+from forge_engine.services.qc import QCService
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +44,8 @@ class ExportService:
         self.render = RenderService()
         self.captions = CaptionEngine()
         self.intro = IntroEngine()
+        self.jump_cuts = JumpCutEngine.get_instance()
+        self.cold_open = ColdOpenEngine()
     
     async def run_export(
         self,
@@ -44,9 +64,12 @@ class ExportService:
         caption_style: Optional[Dict[str, Any]] = None,
         layout_config: Optional[Dict[str, Any]] = None,
         intro_config: Optional[Dict[str, Any]] = None,
-        music_config: Optional[Dict[str, Any]] = None
+        music_config: Optional[Dict[str, Any]] = None,
+        jump_cut_config: Optional[Dict[str, Any]] = None,
+        cold_open_config: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Run the export pipeline."""
+        logger.info(f"[EXPORT] Starting export for project={project_id}, segment={segment_id}")
         job_manager = JobManager.get_instance()
         
         async with async_session_maker() as db:
@@ -97,7 +120,55 @@ class ExportService:
                 logger.info(f"Loaded {len(all_segments)} total transcript segments, filtered to {len(transcript_segments)} for clip range {segment.start_time}-{segment.end_time}")
             
             job_manager.update_progress(job, 5, "setup", "Preparing export...")
-            
+
+            # ── Single-pass fast path ─────────────────────────────────────
+            # When EXPORT_SINGLE_PASS is enabled AND no features require a
+            # pre-rendered intermediate (intro overlay needs a pre-built clip,
+            # cold open requires transcript analysis), we delegate to the
+            # single-pass pipeline builder which collapses all FFmpeg steps
+            # into one invocation.
+            #
+            # Fallback to legacy multi-pass when:
+            #  - EXPORT_SINGLE_PASS is False
+            #  - intro is enabled (requires IntroEngine to render the overlay
+            #    clip first, which produces a separate file)
+            needs_intro = intro_config and intro_config.get("enabled")
+            needs_cold_open = cold_open_config and cold_open_config.get("enabled")
+
+            if (
+                settings.EXPORT_SINGLE_PASS
+                and not needs_intro   # IntroEngine renders its own overlay file
+                and not needs_cold_open  # ColdOpenEngine needs transcript analysis first
+            ):
+                logger.info("[Export] Using single-pass FFmpeg pipeline")
+                return await self._run_single_pass_export(
+                    job=job,
+                    job_manager=job_manager,
+                    project=project,
+                    segment=segment,
+                    project_id=project_id,
+                    segment_id=segment_id,
+                    variant=variant,
+                    exports_dir=exports_dir,
+                    base_name=base_name,
+                    platform=platform,
+                    include_captions=include_captions,
+                    burn_subtitles=burn_subtitles,
+                    include_cover=include_cover,
+                    include_metadata=include_metadata,
+                    include_post=include_post,
+                    use_nvenc=use_nvenc,
+                    caption_style=caption_style,
+                    layout_config=layout_config,
+                    music_config=music_config,
+                    jump_cut_config=jump_cut_config,
+                    transcript_segments=transcript_segments,
+                    template=template,
+                    template_id=template_id,
+                    db=db,
+                )
+            # ── End single-pass fast path ─────────────────────────────────
+
             # Get actual video dimensions from project metadata or probe
             video_width = project.width or 1920
             video_height = project.height or 1080
@@ -181,15 +252,52 @@ class ExportService:
             elif template and template.caption_style:
                 caption_config.update(template.caption_style)
             
-            # Render video
-            job_manager.update_progress(job, 10, "render", "Rendering video...")
+            # Analyze jump cuts if enabled
+            jump_cut_analysis = None
+            needs_jump_cuts = jump_cut_config and jump_cut_config.get("enabled")
+            
+            if needs_jump_cuts:
+                try:
+                    job_manager.update_progress(job, 5, "jump_cuts", "Analyzing audio for jump cuts...")
+                    
+                    jc_config = JumpCutConfig.from_dict(jump_cut_config)
+                    jump_cut_analysis = await self.jump_cuts.analyze_segment(
+                        audio_path=project.source_path,
+                        start_time=segment.start_time,
+                        duration=segment.duration,
+                        config=jc_config,
+                        progress_callback=lambda p: job_manager.update_progress(
+                            job, 5 + p * 0.05, "jump_cuts", f"Analyzing: {p:.0f}%"
+                        )
+                    )
+                    
+                    logger.info(
+                        f"[Export] Jump cut analysis: {jump_cut_analysis.cuts_count} cuts, "
+                        f"{jump_cut_analysis.time_saved:.1f}s saved ({jump_cut_analysis.time_saved_percent:.0f}%)"
+                    )
+                    
+                    # Store analysis in job metadata
+                    job.metadata = job.metadata or {}
+                    job.metadata["jump_cuts"] = jump_cut_analysis.to_dict()
+                    
+                except Exception as e:
+                    logger.warning(f"[Export] Jump cut analysis failed: {e}, continuing without")
+                    needs_jump_cuts = False
+            
+            # ================================================================
+            # RENDER PIPELINE (Phase 0 corrected order)
+            # ================================================================
             
             video_path = exports_dir / f"{base_name}.mp4"
+            # needs_intro and needs_cold_open were already evaluated above for the
+            # single-pass decision; reuse them here for the legacy pipeline.
+            needs_post_processing = needs_intro or needs_jump_cuts or needs_cold_open
             
-            # If intro is enabled, we'll apply overlay after rendering
-            needs_intro = intro_config and intro_config.get("enabled")
-            if needs_intro:
-                temp_clip_path = exports_dir / f"{base_name}_no_intro.mp4"
+            # --- STEP 1: Render 9:16 clip with captions ---
+            job_manager.update_progress(job, 10, "render", "Rendering 9:16 clip...")
+            
+            if needs_post_processing:
+                temp_clip_path = exports_dir / f"{base_name}_temp.mp4"
                 render_output = temp_clip_path
             else:
                 render_output = video_path
@@ -204,43 +312,115 @@ class ExportService:
                 transcript_segments=transcript_segments if include_captions else None,
                 use_nvenc=use_nvenc,
                 progress_callback=lambda p: job_manager.update_progress(
-                    job, 10 + p * 0.5, "render", f"Rendering: {p:.0f}%"
+                    job, 10 + p * 0.4, "render", f"Rendering: {p:.0f}%"
                 )
             )
             
-            # Apply intro as overlay on the beginning of the clip
+            current_clip = render_output
+            
+            # --- STEP 2: Apply jump cuts on the RENDERED clip (not source!) ---
+            # FIX: Previously applied on project.source_path which produced
+            # raw 16:9 video without composition or subtitles.
+            # Now applies on the rendered 9:16 clip with segment_start=0.
+            if needs_jump_cuts and jump_cut_analysis and jump_cut_analysis.cuts_count > 0:
+                try:
+                    job_manager.update_progress(job, 50, "jump_cuts", "Applying jump cuts...")
+                    
+                    jump_cut_output = exports_dir / f"{base_name}_jumpcut.mp4"
+                    jc_config = JumpCutConfig.from_dict(jump_cut_config)
+                    
+                    await self.jump_cuts.apply_jump_cuts(
+                        source_path=str(current_clip),  # FIXED: use rendered clip
+                        output_path=str(jump_cut_output),
+                        segment_start=0,  # FIXED: rendered clip starts at 0
+                        keep_ranges=jump_cut_analysis.keep_ranges,
+                        config=jc_config,
+                        progress_callback=lambda p: job_manager.update_progress(
+                            job, 50 + p * 0.05, "jump_cuts", f"Jump cuts: {p:.0f}%"
+                        )
+                    )
+                    
+                    self._cleanup_temp(current_clip, video_path)
+                    current_clip = jump_cut_output
+                    
+                    logger.info(f"[Export] Applied {jump_cut_analysis.cuts_count} jump cuts on rendered clip")
+                    
+                except Exception as jc_error:
+                    logger.warning(f"[Export] Jump cuts failed: {jc_error}, using original")
+                    self._add_warning(job, "jump_cuts_failed",
+                        f"Les jump cuts n'ont pas pu être appliqués: {str(jc_error)[:100]}")
+            
+            # --- STEP 3: Apply cold open (reorder timeline) ---
+            if needs_cold_open:
+                try:
+                    job_manager.update_progress(job, 56, "cold_open", "Applying cold open...")
+                    
+                    cold_open_output = exports_dir / f"{base_name}_coldopen.mp4"
+                    
+                    await self._apply_cold_open(
+                        clip_path=str(current_clip),
+                        output_path=str(cold_open_output),
+                        segment=segment,
+                        transcript_segments=transcript_segments,
+                        config=cold_open_config,
+                        progress_callback=lambda p: job_manager.update_progress(
+                            job, 56 + p * 0.04, "cold_open", f"Cold open: {p:.0f}%"
+                        )
+                    )
+                    
+                    self._cleanup_temp(current_clip, video_path)
+                    current_clip = cold_open_output
+                    
+                    logger.info("[Export] Applied cold open reorder")
+                    
+                except Exception as co_error:
+                    import traceback
+                    logger.error(f"[Export] Cold open failed: {co_error}")
+                    logger.error(traceback.format_exc())
+                    self._add_warning(job, "cold_open_failed",
+                        f"Le cold open n'a pas pu être appliqué: {str(co_error)[:100]}")
+            
+            # --- STEP 4: Apply intro overlay ---
             if needs_intro:
                 try:
                     job_manager.update_progress(job, 60, "intro", "Applying intro overlay...")
                     
-                    # Set title from segment if not provided
                     if not intro_config.get("title"):
                         intro_config["title"] = segment.topic_label or "Untitled"
                     
+                    intro_output = exports_dir / f"{base_name}_intro.mp4"
+                    
                     await self.intro.apply_intro_overlay(
-                        clip_path=str(temp_clip_path),
-                        output_path=str(video_path),
+                        clip_path=str(current_clip),
+                        output_path=str(intro_output),
                         config=intro_config,
                         progress_callback=lambda p: job_manager.update_progress(
                             job, 60 + p * 0.1, "intro", f"Intro: {p:.0f}%"
                         )
                     )
                     
-                    # Cleanup temp file
-                    try:
-                        temp_clip_path.unlink()
-                    except Exception as e:
-                        logger.warning(f"Could not delete temp clip: {e}")
-                        
-                except Exception as intro_error:
-                    # Intro overlay failed - use clip without intro
-                    logger.warning(f"Intro overlay failed, exporting without intro: {intro_error}")
-                    job_manager.update_progress(job, 70, "fallback", "Intro échouée, export sans intro...")
+                    self._cleanup_temp(current_clip, video_path)
+                    current_clip = intro_output
                     
-                    # Rename temp clip to final path
-                    import shutil
-                    if temp_clip_path.exists():
-                        shutil.move(str(temp_clip_path), str(video_path))
+                except Exception as intro_error:
+                    import traceback
+                    error_details = str(intro_error)
+                    logger.error(f"Intro overlay failed: {error_details}")
+                    logger.error(f"Intro config was: {intro_config}")
+                    logger.error(traceback.format_exc())
+                    
+                    job_manager.update_progress(
+                        job, 70, "warning",
+                        f"Intro échouée ({error_details[:50]}...), export sans intro"
+                    )
+                    self._add_warning(job, "intro_failed",
+                        f"L'intro n'a pas pu être appliquée: {error_details[:100]}")
+            
+            # --- STEP 5: Move final clip to destination ---
+            if current_clip != video_path and current_clip.exists():
+                if video_path.exists():
+                    video_path.unlink()
+                shutil.move(str(current_clip), str(video_path))
             
             # Mix music if configured
             if music_config and music_config.get("path"):
@@ -426,18 +606,386 @@ class ExportService:
                 db.add(metadata_artifact)
                 artifacts.append(metadata_artifact)
             
+            # --- STEP 6: Validate output with ffprobe ---
+            job_manager.update_progress(job, 95, "validate", "Validating export...")
+
+            validation = await self._validate_export(str(video_path))
+            if not validation["valid"]:
+                logger.error(f"[Export] Validation failed: {validation['errors']}")
+                self._add_warning(job, "validation_failed",
+                    f"Validation: {', '.join(validation['errors'])}")
+            else:
+                logger.info(
+                    f"[Export] Validation passed: {validation['duration']:.1f}s, "
+                    f"{validation['width']}x{validation['height']}, "
+                    f"audio={'yes' if validation['has_audio'] else 'NO'}"
+                )
+
+            # --- STEP 7: QC check ---
+            qc_result = None
+            if video_path.exists():
+                try:
+                    qc_service = QCService()
+                    qc_report = await qc_service.run(
+                        file_path=video_path,
+                        expected_duration=segment.duration,
+                        has_audio=True,
+                        ffprobe_path=settings.FFPROBE_PATH,
+                    )
+                    qc_result = qc_report.to_dict()
+                    logger.info(
+                        f"[Export] QC result: {qc_report.overall.value} "
+                        f"({sum(1 for c in qc_report.checks if c.passed)}/{len(qc_report.checks)} checks passed)"
+                    )
+                    # Store QC result in video artifact metadata
+                    if video_artifact.description is None:
+                        video_artifact.description = ""
+                    # Store as JSON string in description field since Artifact has no metadata column
+                    import json as _json
+                    video_artifact.description = _json.dumps({"qc": qc_result})
+                except Exception as qc_error:
+                    logger.warning(f"[Export] QC check failed (non-blocking): {qc_error}")
+
             await db.commit()
-            
+
             job_manager.update_progress(job, 100, "complete", "Export complete!")
-            
+
             return {
                 "project_id": project_id,
                 "segment_id": segment_id,
                 "variant": variant,
                 "export_dir": str(exports_dir),
                 "artifacts": [a.to_dict() for a in artifacts],
+                "validation": validation,
+                "qc": qc_result,
             }
     
+    async def _run_single_pass_export(
+        self,
+        job: "Job",
+        job_manager: "JobManager",
+        project: "Project",
+        segment: "Segment",
+        project_id: str,
+        segment_id: str,
+        variant: str,
+        exports_dir: Path,
+        base_name: str,
+        platform: str,
+        include_captions: bool,
+        burn_subtitles: bool,
+        include_cover: bool,
+        include_metadata: bool,
+        include_post: bool,
+        use_nvenc: bool,
+        caption_style: Optional[Dict[str, Any]],
+        layout_config: Optional[Dict[str, Any]],
+        music_config: Optional[Dict[str, Any]],
+        jump_cut_config: Optional[Dict[str, Any]],
+        transcript_segments: List[Dict[str, Any]],
+        template: Optional["Template"],
+        template_id: Optional[str],
+        db,
+    ) -> Dict[str, Any]:
+        """
+        Single-pass export: assembles all transformations into one FFmpeg call.
+
+        Covers: layout composition, jump cuts, subtitle burn, music mix.
+        Cold open and intro overlays fall back to the legacy pipeline because
+        they require separate intermediate files produced by ColdOpenEngine /
+        IntroEngine.
+        """
+        logger.info("[SinglePass] Building single-pass FFmpeg pipeline")
+        artifacts = []
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        video_path = exports_dir / f"{base_name}.mp4"
+
+        # ── Build layout config ───────────────────────────────────────────
+        video_width = project.width or 1920
+        video_height = project.height or 1080
+
+        facecam_rect_norm = None
+        content_rect_norm = None
+
+        if layout_config and layout_config.get("facecam") and layout_config.get("content"):
+            fc = layout_config["facecam"]
+            cc = layout_config["content"]
+            facecam_source = fc.get("sourceCrop", {"x": 0, "y": 0, "width": 1, "height": 1})
+            content_source = cc.get("sourceCrop", {"x": 0, "y": 0, "width": 1, "height": 1})
+            # Store as normalized {x, y, w, h} as expected by PipelineConfig
+            facecam_rect_norm = {
+                "x": max(0.0, min(facecam_source["x"], 0.99)),
+                "y": max(0.0, min(facecam_source["y"], 0.99)),
+                "w": max(0.01, min(facecam_source["width"], 1.0)),
+                "h": max(0.01, min(facecam_source["height"], 1.0)),
+            }
+            content_rect_norm = {
+                "x": max(0.0, min(content_source["x"], 0.99)),
+                "y": max(0.0, min(content_source["y"], 0.99)),
+                "w": max(0.01, min(content_source["width"], 1.0)),
+                "h": max(0.01, min(content_source["height"], 1.0)),
+            }
+
+        # ── Build ASS subtitle file ───────────────────────────────────────
+        ass_path = None
+        if include_captions and burn_subtitles and transcript_segments:
+            try:
+                caption_config = {
+                    "style": "custom" if caption_style else "forge_minimal",
+                    "word_level": True,
+                    "max_words_per_line": caption_style.get("wordsPerLine", 6) if caption_style else 6,
+                    "max_lines": 2,
+                }
+                if caption_style:
+                    caption_config["custom_style"] = {
+                        "font_family": caption_style.get("fontFamily", "Inter"),
+                        "font_size": caption_style.get("fontSize", 48),
+                        "font_weight": caption_style.get("fontWeight", 700),
+                        "color": caption_style.get("color", "#FFFFFF"),
+                        "background_color": caption_style.get("backgroundColor", "transparent"),
+                        "outline_color": caption_style.get("outlineColor", "#000000"),
+                        "outline_width": caption_style.get("outlineWidth", 2),
+                        "position": caption_style.get("position", "bottom"),
+                        "position_y": caption_style.get("positionY"),
+                        "animation": caption_style.get("animation", "none"),
+                        "highlight_color": caption_style.get("highlightColor", "#FFD700"),
+                    }
+                elif template and template.caption_style:
+                    caption_config.update(template.caption_style)
+
+                # Adjust timestamps to clip-relative (0-based)
+                adjusted = [
+                    {**seg, "start": seg["start"] - segment.start_time,
+                     "end": seg["end"] - segment.start_time}
+                    for seg in transcript_segments
+                ]
+                ass_file = exports_dir / f"{base_name}.ass"
+                self.captions.generate_ass(
+                    segments=adjusted,
+                    output_path=str(ass_file),
+                    config=caption_config,
+                )
+                if ass_file.exists():
+                    ass_path = ass_file
+                    logger.info(f"[SinglePass] Generated ASS subtitles: {ass_file}")
+            except Exception as e:
+                logger.warning(f"[SinglePass] ASS subtitle generation failed: {e}, continuing without")
+
+        # ── Analyze jump cuts if enabled ─────────────────────────────────
+        keep_ranges = []
+        needs_jump_cuts = jump_cut_config and jump_cut_config.get("enabled")
+        if needs_jump_cuts:
+            try:
+                job_manager.update_progress(job, 8, "jump_cuts", "Analyzing audio for jump cuts...")
+                jc_config = JumpCutConfig.from_dict(jump_cut_config)
+                jump_cut_analysis = await self.jump_cuts.analyze_segment(
+                    audio_path=project.source_path,
+                    start_time=segment.start_time,
+                    duration=segment.duration,
+                    config=jc_config,
+                )
+                if jump_cut_analysis.cuts_count > 0:
+                    keep_ranges = [
+                        (r.start, r.end) for r in jump_cut_analysis.keep_ranges
+                    ]
+                    logger.info(
+                        f"[SinglePass] Jump cuts: {jump_cut_analysis.cuts_count} cuts, "
+                        f"{jump_cut_analysis.time_saved:.1f}s saved"
+                    )
+                    job.metadata = job.metadata or {}
+                    job.metadata["jump_cuts"] = jump_cut_analysis.to_dict()
+            except Exception as e:
+                logger.warning(f"[SinglePass] Jump cut analysis failed: {e}, continuing without")
+
+        # ── Music path ───────────────────────────────────────────────────
+        music_path_obj = None
+        music_volume = 0.15
+        if music_config and music_config.get("path"):
+            mp = Path(music_config["path"])
+            if mp.exists():
+                music_path_obj = mp
+                music_volume = music_config.get("volume", 0.15)
+
+        # ── Build PipelineConfig ─────────────────────────────────────────
+        pipeline_cfg = PipelineConfig(
+            source_path=Path(project.source_path),
+            segment_start=segment.start_time,
+            segment_duration=segment.duration,
+            output_width=settings.OUTPUT_WIDTH,
+            output_height=settings.OUTPUT_HEIGHT,
+            facecam_rect=facecam_rect_norm,
+            content_rect=content_rect_norm,
+            ass_path=ass_path,
+            keep_ranges=keep_ranges,
+            music_path=music_path_obj,
+            music_volume=music_volume,
+            output_path=video_path,
+            fps=settings.OUTPUT_FPS,
+            crf=settings.OUTPUT_CRF,
+            use_nvenc=use_nvenc,
+            platform=platform,
+        )
+
+        pipeline = PipelineSinglePass(pipeline_cfg)
+        cmd = pipeline.build_command()
+
+        logger.info(f"[SinglePass] FFmpeg command ({len(cmd)} args): {' '.join(cmd[:12])} ...")
+
+        job_manager.update_progress(job, 10, "render", "Running single-pass render...")
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            err = stderr.decode(errors="replace")[-1000:]
+            logger.error(f"[SinglePass] FFmpeg failed (rc={proc.returncode}): {err}")
+            raise RuntimeError(f"Single-pass render failed: {err}")
+
+        logger.info(f"[SinglePass] Render complete: {video_path}")
+        job_manager.update_progress(job, 70, "render", "Single-pass render complete")
+
+        # ── Record video artifact ────────────────────────────────────────
+        video_artifact = Artifact(
+            project_id=project_id,
+            segment_id=segment_id,
+            variant=variant,
+            type="video",
+            path=str(video_path),
+            filename=video_path.name,
+            size=video_path.stat().st_size if video_path.exists() else 0,
+            title=segment.topic_label,
+        )
+        db.add(video_artifact)
+        artifacts.append(video_artifact)
+
+        # ── Cover ────────────────────────────────────────────────────────
+        if include_cover:
+            job_manager.update_progress(job, 75, "cover", "Generating cover...")
+            cover_path = exports_dir / f"{base_name}_cover.jpg"
+            cover_time = segment.start_time + segment.duration * 0.3
+            await self.render.render_cover(
+                source_path=project.source_path,
+                output_path=str(cover_path),
+                time=cover_time,
+                title_text=segment.topic_label,
+            )
+            if cover_path.exists():
+                cover_artifact = Artifact(
+                    project_id=project_id,
+                    segment_id=segment_id,
+                    variant=variant,
+                    type="cover",
+                    path=str(cover_path),
+                    filename=cover_path.name,
+                    size=cover_path.stat().st_size,
+                )
+                db.add(cover_artifact)
+                artifacts.append(cover_artifact)
+
+        # ── Post text ────────────────────────────────────────────────────
+        if include_post:
+            job_manager.update_progress(job, 85, "post", "Generating post text...")
+            post_content = self._generate_post(segment, platform)
+            post_path = exports_dir / f"{base_name}_post.txt"
+            with open(post_path, "w", encoding="utf-8") as f:
+                f.write(post_content)
+            post_artifact = Artifact(
+                project_id=project_id,
+                segment_id=segment_id,
+                variant=variant,
+                type="post",
+                path=str(post_path),
+                filename=post_path.name,
+                size=post_path.stat().st_size,
+                description=post_content[:500],
+            )
+            db.add(post_artifact)
+            artifacts.append(post_artifact)
+
+        # ── Metadata ─────────────────────────────────────────────────────
+        if include_metadata:
+            job_manager.update_progress(job, 90, "metadata", "Generating metadata...")
+            metadata = {
+                "project_id": project_id,
+                "segment_id": segment_id,
+                "variant": variant,
+                "platform": platform,
+                "source_file": project.source_filename,
+                "start_time": segment.start_time,
+                "end_time": segment.end_time,
+                "duration": segment.duration,
+                "pipeline": "single_pass",
+                "exported_at": datetime.utcnow().isoformat(),
+                "artifacts": [{"type": a.type, "filename": a.filename} for a in artifacts],
+            }
+            metadata_path = exports_dir / f"{base_name}_metadata.json"
+            with open(metadata_path, "w", encoding="utf-8") as f:
+                json.dump(metadata, f, indent=2, ensure_ascii=False)
+            metadata_artifact = Artifact(
+                project_id=project_id,
+                segment_id=segment_id,
+                variant=variant,
+                type="metadata",
+                path=str(metadata_path),
+                filename=metadata_path.name,
+                size=metadata_path.stat().st_size,
+            )
+            db.add(metadata_artifact)
+            artifacts.append(metadata_artifact)
+
+        # ── Validate ─────────────────────────────────────────────────────
+        job_manager.update_progress(job, 95, "validate", "Validating export...")
+        validation = await self._validate_export(str(video_path))
+        if not validation["valid"]:
+            logger.error(f"[SinglePass] Validation failed: {validation['errors']}")
+            self._add_warning(job, "validation_failed",
+                f"Validation: {', '.join(validation['errors'])}")
+        else:
+            logger.info(
+                f"[SinglePass] Validation passed: {validation['duration']:.1f}s, "
+                f"{validation['width']}x{validation['height']}"
+            )
+
+        # ── QC check ─────────────────────────────────────────────────────
+        qc_result = None
+        if video_path.exists():
+            try:
+                qc_service = QCService()
+                qc_report = await qc_service.run(
+                    file_path=video_path,
+                    expected_duration=segment.duration,
+                    has_audio=True,
+                    ffprobe_path=settings.FFPROBE_PATH,
+                )
+                qc_result = qc_report.to_dict()
+                logger.info(
+                    f"[SinglePass] QC: {qc_report.overall.value} "
+                    f"({sum(1 for c in qc_report.checks if c.passed)}/{len(qc_report.checks)} checks passed)"
+                )
+                if video_artifact.description is None:
+                    video_artifact.description = ""
+                video_artifact.description = json.dumps({"qc": qc_result})
+            except Exception as qc_error:
+                logger.warning(f"[SinglePass] QC check failed (non-blocking): {qc_error}")
+
+        await db.commit()
+        job_manager.update_progress(job, 100, "complete", "Export complete (single-pass)!")
+
+        return {
+            "project_id": project_id,
+            "segment_id": segment_id,
+            "variant": variant,
+            "export_dir": str(exports_dir),
+            "artifacts": [a.to_dict() for a in artifacts],
+            "validation": validation,
+            "qc": qc_result,
+            "pipeline": "single_pass",
+        }
+
     async def generate_variants(
         self,
         job: Job,
@@ -517,6 +1065,269 @@ class ExportService:
                 "segment_id": segment_id,
                 "variants": generated_variants,
             }
+    
+    # ================================================================
+    # Utility methods
+    # ================================================================
+    
+    def _cleanup_temp(self, temp_path: Path, final_path: Path):
+        """Clean up a temporary file if it's not the final output."""
+        if temp_path != final_path and temp_path.exists():
+            try:
+                temp_path.unlink()
+            except Exception as e:
+                logger.warning(f"Could not delete temp clip {temp_path}: {e}")
+    
+    def _add_warning(self, job: Job, warning_type: str, message: str):
+        """Add a warning to job metadata."""
+        job.metadata = job.metadata or {}
+        job.metadata["warnings"] = job.metadata.get("warnings", [])
+        job.metadata["warnings"].append({
+            "type": warning_type,
+            "message": message
+        })
+    
+    async def _validate_export(self, video_path: str) -> Dict[str, Any]:
+        """Validate exported video using ffprobe.
+        
+        Checks:
+        - File exists and is not empty
+        - Has video stream with correct dimensions (1080x1920)
+        - Has audio stream
+        - Duration is reasonable (> 3s, < 300s)
+        
+        Returns dict with validation results.
+        """
+        from forge_engine.services.ffmpeg import FFmpegService
+        
+        result = {
+            "valid": True,
+            "errors": [],
+            "width": 0,
+            "height": 0,
+            "duration": 0,
+            "has_audio": False,
+            "has_video": False,
+            "file_size_mb": 0,
+        }
+        
+        path = Path(video_path)
+        if not path.exists():
+            result["valid"] = False
+            result["errors"].append("Output file does not exist")
+            return result
+        
+        file_size = path.stat().st_size
+        result["file_size_mb"] = round(file_size / (1024 * 1024), 2)
+        
+        if file_size < 10000:  # < 10KB is definitely corrupted
+            result["valid"] = False
+            result["errors"].append(f"File too small ({result['file_size_mb']} MB)")
+            return result
+        
+        try:
+            ffmpeg = FFmpegService.get_instance()
+            probe_data = await ffmpeg.probe(video_path)
+            
+            streams = probe_data.get("streams", [])
+            format_info = probe_data.get("format", {})
+            
+            # Check duration
+            duration = float(format_info.get("duration", 0))
+            result["duration"] = duration
+            
+            if duration < 1.0:
+                result["valid"] = False
+                result["errors"].append(f"Duration too short ({duration:.1f}s)")
+            elif duration > 600:
+                result["errors"].append(f"Duration unusually long ({duration:.1f}s)")
+            
+            # Check streams
+            for stream in streams:
+                codec_type = stream.get("codec_type")
+                if codec_type == "video":
+                    result["has_video"] = True
+                    result["width"] = stream.get("width", 0)
+                    result["height"] = stream.get("height", 0)
+                elif codec_type == "audio":
+                    result["has_audio"] = True
+            
+            if not result["has_video"]:
+                result["valid"] = False
+                result["errors"].append("No video stream found")
+            
+            if not result["has_audio"]:
+                result["errors"].append("No audio stream (may be intentional)")
+            
+            # Check dimensions (should be 1080x1920 for 9:16)
+            if result["has_video"]:
+                w, h = result["width"], result["height"]
+                if w > 0 and h > 0:
+                    aspect = h / w if w > 0 else 0
+                    if aspect < 1.5:  # Not vertical
+                        result["errors"].append(
+                            f"Unexpected aspect ratio: {w}x{h} (expected vertical 9:16)"
+                        )
+        
+        except Exception as e:
+            result["errors"].append(f"ffprobe failed: {str(e)[:100]}")
+        
+        return result
+    
+    async def _apply_cold_open(
+        self,
+        clip_path: str,
+        output_path: str,
+        segment: "Segment",
+        transcript_segments: List[Dict[str, Any]],
+        config: Dict[str, Any],
+        progress_callback=None,
+    ):
+        """Apply cold open effect: move the best hook to the beginning.
+        
+        Takes the rendered clip and reorders it:
+        1. Hook section (from middle/end of clip) plays first
+        2. Optional transition
+        3. Rest of clip plays from the beginning
+        
+        This creates the "start with the best moment" effect.
+        """
+        from forge_engine.services.ffmpeg import FFmpegService
+        
+        ffmpeg = FFmpegService.get_instance()
+        
+        # Adjust transcript timestamps to be relative to clip start (0-based)
+        adjusted_transcript = []
+        for seg in transcript_segments:
+            if segment.start_time <= seg.get("start", 0) <= segment.end_time:
+                adjusted_transcript.append({
+                    **seg,
+                    "start": seg["start"] - segment.start_time,
+                    "end": seg["end"] - segment.start_time,
+                    "words": [
+                        {**w, "start": w["start"] - segment.start_time, "end": w["end"] - segment.start_time}
+                        for w in seg.get("words", [])
+                    ] if seg.get("words") else None
+                })
+        
+        # Build segment dict for cold_open engine
+        segment_dict = {
+            "start_time": 0,
+            "end_time": segment.duration,
+        }
+        
+        # Generate cold open variations
+        language = config.get("language", "fr")
+        variations = await self.cold_open.generate_cold_opens(
+            segment=segment_dict,
+            transcript_segments=adjusted_transcript,
+            language=language,
+            max_variations=1,
+        )
+        
+        # Filter out control variation, take best
+        real_variations = [v for v in variations if v.id != "control"]
+        if not real_variations:
+            logger.info("[Export] No suitable cold open hook found, skipping")
+            # Just copy the file
+            shutil.copy2(clip_path, output_path)
+            return
+        
+        best = real_variations[0]
+        logger.info(
+            f"[Export] Cold open: hook '{best.hook.text[:40]}...' "
+            f"at {best.hook.start_time:.1f}s-{best.hook.end_time:.1f}s "
+            f"(score={best.hook.score}, style={best.style.value})"
+        )
+        
+        # Build FFmpeg command to reorder the clip:
+        # [hook_section] + [beginning_to_hook] + [after_hook_to_end]
+        hook_start = best.hook.start_time
+        hook_end = best.hook.end_time
+        clip_duration = segment.duration
+        
+        # Ensure valid ranges
+        if hook_start < 1.0 or hook_end > clip_duration - 1.0:
+            logger.info("[Export] Hook too close to edges, skipping cold open")
+            shutil.copy2(clip_path, output_path)
+            return
+        
+        filter_parts = []
+        concat_parts = []
+        idx = 0
+        
+        # Part 1: The hook (from middle/end)
+        filter_parts.append(
+            f"[0:v]trim=start={hook_start}:end={hook_end},setpts=PTS-STARTPTS[v{idx}]"
+        )
+        filter_parts.append(
+            f"[0:a]atrim=start={hook_start}:end={hook_end},asetpts=PTS-STARTPTS[a{idx}]"
+        )
+        concat_parts.append(f"[v{idx}][a{idx}]")
+        idx += 1
+        
+        # Part 2: Beginning up to hook start
+        if hook_start > 0.1:
+            filter_parts.append(
+                f"[0:v]trim=start=0:end={hook_start},setpts=PTS-STARTPTS[v{idx}]"
+            )
+            filter_parts.append(
+                f"[0:a]atrim=start=0:end={hook_start},asetpts=PTS-STARTPTS[a{idx}]"
+            )
+            concat_parts.append(f"[v{idx}][a{idx}]")
+            idx += 1
+        
+        # Part 3: After hook to end
+        if hook_end < clip_duration - 0.1:
+            filter_parts.append(
+                f"[0:v]trim=start={hook_end}:end={clip_duration},setpts=PTS-STARTPTS[v{idx}]"
+            )
+            filter_parts.append(
+                f"[0:a]atrim=start={hook_end}:end={clip_duration},asetpts=PTS-STARTPTS[a{idx}]"
+            )
+            concat_parts.append(f"[v{idx}][a{idx}]")
+            idx += 1
+        
+        # Concat all parts
+        n = len(concat_parts)
+        filter_parts.append(
+            f"{''.join(concat_parts)}concat=n={n}:v=1:a=1[outv][outa]"
+        )
+        
+        filter_complex = ";".join(filter_parts)
+        
+        cmd = [
+            ffmpeg.ffmpeg_path,
+            "-y",
+            "-i", clip_path,
+            "-filter_complex", filter_complex,
+            "-map", "[outv]",
+            "-map", "[outa]",
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "18",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-movflags", "+faststart",
+            output_path
+        ]
+        
+        logger.info(f"[Export] Cold open FFmpeg: {n} parts, hook={hook_start:.1f}-{hook_end:.1f}s")
+        
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        
+        if proc.returncode != 0:
+            error_msg = stderr.decode(errors='replace')[:500]
+            logger.error(f"[Export] Cold open FFmpeg failed: {error_msg}")
+            raise RuntimeError(f"Cold open render failed: {error_msg}")
+        
+        if progress_callback:
+            progress_callback(100)
     
     def _generate_post(self, segment: "Segment", platform: str) -> str:
         """Generate post text with title, description, and hashtags."""
@@ -786,9 +1597,8 @@ class ExportService:
             errors = []
             total_segments = len(segments)
             
-            # Get the viral_pro caption style
-            from forge_engine.services.captions import CAPTION_STYLES
-            caption_style_config = CAPTION_STYLES.get(style, CAPTION_STYLES["viral_pro"])
+            from forge_engine.services.captions import DEFAULT_STYLE
+            caption_style_config = DEFAULT_STYLE
             
             # Convert backend style to frontend format for run_export
             caption_style = {
@@ -820,20 +1630,11 @@ class ExportService:
                     # Create a sub-job for this export (or use same job with progress offset)
                     variant = f"batch_{idx+1:02d}"
                     
-                    # Use segment's detected layout if available
+                    # Let run_export use the segment's detected layout via its
+                    # own fallback (lines that read segment.facecam_rect directly).
+                    # Don't build a sourceCrop wrapper here -- that format expects
+                    # 0-1 normalized values which we don't have from segment rects.
                     layout_config = None
-                    if segment.facecam_rect and segment.content_rect:
-                        layout_config = {
-                            "facecam": {
-                                "x": 0, "y": 0, "width": 1, "height": 0.4,
-                                "sourceCrop": segment.facecam_rect
-                            },
-                            "content": {
-                                "x": 0, "y": 0.4, "width": 1, "height": 0.6,
-                                "sourceCrop": segment.content_rect
-                            },
-                            "facecamRatio": 0.4
-                        }
                     
                     # Run export
                     export_result = await self.run_export(

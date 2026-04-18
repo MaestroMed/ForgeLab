@@ -160,10 +160,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await monitor.start()
     logger.info("L'ŒIL monitoring service started")
     
+    # Auto Pipeline and Publish Scheduler are available but not auto-started.
+    # Enable manually via API: POST /v1/monitor/pipeline/start
+    from forge_engine.services.auto_pipeline import AutoPipelineService
+    auto_pipeline = AutoPipelineService.get_instance()
+    logger.info("Auto Pipeline loaded (start via API when ready)")
+
+    from forge_engine.services.publish_scheduler import PublishSchedulerService
+    scheduler = PublishSchedulerService.get_instance()
+    logger.info("Publish Scheduler loaded (start via API when ready)")
+    
     yield
     
     # Cleanup
     logger.info("Shutting down FORGE Engine...")
+    await scheduler.stop()
+    await auto_pipeline.stop()
     await monitor.stop()
     await job_manager.stop()
     await close_db()
@@ -219,14 +231,72 @@ def create_app() -> FastAPI:
         app.mount("/library", StaticFiles(directory=str(library_path)), name="library")
         logger.info("Library mounted at /library: %s", library_path)
     
+    # Serve clip queue videos (for mobile review app)
+    @app.get("/clips/{clip_id}/video")
+    async def serve_clip_video(clip_id: str):
+        """Serve a queued clip's video file for mobile streaming."""
+        from pathlib import Path
+        from fastapi import HTTPException
+        from forge_engine.core.database import async_session_maker
+        from forge_engine.models.review import ClipQueue
+        from sqlalchemy import select
+        
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(ClipQueue).where(ClipQueue.id == clip_id)
+            )
+            clip = result.scalar_one_or_none()
+            
+            if not clip:
+                raise HTTPException(status_code=404, detail="Clip not found")
+            
+            video_path = Path(clip.video_path)
+            if not video_path.exists():
+                raise HTTPException(status_code=404, detail="Video file not found")
+            
+            return FileResponse(
+                video_path,
+                media_type="video/mp4",
+                headers={
+                    "Accept-Ranges": "bytes",
+                    "Cache-Control": "public, max-age=3600",
+                }
+            )
+    
     # Serve project files
+    ALLOWED_MEDIA_TYPES = {"proxy", "audio"}
+
     @app.get("/media/{project_id}/{file_type}")
     async def serve_media(project_id: str, file_type: str):
-        """Serve project media files (proxy, audio, source)."""
+        """Serve project media files (proxy, audio)."""
+        import uuid as _uuid
+        from pathlib import Path
         from fastapi import HTTPException
-        
+
+        # Validate project_id is a proper UUID to prevent path traversal
+        try:
+            _uuid.UUID(project_id)
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=400, detail="Invalid project ID")
+
+        # Restrict file_type to allowed values
+        if file_type not in ALLOWED_MEDIA_TYPES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type. Allowed: {', '.join(sorted(ALLOWED_MEDIA_TYPES))}",
+            )
+
         project_dir = library_path / "projects" / project_id
-        
+
+        # Verify resolved path is inside the library to block any traversal
+        try:
+            resolved_dir = Path(project_dir).resolve()
+            resolved_library = Path(library_path).resolve()
+            if not str(resolved_dir).startswith(str(resolved_library)):
+                raise HTTPException(status_code=400, detail="Invalid project path")
+        except (OSError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid project path")
+
         # Try multiple possible locations
         possible_paths = {
             "proxy": [
@@ -238,14 +308,14 @@ def create_app() -> FastAPI:
                 project_dir / "audio.wav",
             ],
         }
-        
+
         paths_to_try = possible_paths.get(file_type, [])
-        
+
         for file_path in paths_to_try:
             if file_path.exists():
                 media_type = "video/mp4" if file_type == "proxy" else "audio/wav"
                 return FileResponse(file_path, media_type=media_type)
-        
+
         # Log what we tried
         logger.warning("Media not found for %s/%s. Tried: %s", project_id, file_type, paths_to_try)
         raise HTTPException(status_code=404, detail=f"File not found: {file_type}")
@@ -272,8 +342,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
 

@@ -44,32 +44,66 @@ class FFmpegService:
             return self.version is not None
         
         try:
-            # Get version
-            proc = await asyncio.create_subprocess_exec(
-                self.ffmpeg_path, "-version",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, _ = await proc.communicate()
+            import subprocess
             
-            if proc.returncode != 0:
+            # Use subprocess.run in executor to avoid Windows asyncio issues
+            loop = asyncio.get_event_loop()
+            
+            def run_ffmpeg_check():
+                # Get version
+                result = subprocess.run(
+                    [self.ffmpeg_path, "-version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if result.returncode != 0:
+                    return None, None, None
+                
+                version_output = result.stdout
+                
+                # Check encoders
+                result = subprocess.run(
+                    [self.ffmpeg_path, "-encoders"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                encoders_output = result.stdout
+                
+                # Check decoders
+                result = subprocess.run(
+                    [self.ffmpeg_path, "-decoders"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                decoders_output = result.stdout
+                
+                # Check filters
+                result = subprocess.run(
+                    [self.ffmpeg_path, "-filters"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                filters_output = result.stdout
+                
+                return version_output, encoders_output, decoders_output, filters_output
+            
+            results = await loop.run_in_executor(None, run_ffmpeg_check)
+            
+            if results is None or results[0] is None:
                 return False
             
+            version_output, encoders_output, decoders_output, filters_output = results
+            
             # Parse version
-            output = stdout.decode()
-            match = re.search(r"ffmpeg version (\S+)", output)
+            match = re.search(r"ffmpeg version (\S+)", version_output)
             if match:
                 self.version = match.group(1)
             
             # Check encoders
-            proc = await asyncio.create_subprocess_exec(
-                self.ffmpeg_path, "-encoders",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, _ = await proc.communicate()
-            encoders_output = stdout.decode()
-            
             self.has_nvenc = "h264_nvenc" in encoders_output
             self.available_encoders = []
             
@@ -80,14 +114,6 @@ class FFmpegService:
                         self.available_encoders.append(parts[1])
             
             # Check decoders for NVDEC (hardware decoding)
-            proc = await asyncio.create_subprocess_exec(
-                self.ffmpeg_path, "-decoders",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, _ = await proc.communicate()
-            decoders_output = stdout.decode()
-            
             self.has_nvdec = "h264_cuvid" in decoders_output
             self.available_decoders = []
             
@@ -98,13 +124,6 @@ class FFmpegService:
                         self.available_decoders.append(parts[1])
             
             # Check filters for libass and scale_npp (GPU scaling)
-            proc = await asyncio.create_subprocess_exec(
-                self.ffmpeg_path, "-filters",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, _ = await proc.communicate()
-            filters_output = stdout.decode()
             self.has_libass = "ass" in filters_output
             self.has_scale_npp = "scale_npp" in filters_output or "scale_cuda" in filters_output
             
@@ -116,7 +135,9 @@ class FFmpegService:
             return True
             
         except Exception as e:
-            logger.error("FFmpeg check failed: %s", e)
+            import traceback
+            logger.error("FFmpeg check failed: %s\n%s", e, traceback.format_exc())
+            logger.error("FFmpeg path was: %s", self.ffmpeg_path)
             return False
     
     async def probe(self, file_path: str) -> Dict[str, Any]:

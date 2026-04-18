@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, CheckCircle, XCircle, Clock, Loader2, RefreshCw, Trash2, ExternalLink, Cpu, Zap, ChevronDown, ChevronUp, FolderOpen, Play, AlertTriangle } from 'lucide-react';
+import { X, CheckCircle, XCircle, Clock, Loader2, RefreshCw, Trash2, ExternalLink, Cpu, Zap, ChevronDown, ChevronUp, FolderOpen, AlertTriangle } from 'lucide-react';
 import { useJobsStore, useUIStore, useToastStore } from '@/store';
 import { useShallow } from 'zustand/react/shallow';
 import { useNavigate } from 'react-router-dom';
@@ -49,12 +49,13 @@ export default function JobDrawer() {
       
       try {
         const project = await api.getProject(projectId);
-        if (project.data) {
+        const projectData = project.data;
+        if (projectData) {
           setJobDetails(prev => ({
             ...prev,
             [jobId]: {
               id: jobId,
-              projectName: project.data.name,
+              projectName: projectData.name,
             }
           }));
         }
@@ -74,7 +75,6 @@ export default function JobDrawer() {
   // Auto-clear completed jobs after 2 minutes
   useEffect(() => {
     const interval = setInterval(() => {
-      const now = Date.now();
       jobs.forEach((job) => {
         if (job.status === 'completed') {
           // Remove completed jobs after 2 minutes (120000ms)
@@ -105,7 +105,7 @@ export default function JobDrawer() {
 
   const handleRetry = async (jobId: string) => {
     try {
-      const response = await api.request(`/jobs/${jobId}/retry`, { method: 'POST' });
+      const response = await api.request<{ success: boolean; error?: string }>(`/jobs/${jobId}/retry`, { method: 'POST' });
       if (response.success) {
         addToast({ type: 'success', title: 'Relance', message: 'La tâche a été relancée' });
       } else {
@@ -120,10 +120,13 @@ export default function JobDrawer() {
   const handleOpenFolder = async (projectId: string) => {
     try {
       const project = await api.getProject(projectId);
-      if (project.data?.path) {
+      const sourcePath = project.data?.sourcePath;
+      if (sourcePath) {
+        // Derive project directory from sourcePath (drop the filename)
+        const projectDir = sourcePath.replace(/[\\/][^\\/]+$/, '');
         // Open exports folder
-        const exportsPath = `${project.data.path}\\exports`;
-        window.forge?.openPath?.(exportsPath) || window.forge?.openPath?.(project.data.path);
+        const exportsPath = `${projectDir}\\exports`;
+        window.forge?.openPath?.(exportsPath) || window.forge?.openPath?.(projectDir);
       }
     } catch (e) {
       console.error('Failed to open folder:', e);
@@ -132,17 +135,6 @@ export default function JobDrawer() {
 
   const handleClearCompleted = () => {
     completedJobs.forEach((job) => removeJob(job.id));
-  };
-
-  // Format elapsed time
-  const formatDuration = (startedAt?: string) => {
-    if (!startedAt) return '';
-    const start = new Date(startedAt);
-    const now = new Date();
-    const seconds = Math.floor((now.getTime() - start.getTime()) / 1000);
-    if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
   };
 
   const jobTypeLabels: Record<string, string> = {
