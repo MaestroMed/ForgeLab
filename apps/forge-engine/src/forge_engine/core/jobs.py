@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import uuid
 import json
 from dataclasses import dataclass, field
@@ -14,6 +15,17 @@ from forge_engine.core.database import async_session_maker
 from forge_engine.models.job import JobRecord
 
 logger = logging.getLogger(__name__)
+
+
+def _default_max_workers() -> int:
+    """Read FORGE_MAX_WORKERS from env (default: 1 for sequential stability)."""
+    raw = os.environ.get("FORGE_MAX_WORKERS", "1")
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Invalid FORGE_MAX_WORKERS=%r, defaulting to 1", raw)
+        return 1
+    return max(1, value)
 
 
 class JobStatus(str, Enum):
@@ -82,7 +94,10 @@ class JobManager:
         self._handlers: Dict[str, Callable] = {}
         self._running = False
         self._workers: List[asyncio.Task] = []
-        self._max_workers = 1  # Sequential processing for stability
+        # Sequential by default for GPU/FFmpeg stability; override with
+        # FORGE_MAX_WORKERS=N when the host has headroom (multiple GPUs or
+        # CPU-only jobs).
+        self._max_workers = _default_max_workers()
         self._listeners: Dict[str, List[Callable[[Job], None]]] = {}
         self._main_loop: Optional[asyncio.AbstractEventLoop] = None
     
@@ -164,7 +179,9 @@ class JobManager:
                         job_id = record.id
                         job_type = record.type
                         project_id = record.project_id
-                        kwargs = record.result if record.result else {} # Arguments stored in result/payload temporarily
+                        # Prefer the dedicated payload column; fall back to
+                        # legacy jobs that stored kwargs in `result`.
+                        kwargs = record.payload or record.result or {}
                         
                         # Lock it
                         record.status = JobStatus.RUNNING.value
@@ -204,10 +221,7 @@ class JobManager:
             async with async_session_maker() as db:
                 result = await db.execute(select(JobRecord).where(JobRecord.id == job.id))
                 record = result.scalar_one()
-                # We interpret 'result' column as input args for pending jobs
-                # This is a bit hacky but avoids schema migration for now
-                # Ideally we should have a 'payload' column
-                args = record.result or {}
+                args = record.payload or record.result or {}
                 job._kwargs = args
 
             if job._handler:
@@ -263,8 +277,7 @@ class JobManager:
                 type=job_type.value,
                 project_id=project_id,
                 status=JobStatus.PENDING.value,
-                # Store args in result column for now (hack)
-                result=kwargs, 
+                payload=kwargs,
                 created_at=datetime.utcnow()
             )
             db.add(record)

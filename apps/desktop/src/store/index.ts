@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { temporal } from 'zundo';
+import { parseWsMessage } from '../lib/ws-validation';
+import { logger } from '../lib/logger';
 
 // Engine status store
 interface EngineState {
@@ -515,73 +517,74 @@ export const useWebSocketStore = create<WebSocketState>((set, get) => {
   };
 
   const handleMessage = (event: MessageEvent) => {
-    try {
-      const data = JSON.parse(event.data);
-      
-      if (data.type === 'JOB_UPDATE') {
-        const job = data.payload;
-        const prevJob = useJobsStore.getState().jobs.find((j) => j.id === job.id);
-        
-        // Update jobs store directly
-        useJobsStore.getState().upsertJob(job);
-        
-        // Check for job completion to trigger notifications
-        // Now also trigger on pending -> completed (for fast jobs)
-        const wasNotComplete = !prevJob || prevJob.status === 'running' || prevJob.status === 'pending';
-        if (wasNotComplete && job.status === 'completed') {
-          // Desktop notification
-          if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('FORGE LAB', {
-              body: `${getJobTypeLabel(job.type)} terminé avec succès`,
-              icon: '/icon.png',
-            });
-          }
-          // Toast notification
-          useToastStore.getState().addToast({
-            type: 'success',
-            title: 'Tâche terminée',
-            message: `${getJobTypeLabel(job.type)} complété`,
-          });
-        } else if (wasNotComplete && job.status === 'failed') {
-          // Desktop notification for failure
-          if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('FORGE LAB', {
-              body: `${getJobTypeLabel(job.type)} a échoué`,
-              icon: '/icon.png',
-            });
-          }
-          // Toast notification
-          useToastStore.getState().addToast({
-            type: 'error',
-            title: 'Erreur',
-            message: job.error || `${getJobTypeLabel(job.type)} a échoué`,
+    const envelope = typeof event.data === 'string' ? parseWsMessage(event.data) : null;
+    if (!envelope) {
+      logger.warn('Dropped malformed WS message');
+      return;
+    }
+
+    if (envelope.type === 'JOB_UPDATE') {
+      // Normalize snake_case -> camelCase for the local Job shape.
+      const raw = envelope.payload;
+      const job = {
+        id: raw.id,
+        type: raw.type,
+        projectId: raw.project_id ?? undefined,
+        status: raw.status,
+        progress: raw.progress,
+        stage: raw.stage ?? undefined,
+        message: raw.message ?? undefined,
+        error: raw.error ?? undefined,
+      };
+      const prevJob = useJobsStore.getState().jobs.find((j) => j.id === job.id);
+
+      useJobsStore.getState().upsertJob(job);
+
+      const wasNotComplete = !prevJob || prevJob.status === 'running' || prevJob.status === 'pending';
+      if (wasNotComplete && job.status === 'completed') {
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification('FORGE LAB', {
+            body: `${getJobTypeLabel(job.type)} terminé avec succès`,
+            icon: '/icon.png',
           });
         }
-      } else if (data.type === 'PROJECT_UPDATE') {
-        // Handle project status updates
-        const project = data.payload;
-        console.log('Project update received:', project.id, '->', project.status);
-        
-        // Update projects store
-        useProjectsStore.getState().updateProject(project);
-        
-        // Show toast for status changes
-        const statusMessages: Record<string, string> = {
-          ingested: 'Ingestion terminée',
-          analyzed: 'Analyse terminée',
-          error: 'Erreur sur le projet',
-        };
-        
-        if (statusMessages[project.status]) {
-          useToastStore.getState().addToast({
-            type: project.status === 'error' ? 'error' : 'info',
-            title: statusMessages[project.status],
-            message: project.name || project.id.slice(0, 8),
+        useToastStore.getState().addToast({
+          type: 'success',
+          title: 'Tâche terminée',
+          message: `${getJobTypeLabel(job.type)} complété`,
+        });
+      } else if (wasNotComplete && job.status === 'failed') {
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification('FORGE LAB', {
+            body: `${getJobTypeLabel(job.type)} a échoué`,
+            icon: '/icon.png',
           });
         }
+        useToastStore.getState().addToast({
+          type: 'error',
+          title: 'Erreur',
+          message: job.error || `${getJobTypeLabel(job.type)} a échoué`,
+        });
       }
-    } catch (e) {
-      console.error('WS Error:', e);
+      return;
+    }
+
+    // PROJECT_UPDATE
+    const project = envelope.payload;
+    useProjectsStore.getState().updateProject(project as unknown as Partial<Project> & { id: string });
+
+    const statusMessages: Record<string, string> = {
+      ingested: 'Ingestion terminée',
+      analyzed: 'Analyse terminée',
+      error: 'Erreur sur le projet',
+    };
+
+    if (statusMessages[project.status]) {
+      useToastStore.getState().addToast({
+        type: project.status === 'error' ? 'error' : 'info',
+        title: statusMessages[project.status],
+        message: (typeof project.name === 'string' ? project.name : undefined) || project.id.slice(0, 8),
+      });
     }
   };
   
@@ -600,11 +603,11 @@ export const useWebSocketStore = create<WebSocketState>((set, get) => {
     // Avoid multiple connections
     if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
 
-    console.log('Connecting to WebSocket...');
+    logger.log('Connecting to WebSocket...');
     socket = new WebSocket('ws://localhost:8420/v1/ws');
-    
+
     socket.onopen = () => {
-      console.log('WS Connected');
+      logger.log('WS Connected');
       set({ connected: true });
       if (reconnectTimer) clearTimeout(reconnectTimer);
       // Start polling as fallback (in case WS messages don't come through)
@@ -612,15 +615,15 @@ export const useWebSocketStore = create<WebSocketState>((set, get) => {
     };
 
     socket.onclose = () => {
-      console.log('WS Disconnected');
+      logger.log('WS Disconnected');
       set({ connected: false });
       socket = null;
       // Reconnect logic
       reconnectTimer = setTimeout(connect, 3000);
     };
-    
+
     socket.onerror = (error) => {
-      console.error('WS Error:', error);
+      logger.error('WS Error:', error);
       // Close will trigger reconnection
       if (socket) socket.close();
     };

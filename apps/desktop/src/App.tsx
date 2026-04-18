@@ -2,6 +2,7 @@ import { Routes, Route } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import { Toaster } from '@/components/ui/Toaster';
 import Layout from '@/components/layout/Layout';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import HomePage from '@/pages/HomePage';
 import ProjectPage from '@/pages/ProjectPage';
 import SettingsPage from '@/pages/SettingsPage';
@@ -30,16 +31,18 @@ export default function App() {
   return (
     <>
       <Layout>
-        <AnimatePresence mode="wait">
-          <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/project/:id/*" element={<ProjectPage />} />
-            <Route path="/editor/:projectId" element={<ClipEditorPage />} />
-            <Route path="/surveillance" element={<SurveillancePage />} />
-            <Route path="/admin" element={<AdminPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-          </Routes>
-        </AnimatePresence>
+        <ErrorBoundary>
+          <AnimatePresence mode="wait">
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/project/:id/*" element={<ProjectPage />} />
+              <Route path="/editor/:projectId" element={<ClipEditorPage />} />
+              <Route path="/surveillance" element={<SurveillancePage />} />
+              <Route path="/admin" element={<AdminPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+            </Routes>
+          </AnimatePresence>
+        </ErrorBoundary>
       </Layout>
       <Toaster />
     </>

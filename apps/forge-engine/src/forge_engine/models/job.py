@@ -25,6 +25,10 @@ class JobRecord(Base):
     stage: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # payload = handler input kwargs (set at creation); result = handler output
+    # (set on completion). Historically both were stored in `result` — see
+    # init_db() for the light SQLite migration that adds `payload`.
+    payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     
     # Timestamps

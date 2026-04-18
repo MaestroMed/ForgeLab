@@ -1,5 +1,12 @@
 # FORGE/LAB - Système de Plugins
 
+> **Statut : EXPÉRIMENTAL / prévu, non implémenté.**
+>
+> Ce document décrit l'architecture cible. Le chargeur entry-point, le registre
+> de plugins et l'isolation runtime ne sont **pas** encore livrés dans
+> `apps/forge-engine`. Ne comptez pas sur ces API tant que cette note n'a pas
+> été retirée. Voir `docs/roadmap.md` pour le suivi.
+
 ## Vue d'ensemble
 
 FORGE supporte un système de plugins Python permettant d'étendre ses capacités :

@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from forge_engine.services.ffmpeg import FFmpegService
+from forge_engine.services.ffmpeg import FFmpegService, drain_stream_tail, format_stderr_tail
 from forge_engine.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -149,18 +149,24 @@ class IntroEngine:
         
         logger.info(f"Rendering intro: {' '.join(cmd)}")
         
-        # Run FFmpeg
+        # Run FFmpeg — capture stderr for diagnostics on failure.
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL
+            stderr=asyncio.subprocess.PIPE,
         )
-        
+        stderr_task = asyncio.create_task(drain_stream_tail(proc.stderr))
+
         await proc.wait()
-        
+        stderr_tail = format_stderr_tail(await stderr_task)
+
         if proc.returncode != 0:
-            logger.error(f"Intro rendering failed with code {proc.returncode}")
-            raise RuntimeError("Intro rendering failed")
+            logger.error(
+                "Intro rendering failed with code %d. Stderr tail:\n%s",
+                proc.returncode,
+                stderr_tail or "(empty)",
+            )
+            raise RuntimeError(f"Intro rendering failed: {stderr_tail[-500:] or 'unknown error'}")
         
         if progress_callback:
             progress_callback(100.0)
@@ -294,19 +300,26 @@ class IntroEngine:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL
+            stderr=asyncio.subprocess.PIPE,
         )
-        
+        stderr_task = asyncio.create_task(drain_stream_tail(proc.stderr))
+
         await proc.wait()
-        
+        stderr_tail = format_stderr_tail(await stderr_task)
+
         # Cleanup concat file
         try:
             concat_file.unlink()
         except Exception:
             pass
-        
+
         if proc.returncode != 0:
-            raise RuntimeError("Concat failed")
+            logger.error(
+                "Concat failed with code %d. Stderr tail:\n%s",
+                proc.returncode,
+                stderr_tail or "(empty)",
+            )
+            raise RuntimeError(f"Concat failed: {stderr_tail[-500:] or 'unknown error'}")
         
         if progress_callback:
             progress_callback(100.0)

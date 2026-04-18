@@ -30,7 +30,8 @@ pnpm install
 # Configurer Python (une seule fois)
 cd apps/forge-engine
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1  # Windows
+.\.venv\Scripts\Activate.ps1    # Windows (PowerShell)
+# source .venv/bin/activate     # Linux / macOS
 pip install -r requirements.txt
 cd ../..
 
@@ -41,7 +42,13 @@ pnpm dev
 Ou utilisez le script de setup :
 
 ```powershell
+# Windows (PowerShell)
 .\scripts\setup.ps1
+```
+
+```bash
+# Linux / macOS
+./scripts/setup.sh
 ```
 
 ## Architecture
@@ -85,7 +92,11 @@ FORGE_FORCE_CPU=1 pnpm dev
 Vérifiez vos capacités FFmpeg :
 
 ```powershell
-.\scripts\check-ffmpeg.ps1
+.\scripts\check-ffmpeg.ps1   # Windows
+```
+
+```bash
+./scripts/check-ffmpeg.sh    # Linux / macOS
 ```
 
 ## Demo

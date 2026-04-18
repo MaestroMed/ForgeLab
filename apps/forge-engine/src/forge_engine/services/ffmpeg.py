@@ -14,6 +14,41 @@ from forge_engine.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Size of the rolling stderr buffer kept for diagnostics on failure. FFmpeg's
+# error output is short and terminal; 16 KiB is enough to capture the final
+# lines where the actual cause appears.
+FFMPEG_STDERR_TAIL_BYTES = 16 * 1024
+
+
+async def drain_stream_tail(stream: Optional[asyncio.StreamReader], max_bytes: int = FFMPEG_STDERR_TAIL_BYTES) -> bytes:
+    """Continuously drain an async stream into a rolling tail buffer.
+
+    We pipe FFmpeg's stderr (instead of DEVNULL) so we can surface useful
+    diagnostics when a render fails. We must drain continuously — on Windows a
+    full pipe buffer will deadlock the subprocess.
+    """
+    if stream is None:
+        return b""
+    buf = bytearray()
+    try:
+        while True:
+            chunk = await stream.read(4096)
+            if not chunk:
+                break
+            buf.extend(chunk)
+            if len(buf) > max_bytes:
+                del buf[: len(buf) - max_bytes]
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # pragma: no cover — best-effort logging path
+        logger.debug("Stderr drain error (ignored): %s", exc)
+    return bytes(buf)
+
+
+def format_stderr_tail(tail: bytes) -> str:
+    """Decode a stderr tail buffer for logging."""
+    return tail.decode("utf-8", errors="replace").strip()
+
 
 class FFmpegService:
     """Service for FFmpeg operations."""
@@ -464,15 +499,17 @@ class FFmpegService:
         cmd_with_progress.insert(idx + (2 if progress_file else 0), "-nostats")
         
         logger.info("Running FFmpeg: %s", " ".join(cmd_with_progress[:5]) + "...")
-        
-        # Start process - redirect all output to avoid blocking on full buffers
-        # On Windows, pipe buffers can fill up and block FFmpeg
+
+        # Pipe stderr so we can surface the real cause on failure. A background
+        # task drains it into a rolling tail buffer; stdout is still dropped
+        # since FFmpeg's progress info goes via the -progress file above.
         proc = await asyncio.create_subprocess_exec(
             *cmd_with_progress,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL
+            stderr=asyncio.subprocess.PIPE,
         )
+        stderr_task = asyncio.create_task(drain_stream_tail(proc.stderr))
         
         # Poll progress file while FFmpeg runs
         last_progress = 0.0
@@ -537,15 +574,19 @@ class FFmpegService:
         
         # Wait for process to fully complete
         await proc.wait()
-        
+        stderr_tail = format_stderr_tail(await stderr_task)
+
         if proc.returncode != 0:
-            logger.error("FFmpeg failed with exit code %d", proc.returncode)
+            if stderr_tail:
+                logger.error("FFmpeg failed with exit code %d. Stderr tail:\n%s", proc.returncode, stderr_tail)
+            else:
+                logger.error("FFmpeg failed with exit code %d (no stderr captured)", proc.returncode)
             return False
-        
+
         # Final 100% callback
         if progress_callback:
             progress_callback(100.0)
-        
+
         return True
     
     def build_composition_filter(

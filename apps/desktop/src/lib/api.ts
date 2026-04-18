@@ -1,4 +1,22 @@
 const API_BASE = 'http://localhost:8420/v1';
+const HEALTH_URL = 'http://localhost:8420/health';
+
+// Default request timeout. Kept generous because some endpoints (export,
+// analyze) trigger heavy server-side work — callers that only need a quick
+// status check should pass a shorter `timeoutMs`.
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+export class ApiTimeoutError extends Error {
+  constructor(endpoint: string, timeoutMs: number) {
+    super(`Request to ${endpoint} timed out after ${timeoutMs}ms`);
+    this.name = 'ApiTimeoutError';
+  }
+}
+
+export interface ApiRequestInit extends RequestInit {
+  /** Override the default request timeout (ms). Pass 0 to disable. */
+  timeoutMs?: number;
+}
 
 interface ApiResponse<T> {
   success: boolean;
@@ -17,17 +35,40 @@ class ApiClient {
   // Public request method for dynamic endpoints
   async request<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: ApiRequestInit = {}
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
-    
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-    });
+    const { timeoutMs = DEFAULT_TIMEOUT_MS, signal: externalSignal, ...rest } = options;
+
+    const controller = new AbortController();
+    const externalAbortHandler = () => controller.abort();
+    if (externalSignal) {
+      if (externalSignal.aborted) controller.abort();
+      else externalSignal.addEventListener('abort', externalAbortHandler);
+    }
+    const timer = timeoutMs > 0
+      ? setTimeout(() => controller.abort(new ApiTimeoutError(endpoint, timeoutMs)), timeoutMs)
+      : null;
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        ...rest,
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...rest.headers,
+        },
+      });
+    } catch (err) {
+      if (controller.signal.aborted && controller.signal.reason instanceof ApiTimeoutError) {
+        throw controller.signal.reason;
+      }
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (externalSignal) externalSignal.removeEventListener('abort', externalAbortHandler);
+    }
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
@@ -280,8 +321,20 @@ class ApiClient {
     return this.request<any>('/capabilities');
   }
 
-  async checkHealth() {
-    return fetch('http://localhost:8420/health').then(r => r.json());
+  async checkHealth(timeoutMs: number = 5_000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new ApiTimeoutError('/health', timeoutMs)), timeoutMs);
+    try {
+      const response = await fetch(HEALTH_URL, { signal: controller.signal });
+      return await response.json();
+    } catch (err) {
+      if (controller.signal.aborted && controller.signal.reason instanceof ApiTimeoutError) {
+        throw controller.signal.reason;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 
