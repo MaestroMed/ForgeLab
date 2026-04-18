@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from forge_engine.core.config import settings
 from forge_engine.core.database import async_session_maker
 from forge_engine.core.jobs import Job, JobManager
+from forge_engine.core.security import SourcePathError, validate_source_path
 from forge_engine.models import Project
 from forge_engine.services.ffmpeg import FFmpegService
 
@@ -50,9 +51,18 @@ class IngestService:
                 raise ValueError(f"Project not found: {project_id}")
             
             source_path = project.source_path
-            
-            if not os.path.exists(source_path):
-                raise FileNotFoundError(f"Source file not found: {source_path}")
+
+            # Re-validate the stored source_path: the DB row may have been written
+            # before validation existed, and symlinks/mounts can change between
+            # project creation and ingest.
+            try:
+                resolved = validate_source_path(source_path)
+            except SourcePathError as exc:
+                project.status = "error"
+                project.error_message = f"Invalid source_path: {exc}"
+                await db.commit()
+                raise FileNotFoundError(str(exc)) from exc
+            source_path = str(resolved)
             
             # Create project directory structure
             project_dir = settings.LIBRARY_PATH / "projects" / project_id

@@ -114,12 +114,23 @@ def create_app() -> FastAPI:
         redoc_url="/redoc" if settings.DEBUG else None,
     )
     
-    # CORS middleware
+    # CORS middleware. Wildcard + credentials is forbidden by the CORS spec, so we
+    # always use an explicit origin allowlist. DEBUG widens it to cover common local
+    # dev ports; production uses CORS_ORIGINS from settings (FORGE_CORS_ORIGINS).
+    cors_origins = settings.CORS_ORIGINS
+    if settings.DEBUG:
+        cors_origins = list({
+            *settings.CORS_ORIGINS,
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:5173",
+        })
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"] if settings.DEBUG else settings.CORS_ORIGINS,
+        allow_origins=cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
     

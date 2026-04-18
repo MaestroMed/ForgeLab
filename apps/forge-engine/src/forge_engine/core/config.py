@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # App info
     VERSION: str = "1.0.0"
     APP_NAME: str = "FORGE Engine"
-    DEBUG: bool = True  # Dev mode
+    DEBUG: bool = False  # Set FORGE_DEBUG=1 to enable /docs, verbose logs, and permissive CORS.
     
     # Server
     HOST: str = "127.0.0.1"

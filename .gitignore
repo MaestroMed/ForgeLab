@@ -50,6 +50,8 @@ pnpm-debug.log*
 
 # Electron
 release/
+dist-electron/
+apps/desktop/dist-electron/
 
 # FORGE Library (user data)
 FORGE_LIBRARY/
