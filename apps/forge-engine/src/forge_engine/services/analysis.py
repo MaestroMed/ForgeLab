@@ -131,8 +131,8 @@ class AnalysisService:
                             if "error" not in data:
                                 logger.info("✓ Loaded cached: %s", filename)
                                 return data
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Failed to load cached step %s: %s", filename, e)
                 return None
 
             # Step 1: Transcription

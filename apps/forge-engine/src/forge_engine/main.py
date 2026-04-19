@@ -2,12 +2,14 @@
 
 import asyncio
 import logging
+import traceback
+import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from forge_engine.api.v1.router import api_router
@@ -281,6 +283,26 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Global exception handler — returns structured JSON with a trace ID
+    # instead of HTML stack traces for anything not handled by FastAPI's
+    # built-in HTTPException / RequestValidationError handlers.
+    @app.exception_handler(Exception)
+    async def global_exception_handler(request: Request, exc: Exception):
+        trace_id = str(uuid.uuid4())[:8]
+        logger.error(
+            "[%s] Unhandled error on %s %s: %s\n%s",
+            trace_id, request.method, request.url.path, exc,
+            traceback.format_exc(),
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Internal server error",
+                "detail": str(exc)[:200],
+                "trace_id": trace_id,
+            },
+        )
 
     # Health check endpoint
     @app.get("/health")

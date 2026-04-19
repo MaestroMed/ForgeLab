@@ -4,6 +4,7 @@ import { AnimatePresence } from 'framer-motion';
 import { Toaster } from '@/components/ui/Toaster';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import ShortcutsOverlay from '@/components/ui/ShortcutsOverlay';
+import CommandPalette from '@/components/ui/CommandPalette';
 import Layout from '@/components/layout/Layout';
 import HomePage from '@/pages/HomePage';
 import ProjectPage from '@/pages/ProjectPage';
@@ -69,6 +70,7 @@ export default function App() {
         </AnimatePresence>
       </Layout>
       <ShortcutsOverlay />
+      <CommandPalette />
       <Toaster />
     </ErrorBoundary>
   );

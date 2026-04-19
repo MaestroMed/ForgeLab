@@ -179,8 +179,9 @@ class MonitorService:
                     # Broadcast to WebSocket if error/warning
                     if record.levelno >= logging.WARNING:
                         self.monitor._broadcast_log(entry)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Never crash the logging pipeline; just trace the issue.
+                    logger.debug("MonitorHandler emit failed: %s", e)
 
         # Add handler to root logger
         handler = MonitorHandler(self)
@@ -203,10 +204,10 @@ class MonitorService:
             try:
                 loop = asyncio.get_running_loop()
                 loop.create_task(manager.broadcast(message))
-            except RuntimeError:
-                pass
-        except Exception:
-            pass
+            except RuntimeError as e:
+                logger.debug("No running loop to broadcast log: %s", e)
+        except Exception as e:
+            logger.debug("Log broadcast failed: %s", e)
 
     def log(self, level: str, source: str, message: str, extra: dict | None = None):
         """Add a log entry manually."""
@@ -274,8 +275,8 @@ class MonitorService:
                     )
                     if result.returncode == 0:
                         stats.gpu_utilization = float(result.stdout.strip())
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("nvidia-smi GPU utilization query failed: %s", e)
         except ImportError:
             pass
 
@@ -762,8 +763,8 @@ class MonitorService:
                         "payload": status
                     }
                     await manager.broadcast(message)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Monitor status broadcast failed: %s", e)
 
             except Exception as e:
                 self.log("ERROR", "monitor", f"Monitor loop error: {e}")

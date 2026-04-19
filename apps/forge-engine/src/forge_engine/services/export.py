@@ -108,6 +108,49 @@ async def _export_translated_subtitles(
     return written
 
 
+async def _generate_thumbnail(video_path: Path, timeout: float = 15.0) -> Path | None:
+    """
+    Generate a JPEG thumbnail at the 1-second mark for a finalized export.
+
+    Returns the thumbnail path on success, or None on failure. The generation
+    is best-effort and non-blocking: any error is logged and swallowed.
+    """
+    if not video_path.exists():
+        return None
+
+    thumb_path = video_path.with_suffix(".thumb.jpg")
+    try:
+        from forge_engine.services.ffmpeg import FFmpegService
+
+        ffmpeg = FFmpegService.get_instance()
+        cmd = [
+            ffmpeg.ffmpeg_path,
+            "-y",
+            "-ss",
+            "1",
+            "-i",
+            str(video_path),
+            "-vframes",
+            "1",
+            "-vf",
+            "scale=400:-1",
+            "-q:v",
+            "4",
+            str(thumb_path),
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        if thumb_path.exists() and thumb_path.stat().st_size > 0:
+            return thumb_path
+    except Exception as e:  # noqa: BLE001 — thumbnail is best-effort
+        logger.debug("[Export] Thumbnail generation failed: %s", e)
+    return None
+
+
 class ExportService:
     """Service for exporting clips and generating export packs."""
 
@@ -542,6 +585,21 @@ class ExportService:
             )
             db.add(video_artifact)
             artifacts.append(video_artifact)
+
+            # Generate a lightweight JPEG thumbnail alongside the clip
+            thumb_path = await _generate_thumbnail(video_path)
+            if thumb_path:
+                thumb_artifact = Artifact(
+                    project_id=project_id,
+                    segment_id=segment_id,
+                    variant=variant,
+                    type="thumbnail",
+                    path=str(thumb_path),
+                    filename=thumb_path.name,
+                    size=thumb_path.stat().st_size,
+                )
+                db.add(thumb_artifact)
+                artifacts.append(thumb_artifact)
 
             # Generate translated subtitle files alongside the main export
             if languages:
@@ -1085,6 +1143,21 @@ class ExportService:
         )
         db.add(video_artifact)
         artifacts.append(video_artifact)
+
+        # ── Thumbnail (best-effort, non-blocking) ────────────────────────
+        thumb_path = await _generate_thumbnail(video_path)
+        if thumb_path:
+            thumb_artifact = Artifact(
+                project_id=project_id,
+                segment_id=segment_id,
+                variant=variant,
+                type="thumbnail",
+                path=str(thumb_path),
+                filename=thumb_path.name,
+                size=thumb_path.stat().st_size,
+            )
+            db.add(thumb_artifact)
+            artifacts.append(thumb_artifact)
 
         # ── Translated subtitle files (if requested) ─────────────────────
         if languages:

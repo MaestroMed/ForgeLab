@@ -155,15 +155,15 @@ class PlaywrightScraper:
                 display_name_el = await page.query_selector("h1[data-a-target='stream-title']")
                 if display_name_el:
                     display_name = await display_name_el.inner_text()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Twitch display_name selector failed for %s: %s", channel_name, e)
 
             # Check if live
             try:
                 live_indicator = await page.query_selector("[data-a-target='live-indicator']")
                 is_live = live_indicator is not None
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Twitch live-indicator selector failed for %s: %s", channel_name, e)
 
             # Get profile image
             profile_image = None
@@ -171,8 +171,8 @@ class PlaywrightScraper:
                 img_el = await page.query_selector("img[alt*='avatar'], img.channel-header__avatar")
                 if img_el:
                     profile_image = await img_el.get_attribute("src")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Twitch avatar selector failed for %s: %s", channel_name, e)
 
             return ChannelInfo(
                 id=channel_name,

@@ -61,6 +61,28 @@ async def retry_job(job_id: str) -> dict:
     return {"success": True, "data": job.to_dict()}
 
 
+@router.get("/{job_id}/logs")
+async def get_job_logs(job_id: str, lines: int = Query(100, ge=1, le=500)) -> dict:
+    """Return the last N buffered log lines for a job.
+
+    Logs are kept in an in-memory ring buffer that is populated automatically
+    while the job is running. After the job completes the buffer is preserved
+    until the process restarts, so the UI can still fetch the tail.
+    """
+    manager = JobManager.get_instance()
+    all_lines = manager.get_logs(job_id) if hasattr(manager, "get_logs") else []
+    tail = all_lines[-lines:]
+    return {
+        "success": True,
+        "data": {
+            "job_id": job_id,
+            "lines": tail,
+            "count": len(tail),
+            "total": len(all_lines),
+        },
+    }
+
+
 @router.get("/stats/summary")
 async def get_jobs_stats() -> dict:
     """Get job statistics summary."""

@@ -423,8 +423,8 @@ class TranslationService:
                     for tgt in codes:
                         if src != tgt:
                             pairs.append({"source": src, "target": tgt})
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Argos installed-languages lookup failed: %s", e)
 
         if not pairs:
             # Fallback: known popular pairs

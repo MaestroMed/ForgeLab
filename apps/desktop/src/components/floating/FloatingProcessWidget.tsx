@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
-import { Zap, X, Minimize2, Maximize2, GripHorizontal } from 'lucide-react';
+import { Zap, X, Minimize2, Maximize2, GripHorizontal, Terminal } from 'lucide-react';
 import { useJobsStore, useFloatingWidgetStore, useUIStore } from '@/store';
 import { formatEta } from '@/lib/utils';
+import JobLogDrawer from './JobLogDrawer';
 
 const JOB_TYPE_ICONS: Record<string, string> = {
   ingest: '📥',
@@ -30,6 +31,7 @@ export default function FloatingProcessWidget() {
   const { setJobDrawerOpen } = useUIStore();
   const dragControls = useDragControls();
   const constraintsRef = useRef<HTMLDivElement>(null);
+  const [logJobId, setLogJobId] = useState<string | null>(null);
   
   // Get active jobs (running or pending)
   const activeJobs = jobs.filter((j) => j.status === 'running' || j.status === 'pending');
@@ -69,6 +71,7 @@ export default function FloatingProcessWidget() {
   if (!visible || (autoHidden && runningJobs.length === 0)) {
     // Show small indicator to bring it back
     return (
+      <>
       <motion.div
         initial={{ opacity: 0, scale: 0.8 }}
         animate={{ opacity: 1, scale: 1 }}
@@ -90,6 +93,10 @@ export default function FloatingProcessWidget() {
           )}
         </button>
       </motion.div>
+      {logJobId && (
+        <JobLogDrawer jobId={logJobId} onClose={() => setLogJobId(null)} />
+      )}
+      </>
     );
   }
   
@@ -194,14 +201,26 @@ export default function FloatingProcessWidget() {
                               {job.stage || JOB_TYPE_LABELS[job.type] || job.type}
                             </span>
                           </div>
-                          <span className="text-xs font-bold text-[var(--accent-color)] tabular-nums">
-                            {job.progress.toFixed(0)}%
-                            {formatEta(job.etaSeconds) && (
-                              <span className="ml-1 text-[10px] font-normal text-[var(--text-muted)]">
-                                · {formatEta(job.etaSeconds)}
-                              </span>
-                            )}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setLogJobId(job.id);
+                              }}
+                              title="Voir les logs en temps réel"
+                              className="p-0.5 rounded hover:bg-white/10 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                            >
+                              <Terminal className="w-3 h-3" />
+                            </button>
+                            <span className="text-xs font-bold text-[var(--accent-color)] tabular-nums">
+                              {job.progress.toFixed(0)}%
+                              {formatEta(job.etaSeconds) && (
+                                <span className="ml-1 text-[10px] font-normal text-[var(--text-muted)]">
+                                  · {formatEta(job.etaSeconds)}
+                                </span>
+                              )}
+                            </span>
+                          </div>
                         </div>
 
                         <div className="h-1.5 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
@@ -261,6 +280,10 @@ export default function FloatingProcessWidget() {
           )}
         </div>
       </motion.div>
+
+      {logJobId && (
+        <JobLogDrawer jobId={logJobId} onClose={() => setLogJobId(null)} />
+      )}
     </>
   );
 }

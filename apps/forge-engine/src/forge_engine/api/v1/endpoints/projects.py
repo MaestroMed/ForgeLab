@@ -655,8 +655,8 @@ async def get_timeline(
             with open(layout_path) as f:
                 layout_data = json.load(f)
                 timeline_data["faceDetections"] = layout_data.get("face_detections", [])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to inject layout data for %s: %s", project_id, e)
 
     return {"success": True, "data": timeline_data}
 

@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useQueryClient } from '@tanstack/react-query';
-import { Download, Play, Pause, FolderOpen, CheckCircle, X, Volume2, VolumeX, RefreshCw, Sparkles, Eye, Send, AlertTriangle, RotateCw } from 'lucide-react';
+import { Download, Play, Pause, FolderOpen, CheckCircle, X, Volume2, VolumeX, RefreshCw, Sparkles, Eye, Send, AlertTriangle, RotateCw, Check } from 'lucide-react';
 import { ENGINE_BASE_URL } from '@/lib/config';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import SocialPublishModal from '@/components/export/SocialPublishModal';
+import BatchPublishModal from '@/components/export/BatchPublishModal';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Progress } from '@/components/ui/Progress';
 import { SkeletonRow } from '@/components/ui/Skeleton';
@@ -94,6 +95,9 @@ export default function ExportPanel({ project }: ExportPanelProps) {
   const [contentByArtifact, setContentByArtifact] = useState<
     Record<string, { title: string; description: string; hashtags: string[] }>
   >({});
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedArtifactIds, setSelectedArtifactIds] = useState<Set<string>>(new Set());
+  const [showBatchPublishModal, setShowBatchPublishModal] = useState(false);
   const previousJobStatusRef = useRef<Record<string, string>>({});
 
   // React Query: fetch artifacts
@@ -185,6 +189,86 @@ export default function ExportPanel({ project }: ExportPanelProps) {
     return acc;
   }, {} as Record<string, Artifact[]>);
 
+  // Bulk generate captions/title/description/hashtags for every export.
+  // Shared between the "Générer tout" button and the Ctrl+G shortcut.
+  const triggerBulkGenerate = async () => {
+    const groups = Object.values(groupedArtifacts);
+    if (groups.length === 0) {
+      addToast({
+        type: 'info',
+        title: 'Aucun export',
+        message: 'Rien à générer pour le moment.',
+      });
+      return;
+    }
+    addToast({
+      type: 'info',
+      title: 'Génération en cours',
+      message: `Contenu pour ${groups.length} clips...`,
+    });
+    const promises = groups.map(async (items) => {
+      const video = items.find((a) => a.type === 'video');
+      if (!video) return null;
+      try {
+        const segRes = await api.getSegment(project.id, video.segmentId);
+        const seg = (segRes?.data as any) ?? segRes;
+        const transcript: string =
+          typeof seg?.transcript === 'string'
+            ? seg.transcript
+            : seg?.transcript?.text ?? '';
+        const tags: string[] = seg?.score?.tags ?? seg?.tags ?? [];
+        if (!transcript) return null;
+        return api.generateSegmentContent(transcript, tags, 'tiktok');
+      } catch {
+        return null;
+      }
+    });
+    const results = await Promise.all(promises);
+    const successful = results.filter(Boolean).length;
+    addToast({
+      type: 'success',
+      title: 'Terminé',
+      message: `${successful}/${results.length} contenus générés.`,
+    });
+  };
+
+  // Ctrl+G (bulk generate) & Ctrl+P (publish first selected or first video)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        target.matches('input, textarea, [contenteditable="true"], select')
+      ) {
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'g' || e.key === 'G')) {
+        e.preventDefault();
+        triggerBulkGenerate();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault();
+        // Priority: currently selected artifact(s) -> first video in list.
+        const allVideos = Object.values(groupedArtifacts)
+          .flat()
+          .filter((a) => a.type === 'video');
+        const selected = allVideos.find((a) => selectedArtifactIds.has(a.id));
+        const firstVideo = selected ?? allVideos[0];
+        if (firstVideo) {
+          setPublishingArtifact(firstVideo);
+        } else {
+          addToast({
+            type: 'info',
+            title: 'Aucun export',
+            message: 'Aucune vidéo disponible à publier.',
+          });
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupedArtifacts, project.id, selectedArtifactIds]);
+
   return (
     <div className="h-full p-6 overflow-auto">
       <div className="max-w-4xl mx-auto">
@@ -270,6 +354,31 @@ export default function ExportPanel({ project }: ExportPanelProps) {
 
         {/* Export list */}
         <div>
+          {/* Batch selection toolbar */}
+          {Object.keys(groupedArtifacts).length > 0 && (
+            <div className="flex items-center gap-2 mb-3">
+              <Button
+                variant={selectionMode ? 'primary' : 'secondary'}
+                size="sm"
+                onClick={() => {
+                  setSelectionMode(!selectionMode);
+                  setSelectedArtifactIds(new Set());
+                }}
+              >
+                {selectionMode ? 'Annuler sélection' : 'Sélectionner pour publier'}
+              </Button>
+              {selectionMode && selectedArtifactIds.size > 0 && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => setShowBatchPublishModal(true)}
+                >
+                  <Send className="w-4 h-4 mr-1" />
+                  Publier {selectedArtifactIds.size} clip{selectedArtifactIds.size > 1 ? 's' : ''}
+                </Button>
+              )}
+            </div>
+          )}
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold text-[var(--text-primary)]">
               Exports ({Object.keys(groupedArtifacts).length})
@@ -279,38 +388,8 @@ export default function ExportPanel({ project }: ExportPanelProps) {
                 <Button
                   variant="secondary"
                   size="sm"
-                  onClick={async () => {
-                    addToast({
-                      type: 'info',
-                      title: 'Génération en cours',
-                      message: `Contenu pour ${Object.keys(groupedArtifacts).length} clips...`,
-                    });
-                    const promises = Object.values(groupedArtifacts).map(async (items) => {
-                      const video = items.find((a) => a.type === 'video');
-                      if (!video) return null;
-                      try {
-                        const segRes = await api.getSegment(project.id, video.segmentId);
-                        const seg = (segRes?.data as any) ?? segRes;
-                        const transcript: string =
-                          typeof seg?.transcript === 'string'
-                            ? seg.transcript
-                            : seg?.transcript?.text ?? '';
-                        const tags: string[] = seg?.score?.tags ?? seg?.tags ?? [];
-                        if (!transcript) return null;
-                        return api.generateSegmentContent(transcript, tags, 'tiktok');
-                      } catch {
-                        return null;
-                      }
-                    });
-                    const results = await Promise.all(promises);
-                    const successful = results.filter(Boolean).length;
-                    addToast({
-                      type: 'success',
-                      title: 'Terminé',
-                      message: `${successful}/${results.length} contenus générés.`,
-                    });
-                  }}
-                  title="Générer titres/descriptions/hashtags pour tous les exports"
+                  onClick={() => { void triggerBulkGenerate(); }}
+                  title="Générer titres/descriptions/hashtags pour tous les exports (Ctrl+G)"
                 >
                   <Sparkles className="w-4 h-4 mr-1" />
                   Générer tout
@@ -370,6 +449,16 @@ export default function ExportPanel({ project }: ExportPanelProps) {
                             [artifactId]: content,
                           }))
                         }
+                        selectionMode={selectionMode}
+                        isBatchSelected={video ? selectedArtifactIds.has(video.id) : false}
+                        onToggleBatchSelect={(id) =>
+                          setSelectedArtifactIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(id)) next.delete(id);
+                            else next.add(id);
+                            return next;
+                          })
+                        }
                       />
                     </motion.div>
                   );
@@ -424,6 +513,15 @@ export default function ExportPanel({ project }: ExportPanelProps) {
           defaultDescription={contentByArtifact[publishingArtifact.id]?.description ?? ''}
           defaultHashtags={contentByArtifact[publishingArtifact.id]?.hashtags ?? []}
           onClose={() => setPublishingArtifact(null)}
+        />
+      )}
+
+      {/* Batch Publish Modal */}
+      {showBatchPublishModal && selectedArtifactIds.size > 0 && (
+        <BatchPublishModal
+          artifactIds={Array.from(selectedArtifactIds)}
+          projectId={project.id}
+          onClose={() => setShowBatchPublishModal(false)}
         />
       )}
     </div>
@@ -658,6 +756,9 @@ function ExportCard({
   onPreview,
   onPublish,
   onContentGenerated,
+  selectionMode,
+  isBatchSelected,
+  onToggleBatchSelect,
 }: {
   artifacts: Artifact[];
   onOpen: (path: string) => void;
@@ -670,9 +771,13 @@ function ExportCard({
     artifactId: string,
     content: { title: string; description: string; hashtags: string[] }
   ) => void;
+  selectionMode?: boolean;
+  isBatchSelected?: boolean;
+  onToggleBatchSelect?: (artifactId: string) => void;
 }) {
   const video = artifacts.find((a) => a.type === 'video');
   const cover = artifacts.find((a) => a.type === 'cover');
+  const thumbnail = artifacts.find((a) => a.type === 'thumbnail');
 
   if (!video) return null;
 
@@ -680,6 +785,9 @@ function ExportCard({
   const baseUrl = ENGINE_BASE_URL;
   const videoUrl = `${baseUrl}/v1/projects/${projectId}/artifacts/${video.id}/file`;
   const coverUrl = cover ? `${baseUrl}/v1/projects/${projectId}/artifacts/${cover.id}/file` : null;
+  const thumbnailUrl = thumbnail
+    ? `${baseUrl}/v1/projects/${projectId}/artifacts/${thumbnail.id}/file`
+    : null;
   const qc = parseQC(video);
   const published = parsePublished(video);
 
@@ -687,18 +795,32 @@ function ExportCard({
     <Card
       className={`hover:shadow-panel-hover transition-all cursor-pointer ${
         isSelected ? 'ring-2 ring-blue-500 bg-blue-500/5' : ''
-      }`}
-      onClick={() => onSelect(video)}
+      } ${selectionMode && isBatchSelected ? 'ring-2 ring-viral-medium bg-viral-medium/5' : ''}`}
+      onClick={() => {
+        if (selectionMode) {
+          onToggleBatchSelect?.(video.id);
+        } else {
+          onSelect(video);
+        }
+      }}
     >
       <CardContent className="p-4">
         <div className="flex gap-4">
           {/* Thumbnail with play overlay */}
           <div className="w-28 h-40 bg-[var(--bg-tertiary)] rounded-lg flex-shrink-0 flex items-center justify-center overflow-hidden relative group">
-            {coverUrl ? (
+            {thumbnailUrl ? (
+              <img
+                src={thumbnailUrl}
+                alt="Thumbnail"
+                className="w-full h-full object-cover"
+                loading="lazy"
+              />
+            ) : coverUrl ? (
               <img
                 src={coverUrl}
                 alt="Cover"
                 className="w-full h-full object-cover"
+                loading="lazy"
               />
             ) : (
               <video
@@ -707,6 +829,18 @@ function ExportCard({
                 muted
                 preload="metadata"
               />
+            )}
+            {/* Batch selection checkbox overlay */}
+            {selectionMode && (
+              <div
+                className="absolute top-2 left-2 z-10 w-5 h-5 rounded border-2 border-white/40 bg-black/40 flex items-center justify-center cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleBatchSelect?.(video.id);
+                }}
+              >
+                {isBatchSelected && <Check className="w-3.5 h-3.5 text-viral-medium" />}
+              </div>
             )}
             {/* Play overlay */}
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">

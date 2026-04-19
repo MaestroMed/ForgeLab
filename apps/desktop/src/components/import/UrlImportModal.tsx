@@ -32,13 +32,21 @@ interface UrlImportModalProps {
   isOpen: boolean;
   onClose: () => void;
   onImportComplete?: (projectId: string) => void;
+  initialUrl?: string;
 }
 
-export function UrlImportModal({ isOpen, onClose, onImportComplete }: UrlImportModalProps) {
+export function UrlImportModal({ isOpen, onClose, onImportComplete, initialUrl }: UrlImportModalProps) {
   const { addToast } = useToastStore();
   const { addJob } = useJobsStore();
-  
-  const [url, setUrl] = useState('');
+
+  const [url, setUrl] = useState(initialUrl ?? '');
+
+  // Sync url when initialUrl prop changes (e.g. paste detection reopens the modal with a new URL)
+  useEffect(() => {
+    if (initialUrl) {
+      setUrl(initialUrl);
+    }
+  }, [initialUrl]);
   const [quality, setQuality] = useState<'best' | '1080' | '720' | '480'>('best');
   const [autoIngest, setAutoIngest] = useState(true);
   const [autoAnalyze, setAutoAnalyze] = useState(true);

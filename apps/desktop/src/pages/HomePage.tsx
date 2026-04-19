@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ENGINE_BASE_URL } from '@/lib/config';
-import { Plus, Search, FolderOpen, Film, Layers, TrendingUp, Calendar, Link2, MoreVertical, Play, Trash2, FolderOpen as FolderIcon } from 'lucide-react';
+import { Plus, Search, Film, Layers, TrendingUp, Calendar, Link2, Upload, MoreVertical, Play, Trash2, FolderOpen as FolderIcon } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { SkeletonProjectCard } from '@/components/ui/Skeleton';
@@ -14,6 +14,7 @@ import { api } from '@/lib/api';
 import { useProjects, QUERY_KEYS } from '@/lib/queries';
 import { formatDuration } from '@/lib/utils';
 import { useToastStore, useJobsStore, useProjectsStore } from '@/store';
+import { useUrlPasteDetector } from '@/hooks/useUrlPasteDetector';
 
 interface Project {
   id: string;
@@ -37,7 +38,14 @@ export default function HomePage() {
   const [search, setSearch] = useState('');
   const [importing, setImporting] = useState(false);
   const [urlModalOpen, setUrlModalOpen] = useState(false);
+  const [pastedUrl, setPastedUrl] = useState<string | undefined>(undefined);
   const [dragOver, setDragOver] = useState(false);
+
+  // Auto-detect video URLs pasted anywhere on the page and open the import modal
+  useUrlPasteDetector((url) => {
+    setPastedUrl(url);
+    setUrlModalOpen(true);
+  });
 
   // Multi-VOD drag-drop: Electron exposes `file.path` on the File object
   const handleDrop = async (e: React.DragEvent) => {
@@ -128,6 +136,13 @@ export default function HomePage() {
   useHotkeys('ctrl+i, meta+i', () => handleImport(), { preventDefault: true });
   useHotkeys('ctrl+u, meta+u', () => setUrlModalOpen(true), { preventDefault: true });
 
+  // Command palette (Ctrl+K) can dispatch a custom event to open URL import.
+  useEffect(() => {
+    const openUrl = () => setUrlModalOpen(true);
+    window.addEventListener('forge:open-url-import', openUrl);
+    return () => window.removeEventListener('forge:open-url-import', openUrl);
+  }, []);
+
   // Sync local state with store updates from WebSocket
   useEffect(() => {
     if (lastUpdate > 0 && storeProjects.length > 0) {
@@ -217,7 +232,11 @@ export default function HomePage() {
     >
       {dragOver && (
         <div className="fixed inset-0 bg-viral-medium/10 border-4 border-dashed border-viral-medium z-50 flex items-center justify-center pointer-events-none">
-          <p className="text-2xl font-bold text-[var(--text-primary)]">📥 Lâchez les VODs ici</p>
+          <div className="text-center">
+            <p className="text-4xl mb-3">📥</p>
+            <p className="text-2xl font-bold">Lâchez vos VODs ici</p>
+            <p className="text-sm text-[var(--text-muted)] mt-2">MP4, MKV, AVI, MOV, WebM, FLV, WMV</p>
+          </div>
         </div>
       )}
       {/* Header */}
@@ -297,7 +316,11 @@ export default function HomePage() {
             ))}
           </div>
         ) : projects.length === 0 ? (
-          <EmptyState onImport={handleImport} importing={importing} />
+          <EmptyState
+            onImport={handleImport}
+            onImportUrl={() => setUrlModalOpen(true)}
+            importing={importing}
+          />
         ) : (
           <motion.div
             initial={{ opacity: 0 }}
@@ -322,9 +345,14 @@ export default function HomePage() {
       {/* URL Import Modal */}
       <UrlImportModal
         isOpen={urlModalOpen}
-        onClose={() => setUrlModalOpen(false)}
+        onClose={() => {
+          setUrlModalOpen(false);
+          setPastedUrl(undefined);
+        }}
+        initialUrl={pastedUrl}
         onImportComplete={(projectId) => {
           queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
+          setPastedUrl(undefined);
           navigate(`/project/${projectId}`);
         }}
       />
@@ -560,37 +588,91 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
   );
 }
 
+function OnboardingStep({
+  number,
+  emoji,
+  label,
+  desc,
+}: {
+  number: string;
+  emoji: string;
+  label: string;
+  desc: string;
+}) {
+  return (
+    <div className="p-4 rounded-lg bg-white/5 border border-white/10">
+      <div className="text-3xl mb-2">{emoji}</div>
+      <div className="flex items-center gap-2 justify-center mb-1">
+        <span className="w-5 h-5 rounded-full bg-viral-medium/20 text-viral-medium text-xs flex items-center justify-center font-bold">
+          {number}
+        </span>
+        <span className="font-semibold text-sm">{label}</span>
+      </div>
+      <p className="text-xs text-[var(--text-muted)]">{desc}</p>
+    </div>
+  );
+}
+
 function EmptyState({
   onImport,
+  onImportUrl,
   importing,
 }: {
   onImport: () => void;
+  onImportUrl: () => void;
   importing: boolean;
 }) {
   return (
-    <div className="flex-1 flex items-center justify-center">
-      <div className="text-center max-w-md">
-        <div className="w-20 h-20 rounded-full bg-[var(--bg-tertiary)] flex items-center justify-center mx-auto mb-6">
-          <FolderOpen className="w-10 h-10 text-[var(--text-muted)] opacity-50" />
-        </div>
-        
-        <h2 className="text-xl font-semibold text-[var(--text-primary)] mb-2">
-          Aucun projet
-        </h2>
-        
-        <p className="text-[var(--text-muted)] mb-6">
-          Importez votre première VOD pour commencer à créer des clips viraux
-        </p>
+    <div className="text-center py-16">
+      <div className="text-6xl mb-4">🎬</div>
+      <h2 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">
+        Bienvenue dans FORGE LAB
+      </h2>
+      <p className="text-[var(--text-muted)] mb-8 max-w-md mx-auto">
+        Transformez vos VODs en clips viraux en 3 étapes : importez, analysez,
+        exportez.
+      </p>
 
-        <Button onClick={onImport} loading={importing} size="lg">
-          <Plus className="w-5 h-5 mr-2" />
-          Importer une vidéo
-        </Button>
-
-        <p className="text-xs text-[var(--text-muted)] mt-4">
-          Formats supportés : MP4, MKV, MOV, AVI, WebM
-        </p>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl mx-auto mb-8">
+        <OnboardingStep
+          number="1"
+          emoji="📥"
+          label="Importez"
+          desc="URL YouTube/Twitch ou fichier local"
+        />
+        <OnboardingStep
+          number="2"
+          emoji="🔍"
+          label="Analysez"
+          desc="IA détecte les moments viraux"
+        />
+        <OnboardingStep
+          number="3"
+          emoji="🚀"
+          label="Exportez"
+          desc="Clips TikTok prêts à publier"
+        />
       </div>
+
+      <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+        <Button variant="primary" size="lg" onClick={onImportUrl}>
+          <Link2 className="w-5 h-5 mr-2" />
+          Importer une URL
+        </Button>
+        <Button
+          variant="secondary"
+          size="lg"
+          onClick={onImport}
+          loading={importing}
+        >
+          <Upload className="w-5 h-5 mr-2" />
+          Importer un fichier
+        </Button>
+      </div>
+
+      <p className="text-xs text-[var(--text-muted)] mt-6">
+        Astuce : collez une URL n'importe où dans l'app pour démarrer un import.
+      </p>
     </div>
   );
 }

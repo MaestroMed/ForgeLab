@@ -1,5 +1,6 @@
 """Channel monitoring endpoints."""
 
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge_engine.core.database import get_db
 from forge_engine.models import DetectedVOD, WatchedChannel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -102,8 +105,9 @@ async def add_channel(
                 channel.display_name = info.display_name
                 channel.profile_image_url = info.profile_image_url
                 await db.commit()
-    except Exception:
-        pass  # Continue without additional info
+    except Exception as e:
+        # Continue without additional info — scraping is best-effort.
+        logger.debug("Channel enrichment via scraper failed for %s: %s", request.channel_id, e)
 
     return {"success": True, "data": channel.to_dict()}
 

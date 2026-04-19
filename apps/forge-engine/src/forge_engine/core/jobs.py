@@ -1,9 +1,11 @@
 """Job queue manager for background processing (Persistent Version)."""
 
 import asyncio
+import contextvars
 import logging
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -16,6 +18,41 @@ from forge_engine.core.database import async_session_maker
 from forge_engine.models.job import JobRecord
 
 logger = logging.getLogger(__name__)
+
+
+# Current job id — set while a handler is running so any logging call inside
+# the coroutine gets routed to the right per-job ring buffer.
+_current_job_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "forge_engine_job_id", default=None
+)
+
+
+class _JobLogHandler(logging.Handler):
+    """Logging handler that routes records to the active job's ring buffer.
+
+    Works in two modes:
+      * If the record has a ``job_id`` extra (``logger.info(..., extra={"job_id": id})``)
+        we use it directly.
+      * Otherwise we fall back to the ContextVar set by ``_execute_job``.
+
+    The handler is intentionally cheap: it never blocks, never allocates extra
+    frames beyond ``format()``, and swallows its own exceptions so a misbehaving
+    formatter can't take down a running job.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:  # noqa: D401 — logging API
+        try:
+            job_id = getattr(record, "job_id", None) or _current_job_id.get()
+            if not job_id:
+                return
+            manager = JobManager.get_instance()
+            try:
+                msg = self.format(record)
+            except Exception:
+                msg = record.getMessage()
+            manager.append_log(job_id, msg)
+        except Exception:  # noqa: BLE001 — logging must never raise
+            pass
 
 
 class JobStatus(StrEnum):
@@ -117,6 +154,9 @@ class JobManager:
     # Stall detection: if no progress for this many seconds, mark as stalled
     STALL_THRESHOLD = 300  # 5 minutes
 
+    # Max lines of per-job log buffer kept in memory
+    LOG_BUFFER_SIZE = 500
+
     def __init__(self):
         self._handlers: dict[str, Callable] = {}
         self._running = False
@@ -127,6 +167,8 @@ class JobManager:
         self._listeners: dict[str, list[Callable[[Job], None]]] = {}
         self._main_loop: asyncio.AbstractEventLoop | None = None
         self._last_progress: dict[str, tuple] = {}  # job_id -> (progress, timestamp)
+        # Per-job ring buffer of log lines (most recent N). Keyed by job id.
+        self._job_logs: dict[str, deque[str]] = {}
 
     def set_main_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Store reference to main event loop for thread-safe updates."""
@@ -145,11 +187,51 @@ class JobManager:
         self._handlers[job_type.value] = handler
         logger.info("Registered handler for %s", job_type.value)
 
+    # ── Per-job log ring buffer ───────────────────────────────────────────
+    # Handlers (or the logging subsystem) can tee lines into a small in-memory
+    # buffer keyed by job id. The API exposes the last N lines via
+    # GET /v1/jobs/{id}/logs so the UI can show FFmpeg progress in real-time.
+
+    def append_log(self, job_id: str, line: str) -> None:
+        """Append a single log line to the per-job ring buffer."""
+        if not job_id or not line:
+            return
+        buf = self._job_logs.get(job_id)
+        if buf is None:
+            buf = deque(maxlen=self.LOG_BUFFER_SIZE)
+            self._job_logs[job_id] = buf
+        # Normalize to a single line without trailing newline
+        buf.append(line.rstrip("\n"))
+
+    def get_logs(self, job_id: str) -> list[str]:
+        """Return the buffered log lines for a job (empty if none)."""
+        buf = self._job_logs.get(job_id)
+        return list(buf) if buf else []
+
+    def clear_logs(self, job_id: str) -> None:
+        """Drop the log buffer for a job (called when the record is removed)."""
+        self._job_logs.pop(job_id, None)
+
+    def _install_log_handler(self) -> None:
+        """Attach the per-job log handler to the root logger (idempotent)."""
+        root = logging.getLogger()
+        # Avoid duplicate registration on restart (e.g. hot reload in dev).
+        if any(isinstance(h, _JobLogHandler) for h in root.handlers):
+            return
+        handler = _JobLogHandler()
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+        )
+        root.addHandler(handler)
+        logger.debug("Installed per-job log ring buffer handler")
+
     async def start(self) -> None:
         """Start the job manager workers."""
         if self._running:
             return
 
+        self._install_log_handler()
         self._running = True
 
         # Mark orphaned "running" jobs as FAILED so they don't auto-restart.
@@ -289,8 +371,14 @@ class JobManager:
                     if not k.startswith("_retry")
                 }
 
-                # Pass project_id explicitly since it's stored separately from kwargs
-                result = await job._handler(job=job, project_id=job.project_id, **handler_kwargs)
+                # Tag every log record emitted during this run with the job id
+                # so the _JobLogHandler can route them to the ring buffer.
+                token = _current_job_id.set(job.id)
+                try:
+                    # Pass project_id explicitly since it's stored separately from kwargs
+                    result = await job._handler(job=job, project_id=job.project_id, **handler_kwargs)
+                finally:
+                    _current_job_id.reset(token)
 
                 # Update success
                 async with async_session_maker() as db:

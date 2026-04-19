@@ -10,6 +10,7 @@ const SHORTCUTS = [
   {
     category: 'Général',
     items: [
+      { keys: ['Ctrl', 'K'], label: 'Ouvrir la palette de commandes' },
       { keys: ['?'], label: 'Afficher ce panneau' },
       { keys: ['Ctrl', 'U'], label: 'Importer une URL' },
       { keys: ['Ctrl', 'O'], label: 'Importer un fichier' },

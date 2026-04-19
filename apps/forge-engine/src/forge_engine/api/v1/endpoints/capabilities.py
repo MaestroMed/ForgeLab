@@ -1,5 +1,6 @@
 """System capabilities endpoint."""
 
+import logging
 import os
 import shutil
 import subprocess
@@ -16,6 +17,8 @@ from forge_engine.services.transcription_provider import (
     ProviderType,
     TranscriptionProviderManager,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -77,8 +80,8 @@ async def get_capabilities() -> dict:
             cuda_available = True
             whisper_device = "cuda"
             whisper_compute_type = settings.WHISPER_COMPUTE_TYPE
-    except (ImportError, Exception):
-        pass
+    except (ImportError, Exception) as e:
+        logger.debug("ctranslate2 CUDA probe failed, falling back: %s", e)
 
     # Fallback to torch if available
     if not cuda_available:

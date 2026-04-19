@@ -349,12 +349,86 @@ export default function ForgePanel({ project }: ForgePanelProps) {
     }
   };
 
-  // Keyboard shortcuts
+  // Quick TikTok export for active segment (mirrors SegmentScoreCard "TikTok rapide")
+  const triggerTikTokExport = useCallback(async (segment: Segment) => {
+    try {
+      await api.exportSegment(project.id, {
+        segmentId: segment.id,
+        platform: 'tiktok',
+        includeCaptions: true,
+        burnSubtitles: true,
+        includeCover: true,
+        includeMetadata: true,
+      });
+      useToastStore.getState().addToast({
+        type: 'success',
+        title: '🎵 TikTok en route',
+        message: "Export lancé avec preset TikTok. Check l'onglet Export.",
+      });
+    } catch {
+      useToastStore.getState().addToast({
+        type: 'error',
+        title: 'Échec',
+        message: "Impossible de lancer l'export.",
+      });
+    }
+  }, [project.id]);
+
+  // Keyboard shortcuts: j/k/e/space/enter + transport controls
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        target.matches('input, textarea, [contenteditable="true"], select')
+      ) {
+        return;
+      }
+      // Skip when a modal is open or multi-select dialog requires its own bindings
+      if (showBatchExportModal) return;
+
+      const currentIndex = displayedSegments.findIndex(
+        (s) => s.id === selectedSegment?.id,
+      );
+
       switch (e.key) {
+        case 'j':
+        case 'J':
+        case 'ArrowDown': {
+          if (e.ctrlKey || e.metaKey || e.altKey) return;
+          if (displayedSegments.length === 0) return;
+          e.preventDefault();
+          const nextIdx = currentIndex < 0 ? 0 : Math.min(currentIndex + 1, displayedSegments.length - 1);
+          const next = displayedSegments[nextIdx];
+          if (next) handleSegmentSelect(next);
+          break;
+        }
+        case 'k':
+        case 'K':
+        case 'ArrowUp': {
+          if (e.ctrlKey || e.metaKey || e.altKey) return;
+          if (displayedSegments.length === 0) return;
+          e.preventDefault();
+          const prevIdx = currentIndex <= 0 ? 0 : currentIndex - 1;
+          const prev = displayedSegments[prevIdx];
+          if (prev) handleSegmentSelect(prev);
+          break;
+        }
+        case 'e':
+        case 'E': {
+          if (e.ctrlKey || e.metaKey || e.altKey) return;
+          e.preventDefault();
+          if (selectedSegment) triggerTikTokExport(selectedSegment);
+          break;
+        }
+        case 'Enter': {
+          if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+          e.preventDefault();
+          if (selectedSegment) {
+            navigate(`/editor/${project.id}?segment=${selectedSegment.id}`);
+          }
+          break;
+        }
         case ' ':
           e.preventDefault();
           handlePlayPause();
@@ -366,14 +440,26 @@ export default function ForgePanel({ project }: ForgePanelProps) {
           handleSeek(currentTime + (e.shiftKey ? 5 : 1));
           break;
         case 'm':
+        case 'M':
           setIsMuted((m) => !m);
           break;
       }
     };
-    
+
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [currentTime, handlePlayPause, handleSeek]);
+  }, [
+    currentTime,
+    handlePlayPause,
+    handleSeek,
+    displayedSegments,
+    selectedSegment,
+    navigate,
+    project.id,
+    triggerTikTokExport,
+    handleSegmentSelect,
+    showBatchExportModal,
+  ]);
 
   if (loading) {
     return (
