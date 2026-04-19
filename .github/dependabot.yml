@@ -1,0 +1,49 @@
+version: 2
+
+updates:
+  # pnpm monorepo (desktop + web-review + shared)
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      react-ecosystem:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react*"
+          - "framer-motion"
+      radix-ui:
+        patterns:
+          - "@radix-ui/*"
+      electron:
+        patterns:
+          - "electron"
+          - "electron-builder"
+    ignore:
+      - dependency-name: "electron"
+        update-types: ["version-update:semver-major"]
+
+  # Python backend
+  - package-ecosystem: pip
+    directory: "/apps/forge-engine"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      fastapi-stack:
+        patterns:
+          - "fastapi"
+          - "uvicorn"
+          - "pydantic*"
+      database:
+        patterns:
+          - "sqlalchemy"
+          - "aiosqlite"
+
+  # GitHub Actions
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly

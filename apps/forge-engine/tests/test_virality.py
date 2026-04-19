@@ -109,27 +109,31 @@ class TestViralityScorer:
         assert "humour" in score["tags"]
     
     def test_optimal_duration_bonus(self):
-        """Verify optimal duration (25-35s) gets payoff bonus."""
+        """Verify optimal TikTok duration (45-90s) gets payoff bonus over very long clips."""
+        # 60s = sweet spot, 45-90 range → +5 points
         segment_optimal = {
-            "transcript": "Test content",
-            "transcript_segments": [],
-            "start_time": 0,
-            "end_time": 30,
-            "duration": 30,
-        }
-        
-        segment_long = {
             "transcript": "Test content",
             "transcript_segments": [],
             "start_time": 0,
             "end_time": 60,
             "duration": 60,
         }
-        
+        # 150s = too long for TikTok, outside both bonus ranges → +0 points
+        segment_long = {
+            "transcript": "Test content",
+            "transcript_segments": [],
+            "start_time": 0,
+            "end_time": 150,
+            "duration": 150,
+        }
+
         score_opt = self.scorer._score_segment(segment_optimal)
         score_long = self.scorer._score_segment(segment_long)
-        
-        assert score_opt["payoff"] >= score_long["payoff"]
+
+        assert score_opt["payoff"] >= score_long["payoff"], (
+            f"Optimal (60s) should score >= long (150s) on payoff, "
+            f"got {score_opt['payoff']} vs {score_long['payoff']}"
+        )
     
     def test_deduplication_removes_overlaps(self):
         """Verify overlapping segments are deduplicated."""

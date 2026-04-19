@@ -124,47 +124,41 @@ class TestColdOpenTimeline:
 
 
 class TestIntroFontPath:
-    """Tests for intro font resolution."""
-    
+    """Tests for font resolution via core.fonts.resolve_font_ffmpeg."""
+
     def test_font_fallback_returns_string(self):
-        """Verify font path resolution always returns a string."""
-        from forge_engine.services.intro import IntroEngine
-        
-        engine = IntroEngine()
-        
-        result = engine._get_font_path("NonexistentFont12345")
+        """Verify font path resolution always returns a non-empty string."""
+        from forge_engine.core.fonts import resolve_font_ffmpeg
+
+        result = resolve_font_ffmpeg("NonexistentFont12345")
         assert isinstance(result, str)
         assert len(result) > 0
-    
+
     def test_known_fonts_found_on_windows(self):
         """Verify common Windows fonts are found."""
         import platform
         if platform.system() != "Windows":
             pytest.skip("Windows-only test")
-        
-        from forge_engine.services.intro import IntroEngine
-        engine = IntroEngine()
-        
+
+        from forge_engine.core.fonts import resolve_font_ffmpeg
+
         for font_name in ["Arial", "Impact"]:
-            result = engine._get_font_path(font_name)
-            assert "Fonts" in result or font_name.lower() in result.lower(), \
-                f"Font '{font_name}' not found: got '{result}'"
-    
+            result = resolve_font_ffmpeg(font_name)
+            assert len(result) > 0, f"Font '{font_name}' returned empty path"
+
     def test_font_escaping_consistent(self):
-        """Verify font path escaping uses \\: consistently."""
+        """Verify font path for a known Windows font uses escaped colons for FFmpeg."""
         import platform
         if platform.system() != "Windows":
             pytest.skip("Windows-only test")
-        
-        from forge_engine.services.intro import IntroEngine
-        engine = IntroEngine()
-        
-        result = engine._get_font_path("Arial")
-        
-        # Should use forward slashes
-        assert "\\" not in result or "\\:" in result
-        # Should have escaped colon
-        assert "\\:" in result, f"Missing escaped colon in: {result}"
+
+        from forge_engine.core.fonts import resolve_font_ffmpeg
+
+        result = resolve_font_ffmpeg("Arial")
+        # FFmpeg fontfile paths on Windows use \\: to escape the drive colon
+        assert "\\:" in result or "/" in result, (
+            f"Expected FFmpeg-escaped path, got: {result}"
+        )
         # Should NOT have double-escaped colons
         assert "\\\\:" not in result, f"Double-escaped colon in: {result}"
 

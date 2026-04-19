@@ -92,4 +92,10 @@ strict = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "slow: tests that take a long time (deselect with '-m not slow')",
+    "gpu: tests that require a CUDA-capable GPU",
+    "e2e: end-to-end tests requiring a full running environment",
+    "integration: integration tests requiring external services (FFmpeg, etc.)",
+]
 

@@ -1,0 +1,55 @@
+name: PR Checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Quick sanity check — runs in ~2 minutes
+  quick-check:
+    name: Quick Sanity Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Node deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Python CI deps
+        working-directory: apps/forge-engine
+        run: pip install ruff pytest pytest-asyncio
+
+      - name: TypeScript check
+        working-directory: apps/desktop
+        run: pnpm typecheck
+
+      - name: Ruff lint
+        working-directory: apps/forge-engine
+        run: ruff check src/ --output-format=github
+
+      - name: Python smoke tests
+        working-directory: apps/forge-engine
+        env:
+          FORGE_FORCE_CPU: "1"
+          FORGE_DEBUG: "1"
+        run: |
+          pip install -e . --no-deps -q
+          pytest tests/test_virality.py tests/test_captions.py tests/test_services.py \
+            -v --tb=short -q

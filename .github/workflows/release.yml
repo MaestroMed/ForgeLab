@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  # ─── Build Windows installer ───────────────────────────────────────────────
+  build-windows:
+    name: Build — Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Python bundling (prepare-python.js skips heavy download in CI if not needed)
+      - name: Prepare Python resources
+        working-directory: apps/desktop
+        env:
+          SKIP_PYTHON_BUNDLE: "1"
+        run: node scripts/prepare-python.js --platform=win32
+        continue-on-error: true
+
+      - name: Build Vite frontend
+        working-directory: apps/desktop
+        run: pnpm build:vite
+
+      - name: Build Electron (Windows)
+        working-directory: apps/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm exec electron-builder --win --config electron-builder.config.js --publish never
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: forge-lab-windows
+          path: |
+            apps/desktop/release/**/*.exe
+            apps/desktop/release/**/*.zip
+          retention-days: 30
+
+  # ─── Build web-review PWA ─────────────────────────────────────────────────
+  build-web-review:
+    name: Build — Web Review PWA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build PWA
+        working-directory: apps/web-review
+        run: pnpm build
+
+      - name: Upload PWA
+        uses: actions/upload-artifact@v4
+        with:
+          name: forge-review-pwa
+          path: apps/web-review/dist
+          retention-days: 30
+
+  # ─── Create GitHub Release ─────────────────────────────────────────────────
+  create-release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-web-review]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: forge-lab-windows
+          path: release-assets/windows
+
+      - name: Download PWA artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: forge-review-pwa
+          path: release-assets/web-review
+
+      - name: Zip web-review
+        run: zip -r release-assets/forge-review-pwa.zip release-assets/web-review/
+
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s" --no-merges)
+          else
+            CHANGELOG=$(git log --pretty=format:"- %s" --no-merges -20)
+          fi
+          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "FORGE LAB v${{ steps.version.outputs.VERSION }}"
+          body: |
+            ## 🔥 FORGE LAB v${{ steps.version.outputs.VERSION }}
+
+            ### Changements
+            ${{ steps.changelog.outputs.CHANGELOG }}
+
+            ### Installation
+            - **Windows** : Télécharger et lancer `FORGE LAB Setup.exe`
+            - **Web Review PWA** : Décompresser `forge-review-pwa.zip` sur un serveur web
+
+            ### Prérequis
+            - Windows 10/11 64-bit
+            - NVIDIA GPU avec CUDA recommandé
+            - 8GB+ RAM
+          files: |
+            release-assets/windows/**/*.exe
+            release-assets/forge-review-pwa.zip
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: false
