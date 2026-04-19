@@ -73,6 +73,7 @@ export default function SettingsPage() {
       }
     } catch (error) {
       console.error('Failed to load settings:', error);
+      addToast({ type: 'error', title: 'Erreur de chargement', message: 'Impossible de charger les paramètres. Moteur hors ligne ?', duration: 5000 });
     } finally {
       setLoading(false);
     }

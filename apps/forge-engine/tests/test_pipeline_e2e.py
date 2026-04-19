@@ -2,7 +2,8 @@
 
 Tests the complete FORGE pipeline from ingestion to export.
 
-Run with: pytest tests/test_pipeline_e2e.py -v
+These tests require a running FORGE Engine server and are marked @e2e.
+Run with: pytest tests/test_pipeline_e2e.py -v -m e2e
 """
 
 import pytest
@@ -13,14 +14,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 import json
 
-# Import test fixtures from conftest
-from conftest import (
-    sample_project_data,
-    sample_segment,
-    sample_transcript_segments,
-    sample_audio_analysis,
-    sample_scene_data,
-)
+# All tests in this file require a live server or full env — skip in normal CI
+pytestmark = pytest.mark.e2e
 
 
 class TestPipelineE2E:

@@ -153,6 +153,9 @@ export default function SurveillancePage() {
       setVods((prev) => prev.filter((v) => v.id !== vodId));
     } catch (error) {
       console.error('Failed to ignore VOD:', error);
+      // Reload to resync optimistic update
+      loadData();
+      addToast({ type: 'error', title: 'Erreur', message: 'Impossible d\'ignorer cette VOD', duration: 4000 });
     }
   };
   

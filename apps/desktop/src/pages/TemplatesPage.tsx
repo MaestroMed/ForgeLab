@@ -4,7 +4,8 @@
  * Local marketplace for style templates
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { useToastStore } from '@/store/toast';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutTemplate,
@@ -98,6 +99,7 @@ const CATEGORY_LABELS: Record<string, { label: string; icon: any; color: string 
 };
 
 export default function TemplatesPage() {
+  const { addToast } = useToastStore();
   const [templates, setTemplates] = useState<Template[]>(BUILT_IN_TEMPLATES);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
@@ -144,10 +146,23 @@ export default function TemplatesPage() {
     localStorage.setItem('forge_custom_templates', JSON.stringify(custom));
   };
 
-  const applyTemplate = (template: Template) => {
-    // TODO: Apply template config to respective stores
-    alert(`Template "${template.name}" appliqué!`);
-  };
+  const applyTemplate = useCallback((template: Template) => {
+    const cfg = template.config as Record<string, unknown> | undefined;
+    // Apply subtitle style from template to localStorage so ClipEditor picks it up
+    if (cfg?.style) {
+      localStorage.setItem('forge_subtitle_style', JSON.stringify({ preset: cfg.style }));
+    }
+    // Apply layout preset from template
+    if (cfg?.layout) {
+      localStorage.setItem('forge_layout_config', JSON.stringify({ preset: cfg.layout }));
+    }
+    addToast({
+      type: 'success',
+      title: 'Template appliqué',
+      message: `"${template.name}" — ouvre un projet pour voir les changements`,
+      duration: 3000,
+    });
+  }, [addToast]);
 
   const exportTemplate = (template: Template) => {
     const blob = new Blob([JSON.stringify(template, null, 2)], { type: 'application/json' });
@@ -185,7 +200,7 @@ export default function TemplatesPage() {
         custom.push(newTemplate);
         localStorage.setItem('forge_custom_templates', JSON.stringify(custom));
       } catch (e) {
-        alert('Erreur lors de l\'import du template');
+        addToast({ type: 'error', title: 'Import échoué', message: 'Fichier template invalide', duration: 4000 });
       }
     };
     input.click();

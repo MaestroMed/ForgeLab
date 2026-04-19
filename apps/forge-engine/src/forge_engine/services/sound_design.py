@@ -1,3 +1,6 @@
+from __future__ import annotations
+from collections.abc import Callable
+from typing import Any
 """Sound Design Service.
 
 Provides SFX library, auto-ducking, and LUFS normalization for viral clips.
@@ -332,7 +335,7 @@ class SoundDesignService:
         config: SoundDesignConfig | None = None,
         music_path: str | None = None,
         sfx_triggers: list[SFXTrigger] | None = None,
-        progress_callback: callable | None = None,
+        progress_callback: Callable[..., Any] | None = None,
     ) -> dict[str, Any]:
         """Apply full sound design processing to a clip.
 
@@ -365,7 +368,7 @@ class SoundDesignService:
         config: SoundDesignConfig,
         music_path: str | None,
         sfx_triggers: list[SFXTrigger] | None,
-        progress_callback: callable | None,
+        progress_callback: Callable[..., Any] | None,
     ) -> dict[str, Any]:
         """Synchronous sound design processing."""
         if progress_callback:
@@ -498,7 +501,7 @@ class SoundDesignService:
         input_path: str,
         output_path: str,
         filter_chain: str,
-        progress_callback: callable | None,
+        progress_callback: Callable[..., Any] | None,
     ) -> dict[str, Any]:
         """Process audio with filter chain."""
         cmd = [
@@ -532,17 +535,19 @@ class SoundDesignService:
         output_path: str,
         voice_filter: str,
         config: SoundDesignConfig,
-        progress_callback: callable | None,
+        progress_callback: Callable[..., Any] | None,
     ) -> dict[str, Any]:
         """Mix voice with background music including auto-duck."""
         # Get voice duration
         try:
+            from forge_engine.core.config import settings as _s
+            _ffprobe = getattr(_s, "FFPROBE_PATH", "ffprobe")
             probe_cmd = [
-                "ffprobe", "-v", "quiet",
+                _ffprobe, "-v", "quiet",
                 "-show_entries", "format=duration",
                 "-of", "csv=p=0", voice_path
             ]
-            result = subprocess.run(probe_cmd, capture_output=True, text=True)
+            result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
             duration = float(result.stdout.strip())
         except Exception:
             duration = 60.0

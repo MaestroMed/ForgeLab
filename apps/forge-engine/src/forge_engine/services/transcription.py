@@ -1,3 +1,6 @@
+from __future__ import annotations
+from collections.abc import Callable
+from typing import Any
 """Transcription service using faster-whisper with batched inference.
 
 Features:
@@ -297,7 +300,7 @@ class TranscriptionService:
         word_timestamps: bool = True,
         initial_prompt: str | None = None,
         custom_dictionary: list[str] | None = None,
-        progress_callback: callable | None = None,
+        progress_callback: Callable[..., Any] | None = None,
         model_override: str | None = None,  # Use different model (e.g. "distil-large-v3" for preview)
         turbo_mode: bool | None = None,  # Override turbo mode setting
     ) -> dict[str, Any]:
@@ -338,7 +341,7 @@ class TranscriptionService:
         word_timestamps: bool,
         initial_prompt: str | None,
         custom_dictionary: list[str] | None,
-        progress_callback: callable | None,
+        progress_callback: Callable[..., Any] | None,
         model_override: str | None = None,
         turbo_mode: bool | None = None
     ) -> dict[str, Any]:
@@ -382,9 +385,11 @@ class TranscriptionService:
         # Get audio duration for progress estimation
         try:
             import subprocess
+            from forge_engine.core.config import settings as _s
+            _ffprobe = getattr(_s, "FFPROBE_PATH", "ffprobe")
             result = subprocess.run(
-                ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'csv=p=0', audio_path],
-                capture_output=True, text=True
+                [_ffprobe, '-v', 'quiet', '-show_entries', 'format=duration', '-of', 'csv=p=0', audio_path],
+                capture_output=True, text=True, timeout=10
             )
             audio_duration = float(result.stdout.strip()) if result.returncode == 0 else 0
         except Exception:

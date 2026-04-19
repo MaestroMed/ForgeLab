@@ -16,12 +16,17 @@ interface WebSocketState {
   disconnect: () => void;
 }
 
+// Exponential backoff constants for reconnect
+const RECONNECT_BASE_MS = 3_000;
+const RECONNECT_MAX_MS = 60_000;
+
 export const useWebSocketStore = create<WebSocketState>((set, _get) => {
   let socket: WebSocket | null = null;
   let reconnectTimer: any = null;
   let pollingTimer: any = null;
   let lastWsMessageAt = 0;
   let stallCheckTimer: any = null;
+  let reconnectAttempts = 0;
 
   // Poll backend for job updates (only used as fallback when WS is stale)
   const pollJobs = async () => {
@@ -166,6 +171,7 @@ export const useWebSocketStore = create<WebSocketState>((set, _get) => {
     socket.onopen = () => {
       set({ connected: true });
       lastWsMessageAt = Date.now();
+      reconnectAttempts = 0; // Reset backoff on successful connection
       if (reconnectTimer) clearTimeout(reconnectTimer);
       stopPolling(); // Stop polling once WS is live
       startStallCheck(); // Monitor for WS stalls
@@ -176,7 +182,11 @@ export const useWebSocketStore = create<WebSocketState>((set, _get) => {
       socket = null;
       stopStallCheck();
       startPolling(); // Fall back to polling while disconnected
-      reconnectTimer = setTimeout(connect, 3000);
+
+      // Exponential backoff: 3s → 6s → 12s → 24s → 48s → 60s (capped)
+      const delay = Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttempts, RECONNECT_MAX_MS);
+      reconnectAttempts += 1;
+      reconnectTimer = setTimeout(connect, delay);
     };
 
     socket.onerror = () => {
@@ -191,6 +201,7 @@ export const useWebSocketStore = create<WebSocketState>((set, _get) => {
     connect,
     disconnect: () => {
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectAttempts = 0; // Reset backoff on intentional disconnect
       stopPolling();
       stopStallCheck();
       if (socket) socket.close();

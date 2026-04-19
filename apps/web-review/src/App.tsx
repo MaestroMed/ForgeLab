@@ -150,16 +150,21 @@ export default function App() {
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
 
+  // Channel can be overridden via ?channel= query parameter or VITE_CHANNEL env var
+  const channel = new URLSearchParams(window.location.search).get('channel')
+    ?? import.meta.env.VITE_CHANNEL
+    ?? undefined;
+
   const loadClips = useCallback(async () => {
     try {
-      const data = await fetchPendingClips('EtoStark');
+      const data = await fetchPendingClips(channel);
       setClips(data);
     } catch (err) {
       console.error('Failed to load clips:', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [channel]);
 
   useEffect(() => {
     loadClips();

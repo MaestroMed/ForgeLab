@@ -1,3 +1,6 @@
+from __future__ import annotations
+from collections.abc import Callable
+from typing import Any
 """Voice Activity Detection pre-filter using Silero VAD.
 
 Pre-filters audio to detect speech segments BEFORE transcription.
@@ -116,7 +119,7 @@ class VADPrefilterService:
         min_silence_duration_ms: int = 500,
         padding_ms: int = 200,
         merge_threshold_ms: int = 1000,
-        progress_callback: callable | None = None
+        progress_callback: Callable[..., Any] | None = None
     ) -> VADResult:
         """Pre-filter audio to detect speech segments.
 
@@ -152,7 +155,7 @@ class VADPrefilterService:
         min_silence_duration_ms: int,
         padding_ms: int,
         merge_threshold_ms: int,
-        progress_callback: callable | None
+        progress_callback: Callable[..., Any] | None
     ) -> VADResult:
         """Synchronous VAD pre-filtering."""
         self._load_model()

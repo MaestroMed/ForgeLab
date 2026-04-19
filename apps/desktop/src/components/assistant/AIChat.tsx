@@ -6,11 +6,12 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  MessageSquare, Send, Bot, User, X, 
+import {
+  MessageSquare, Send, Bot, User, X,
   Sparkles, Zap, Loader2,
   Search, Scissors, Type, Music
 } from 'lucide-react';
+import { ENGINE_API_URL } from '@/lib/config';
 
 interface Message {
   id: string;
@@ -83,7 +84,7 @@ export function AIChat({ isOpen, onClose, projectId, onAction }: AIChatProps) {
     
     try {
       // Call backend LLM API
-      const response = await fetch(`http://127.0.0.1:8420/v1/llm/chat`, {
+      const response = await fetch(`${ENGINE_API_URL}/llm/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

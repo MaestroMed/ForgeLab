@@ -8,6 +8,7 @@ from forge_engine.models.project import Project
 from forge_engine.models.review import ClipQueue, ClipReview
 from forge_engine.models.segment import Segment
 from forge_engine.models.template import CaptionStyle, Template
+from forge_engine.models.training_data import SegmentFeedback
 
 __all__ = [
     "Project",
@@ -21,6 +22,7 @@ __all__ = [
     "DetectedVOD",
     "ClipReview",
     "ClipQueue",
+    "SegmentFeedback",
 ]
 
 

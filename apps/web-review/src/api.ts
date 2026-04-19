@@ -19,11 +19,19 @@ export interface QueuedClip {
   createdAt: string;
 }
 
+async function checkOk(res: Response): Promise<Response> {
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`API ${res.status}: ${text}`);
+  }
+  return res;
+}
+
 export async function fetchPendingClips(channel?: string): Promise<QueuedClip[]> {
   const url = channel
     ? `${API_BASE}/queue/pending?channel=${channel}`
     : `${API_BASE}/queue/pending`;
-  const res = await fetch(url);
+  const res = await fetch(url).then(checkOk);
   const data = await res.json();
   return data.data || [];
 }
@@ -36,7 +44,7 @@ export async function approveClip(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(opts || {}),
-  });
+  }).then(checkOk);
   const data = await res.json();
   return data.data;
 }
@@ -44,7 +52,7 @@ export async function approveClip(
 export async function rejectClip(clipId: string): Promise<QueuedClip> {
   const res = await fetch(`${API_BASE}/queue/${clipId}/reject`, {
     method: 'POST',
-  });
+  }).then(checkOk);
   const data = await res.json();
   return data.data;
 }
@@ -68,7 +76,7 @@ export async function submitReview(params: {
       issue_tags: params.issueTags,
       publish_decision: params.publishDecision,
     }),
-  });
+  }).then(checkOk);
   return res.json();
 }
 

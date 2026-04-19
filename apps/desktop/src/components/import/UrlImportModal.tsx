@@ -52,17 +52,27 @@ export function UrlImportModal({ isOpen, onClose, onImportComplete }: UrlImportM
   
   // Load available dictionaries
   useEffect(() => {
-    if (isOpen) {
-      api.listDictionaries().then(response => {
+    if (!isOpen) return;
+    api.listDictionaries()
+      .then(response => {
         if (response.success && response.data) {
           setDictionaries(response.data);
           // Auto-select first dictionary if available
-          if (response.data.length > 0 && !selectedDictionary) {
-            setSelectedDictionary(response.data[0].id);
+          if (response.data.length > 0) {
+            setSelectedDictionary(prev => prev || response.data![0].id);
           }
         }
-      }).catch(console.error);
-    }
+      })
+      .catch(() => {
+        // Dictionaries are optional — show a non-blocking warning
+        addToast({
+          type: 'warning',
+          title: 'Dictionnaires indisponibles',
+          message: 'Impossible de charger les dictionnaires. L\'import fonctionnera sans.',
+          duration: 4000,
+        });
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
   
   // Debounced URL info fetch

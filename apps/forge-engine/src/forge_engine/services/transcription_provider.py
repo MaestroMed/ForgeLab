@@ -1,3 +1,6 @@
+from __future__ import annotations
+from collections.abc import Callable
+from typing import Any
 """Transcription Provider Architecture.
 
 Abstraction layer for switching between transcription backends:
@@ -71,7 +74,7 @@ class TranscriptionProvider(ABC):
         self,
         audio_path: str,
         config: TranscriptionConfig,
-        progress_callback: callable | None = None
+        progress_callback: Callable[..., Any] | None = None
     ) -> TranscriptionResult:
         """Transcribe audio file."""
         pass
@@ -100,7 +103,7 @@ class LocalTranscriptionProvider(TranscriptionProvider):
         self,
         audio_path: str,
         config: TranscriptionConfig,
-        progress_callback: callable | None = None
+        progress_callback: Callable[..., Any] | None = None
     ) -> TranscriptionResult:
         from forge_engine.services.transcription import TranscriptionService
 
@@ -161,7 +164,7 @@ class OpenAITranscriptionProvider(TranscriptionProvider):
         self,
         audio_path: str,
         config: TranscriptionConfig,
-        progress_callback: callable | None = None
+        progress_callback: Callable[..., Any] | None = None
     ) -> TranscriptionResult:
         if not self.is_available():
             raise RuntimeError("OpenAI API not available. Set OPENAI_API_KEY.")
@@ -294,7 +297,7 @@ class LocalAlignedTranscriptionProvider(TranscriptionProvider):
         self,
         audio_path: str,
         config: TranscriptionConfig,
-        progress_callback: callable | None = None
+        progress_callback: Callable[..., Any] | None = None
     ) -> TranscriptionResult:
         from forge_engine.services.transcription import TranscriptionService
         from forge_engine.services.whisperx_alignment import WhisperXAligner
@@ -369,7 +372,7 @@ class WhisperXTranscriptionProvider(TranscriptionProvider):
         self,
         audio_path: str,
         config: TranscriptionConfig,
-        progress_callback: callable | None = None
+        progress_callback: Callable[..., Any] | None = None
     ) -> TranscriptionResult:
         from forge_engine.services.whisperx_alignment import WhisperXTranscriber
 
@@ -429,7 +432,7 @@ class DeepgramTranscriptionProvider(TranscriptionProvider):
         self,
         audio_path: str,
         config: TranscriptionConfig,
-        progress_callback: callable | None = None
+        progress_callback: Callable[..., Any] | None = None
     ) -> TranscriptionResult:
         if not self.is_available():
             raise RuntimeError("Deepgram API not available. Set DEEPGRAM_API_KEY.")
@@ -666,7 +669,7 @@ class TranscriptionProviderManager:
         audio_path: str,
         config: TranscriptionConfig | None = None,
         provider: ProviderType | None = None,
-        progress_callback: callable | None = None,
+        progress_callback: Callable[..., Any] | None = None,
         fallback: bool = True
     ) -> TranscriptionResult:
         """Transcribe audio using configured or specified provider.

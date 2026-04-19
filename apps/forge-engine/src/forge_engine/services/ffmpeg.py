@@ -1,3 +1,6 @@
+from __future__ import annotations
+from collections.abc import Callable
+from typing import Any
 """FFmpeg service for video processing."""
 
 import asyncio
@@ -203,7 +206,7 @@ class FFmpegService:
         width: int = 1280,
         height: int = 720,
         crf: int = 28,
-        progress_callback: callable | None = None
+        progress_callback: Callable[..., Any] | None = None
     ) -> bool:
         """Create a proxy video file using full GPU pipeline if available."""
         # Check availability if not done
@@ -281,7 +284,7 @@ class FFmpegService:
         channels: int = 1,
         audio_track: int = 0,
         normalize: bool = True,
-        progress_callback: callable | None = None
+        progress_callback: Callable[..., Any] | None = None
     ) -> bool:
         """Extract audio from video file."""
         filters = []
@@ -319,7 +322,7 @@ class FFmpegService:
         width: int = 1080,
         height: int = 1920,
         fps: int = 30,
-        progress_callback: callable | None = None
+        progress_callback: Callable[..., Any] | None = None
     ) -> bool:
         """Render a clip with filters and captions using GPU acceleration."""
         # Detect if we have a complex filter graph (with labels like [facecam])
@@ -511,7 +514,7 @@ class FFmpegService:
         self,
         cmd: list[str],
         input_path: str,
-        progress_callback: callable | None = None,
+        progress_callback: Callable[..., Any] | None = None,
         duration: float | None = None,
         timeout_minutes: int = 120  # 2 hours max per video
     ) -> bool:

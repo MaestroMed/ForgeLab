@@ -1,3 +1,6 @@
+from __future__ import annotations
+from collections.abc import Callable
+from typing import Any
 """Continuous Facecam Tracking Service.
 
 Provides frame-by-frame face tracking for auto-reframe in 9:16 vertical videos.
@@ -135,7 +138,7 @@ class FacecamTracker:
         start_time: float = 0,
         end_time: float | None = None,
         sample_interval: float | None = None,
-        progress_callback: callable | None = None,
+        progress_callback: Callable[..., Any] | None = None,
     ) -> list[FaceDetection]:
         """Track faces throughout a video segment.
 
@@ -164,7 +167,7 @@ class FacecamTracker:
         start_time: float,
         end_time: float | None,
         sample_interval: float | None,
-        progress_callback: callable | None,
+        progress_callback: Callable[..., Any] | None,
     ) -> list[FaceDetection]:
         """Synchronous face tracking."""
         import cv2

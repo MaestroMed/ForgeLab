@@ -98,17 +98,22 @@ async function startEngine() {
     enhancedPath = `${cudnnBin};${cublasBin};${enhancedPath}`;
   } else {
     // Production: use bundled Python + FFmpeg
-    const bundledPython = path.join(process.resourcesPath, 'python', 'python.exe');
+    const isWin = process.platform === 'win32';
+    const pythonExe = isWin ? 'python.exe' : 'python3';
+    const pathSep = isWin ? ';' : ':';
+    const bundledPython = path.join(process.resourcesPath, 'python', pythonExe);
     const bundledFFmpeg = path.join(process.resourcesPath, 'ffmpeg');
     pythonPath = bundledPython;
-    
+
     // Add bundled FFmpeg and Python to PATH
-    enhancedPath = `${bundledFFmpeg};${path.dirname(bundledPython)};${enhancedPath}`;
-    
-    // Add CUDA DLLs from bundled Python
-    const cudnnBin = path.join(process.resourcesPath, 'python', 'Lib', 'site-packages', 'nvidia', 'cudnn', 'bin');
-    const cublasBin = path.join(process.resourcesPath, 'python', 'Lib', 'site-packages', 'nvidia', 'cublas', 'bin');
-    enhancedPath = `${cudnnBin};${cublasBin};${enhancedPath}`;
+    enhancedPath = `${bundledFFmpeg}${pathSep}${path.dirname(bundledPython)}${pathSep}${enhancedPath}`;
+
+    // Add CUDA DLLs from bundled Python (Windows only)
+    if (isWin) {
+      const cudnnBin = path.join(process.resourcesPath, 'python', 'Lib', 'site-packages', 'nvidia', 'cudnn', 'bin');
+      const cublasBin = path.join(process.resourcesPath, 'python', 'Lib', 'site-packages', 'nvidia', 'cublas', 'bin');
+      enhancedPath = `${cudnnBin};${cublasBin};${enhancedPath}`;
+    }
   }
 
   // Set PYTHONPATH correctly for the module structure

@@ -4,7 +4,7 @@ import {
   ChevronLeft, ChevronRight, Check, X, Layout, 
   Type, Play, Music, Settings, Sparkles, Save
 } from 'lucide-react';
-import { INTRO_PRESETS } from '@/store';
+import { INTRO_PRESETS, useToastStore } from '@/store';
 import { api } from '@/lib/api';
 
 interface ProfileWizardProps {
@@ -38,6 +38,7 @@ const SUBTITLE_PRESETS = [
 ];
 
 export default function ProfileWizard({ isOpen, onClose, onComplete, editProfileId: _editProfileId }: ProfileWizardProps) {
+  const { addToast } = useToastStore();
   const [currentStep, setCurrentStep] = useState(0);
   const [profileName, setProfileName] = useState('');
   const [saving, setSaving] = useState(false);
@@ -104,6 +105,7 @@ export default function ProfileWizard({ isOpen, onClose, onComplete, editProfile
       }
     } catch (e) {
       console.error('Failed to save profile:', e);
+      addToast({ type: 'error', title: 'Erreur de sauvegarde', message: 'Impossible de sauvegarder le profil. Vérifie que le moteur est démarré.', duration: 5000 });
     } finally {
       setSaving(false);
     }

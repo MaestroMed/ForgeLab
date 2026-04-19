@@ -302,19 +302,25 @@ class ExportService:
             else:
                 render_output = video_path
 
-            await self.render.render_clip(
-                source_path=project.source_path,
-                output_path=str(render_output),
-                start_time=segment.start_time,
-                duration=segment.duration,
-                layout_config=render_layout_config,
-                caption_config=caption_config if include_captions else None,
-                transcript_segments=transcript_segments if include_captions else None,
-                use_nvenc=use_nvenc,
-                progress_callback=lambda p: job_manager.update_progress(
-                    job, 10 + p * 0.4, "render", f"Rendering: {p:.0f}%"
+            try:
+                await self.render.render_clip(
+                    source_path=project.source_path,
+                    output_path=str(render_output),
+                    start_time=segment.start_time,
+                    duration=segment.duration,
+                    layout_config=render_layout_config,
+                    caption_config=caption_config if include_captions else None,
+                    transcript_segments=transcript_segments if include_captions else None,
+                    use_nvenc=use_nvenc,
+                    progress_callback=lambda p: job_manager.update_progress(
+                        job, 10 + p * 0.4, "render", f"Rendering: {p:.0f}%"
+                    )
                 )
-            )
+            except Exception as render_err:
+                raise RuntimeError(f"Render failed: {render_err}") from render_err
+
+            if not render_output.exists() or render_output.stat().st_size == 0:
+                raise RuntimeError(f"Render produced no output at {render_output}")
 
             current_clip = render_output
 

@@ -1,3 +1,6 @@
+from __future__ import annotations
+from collections.abc import Callable
+from typing import Any
 """WhisperX Word-Level Alignment Service.
 
 Provides frame-accurate word-level timestamps using phoneme-based forced alignment.
@@ -145,7 +148,7 @@ class WhisperXAligner:
         transcription: dict[str, Any],
         language: str | None = None,
         with_diarization: bool = False,
-        progress_callback: callable | None = None,
+        progress_callback: Callable[..., Any] | None = None,
     ) -> dict[str, Any]:
         """Align transcription with precise word-level timestamps.
 
@@ -182,7 +185,7 @@ class WhisperXAligner:
         transcription: dict[str, Any],
         language: str | None,
         with_diarization: bool,
-        progress_callback: callable | None,
+        progress_callback: Callable[..., Any] | None,
     ) -> dict[str, Any]:
         """Synchronous alignment implementation."""
         import whisperx
@@ -446,7 +449,7 @@ class WhisperXTranscriber:
         language: str | None = None,
         model_name: str = "large-v3",
         with_diarization: bool = False,
-        progress_callback: callable | None = None,
+        progress_callback: Callable[..., Any] | None = None,
     ) -> dict[str, Any]:
         """Full transcription + alignment pipeline.
 
@@ -481,7 +484,7 @@ class WhisperXTranscriber:
         language: str | None,
         model_name: str,
         with_diarization: bool,
-        progress_callback: callable | None,
+        progress_callback: Callable[..., Any] | None,
     ) -> dict[str, Any]:
         """Synchronous transcription + alignment."""
         import whisperx

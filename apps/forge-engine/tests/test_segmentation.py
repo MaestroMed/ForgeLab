@@ -13,20 +13,21 @@ class TestSegmentGeneration:
     def test_generates_segments_from_transcript(self):
         """Verify segments are generated from transcript."""
         transcript_segments = [
-            {"start": 0, "end": 5, "text": "First sentence."},
-            {"start": 5, "end": 10, "text": "Second sentence."},
-            {"start": 10, "end": 15, "text": "Third sentence."},
-            {"start": 15, "end": 20, "text": "Fourth sentence."},
-            {"start": 20, "end": 25, "text": "Fifth sentence."},
-            {"start": 25, "end": 30, "text": "Sixth sentence."},
+            {"start": 0, "end": 10, "text": "First sentence."},
+            {"start": 10, "end": 20, "text": "Second sentence."},
+            {"start": 20, "end": 30, "text": "Third sentence."},
+            {"start": 30, "end": 40, "text": "Fourth sentence."},
+            {"start": 40, "end": 50, "text": "Fifth sentence."},
+            {"start": 50, "end": 60, "text": "Sixth sentence."},
         ]
-        
+
+        # window_size must be >= scorer.min_duration (30s default)
         segments = self.scorer.generate_segments(
             transcript_segments,
-            total_duration=30,
-            window_sizes=[15]
+            total_duration=60,
+            window_sizes=[30]
         )
-        
+
         assert len(segments) > 0
     
     def test_respects_minimum_duration(self):

@@ -145,30 +145,20 @@ class TestFFmpegRender:
         assert 3.5 < duration < 4.5, f"Expected ~4s, got {duration}s"
     
     def test_intro_overlay_drawtext(self, test_video, output_dir):
-        """Test intro overlay with blur + drawtext."""
+        """Test intro overlay with blur + drawtext (built-in font, no fontfile needed)."""
         output = str(output_dir / "intro_overlay.mp4")
-        
-        # Find a font that works
-        font_path = None
-        for candidate in ["C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/arial.ttf"]:
-            if os.path.exists(candidate):
-                font_path = candidate.replace("\\", "/").replace(":", "\\:")
-                break
-        
-        if not font_path:
-            pytest.skip("No Windows fonts found")
-        
+
+        # Use FFmpeg built-in font — avoids Windows path-escaping issues with fontfile=
+        # overlay format=auto works across all FFmpeg versions (8.x changed enum names)
         filter_complex = (
-            f"[0:v]format=yuv420p,split[blur_in][clean];"
-            f"[blur_in]boxblur=15:5,format=yuv420p,"
-            f"fade=t=out:st=1.5:d=0.5:alpha=1[blurred];"
-            f"[clean][blurred]overlay=0:0:format=yuv420:enable='lte(t,2)'[bg];"
-            f"[bg]drawtext=text='TEST TITLE':fontfile={font_path}:"
-            f"fontsize=72:fontcolor=white:x=(w-text_w)/2:y=(h/2):"
-            f"alpha='if(lt(t,0.5),t/0.5,if(lt(t,1.5),1,(2-t)/0.5))':"
-            f"enable='lte(t,2)'[final]"
+            "[0:v]format=yuv420p,split[blur_in][clean];"
+            "[blur_in]boxblur=15:5,format=yuv420p,"
+            "fade=t=out:st=1.5:d=0.5:alpha=1[blurred];"
+            "[clean][blurred]overlay=0:0:format=auto:enable='lte(t,2)'[bg];"
+            "[bg]drawtext=text='TEST':fontsize=72:fontcolor=white"
+            ":x=(w-text_w)/2:y=(h-text_h)/2:enable='lte(t,2)'[final]"
         )
-        
+
         cmd = [
             FFMPEG, "-y",
             "-i", test_video,
@@ -180,7 +170,7 @@ class TestFFmpegRender:
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, f"Intro overlay failed: {result.stderr[:500]}"
-        
+
         info = probe_video(output)
         assert float(info["format"]["duration"]) >= 4.0
     

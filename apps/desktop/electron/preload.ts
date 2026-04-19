@@ -22,9 +22,6 @@ contextBridge.exposeInMainWorld('forge', {
   // Platform info
   platform: process.platform,
 
-  // API URL helper
-  getApiUrl: () => 'http://localhost:8420',
-
   // Window controls
   toggleFullscreen: () => ipcRenderer.invoke('window:toggle-fullscreen'),
   isFullscreen: () => ipcRenderer.invoke('window:is-fullscreen'),
@@ -55,7 +52,6 @@ declare global {
       startEngine: () => Promise<boolean>;
       stopEngine: () => Promise<boolean>;
       platform: NodeJS.Platform;
-      getApiUrl: () => string;
       // Window controls
       toggleFullscreen: () => Promise<boolean>;
       isFullscreen: () => Promise<boolean>;
