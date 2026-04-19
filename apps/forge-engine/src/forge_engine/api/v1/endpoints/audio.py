@@ -1,8 +1,9 @@
 """Advanced Audio Analysis API endpoints."""
 
-from fastapi import APIRouter, HTTPException
+from typing import Any
+
+from fastapi import APIRouter
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
 
 from forge_engine.services.audio_analysis import AudioAnalyzer
 
@@ -29,10 +30,10 @@ class AudioAnalyzeResponse(BaseModel):
     average_energy: float
     energy_variance: float
     speech_rate_estimate: float
-    events: List[AudioEventResponse]
-    peaks: List[Dict[str, Any]]
-    silences: List[Dict[str, Any]]
-    summary: Dict[str, Any]
+    events: list[AudioEventResponse]
+    peaks: list[dict[str, Any]]
+    silences: list[dict[str, Any]]
+    summary: dict[str, Any]
 
 
 @router.get("/status")
@@ -49,9 +50,9 @@ async def get_audio_status():
 async def analyze_audio(request: AudioAnalyzeRequest):
     """Analyze audio file for events and characteristics."""
     service = AudioAnalyzer.get_instance()
-    
+
     result = await service.analyze(request.audio_path)
-    
+
     if not isinstance(result, dict) and hasattr(result, 'events'):
         # It's an AudioAnalysisResult object
         return AudioAnalyzeResponse(
@@ -95,16 +96,16 @@ async def get_segment_events(
 ):
     """Get audio events for a specific segment."""
     service = AudioAnalyzer.get_instance()
-    
+
     result = await service.analyze(audio_path)
-    
+
     if not hasattr(result, 'events'):
         return {
             "audio_event_score": 0,
             "audio_tags": [],
             "event_count": 0
         }
-    
+
     score_data = service.get_events_for_segment(result, start_time, end_time)
     return score_data
 
@@ -113,7 +114,7 @@ async def get_segment_events(
 async def list_event_types():
     """List all detectable audio event types."""
     from forge_engine.services.audio_analysis import AudioEventType
-    
+
     return {
         "event_types": [
             {

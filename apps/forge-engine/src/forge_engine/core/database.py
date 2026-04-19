@@ -1,9 +1,9 @@
 """Database configuration and session management."""
 
 import logging
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from forge_engine.core.config import settings
@@ -35,12 +35,19 @@ async def init_db() -> None:
     """Initialize the database, creating tables if needed."""
     # Import all models so their tables are registered with Base.metadata
     from forge_engine.models import (  # noqa: F401
-        project, job, template, profile, segment, artifact, channel, review
+        artifact,
+        channel,
+        job,
+        profile,
+        project,
+        review,
+        segment,
+        template,
     )
-    
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    
+
     logger.info("Database tables created/verified")
 
 

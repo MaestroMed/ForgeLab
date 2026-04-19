@@ -1,9 +1,8 @@
 """Export profile model for storing user presets."""
 
 from datetime import datetime
-from typing import Optional
 
-from sqlalchemy import Column, String, DateTime, JSON, Boolean
+from sqlalchemy import Boolean, Column, DateTime, String
 from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 
 from forge_engine.core.database import Base
@@ -11,26 +10,26 @@ from forge_engine.core.database import Base
 
 class ExportProfile(Base):
     """Export profile model - stores user presets for batch exports."""
-    
+
     __tablename__ = "export_profiles"
-    
+
     id: str = Column(String(36), primary_key=True)
     name: str = Column(String(255), nullable=False)
-    description: Optional[str] = Column(String(1000), nullable=True)
+    description: str | None = Column(String(1000), nullable=True)
     is_default: bool = Column(Boolean, default=False)
-    
+
     # Layout configuration
     layout_config: dict = Column(SQLiteJSON, default=dict)
-    
+
     # Subtitle style
     subtitle_style: dict = Column(SQLiteJSON, default=dict)
-    
-    # Intro configuration  
+
+    # Intro configuration
     intro_config: dict = Column(SQLiteJSON, default=dict)
-    
+
     # Music settings
     music_config: dict = Column(SQLiteJSON, default=dict)
-    
+
     # Export settings
     export_settings: dict = Column(SQLiteJSON, default=lambda: {
         "format": "mp4",
@@ -40,7 +39,7 @@ class ExportProfile(Base):
         "burn_subtitles": True,
         "include_cover": True,
     })
-    
+
     # Segment filter settings for auto-export
     segment_filters: dict = Column(SQLiteJSON, default=lambda: {
         "min_score": 50,
@@ -48,10 +47,10 @@ class ExportProfile(Base):
         "max_duration": 180,
         "auto_export_count": 0,  # 0 = disabled
     })
-    
+
     created_at: datetime = Column(DateTime, default=datetime.utcnow)
     updated_at: datetime = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary."""
         return {

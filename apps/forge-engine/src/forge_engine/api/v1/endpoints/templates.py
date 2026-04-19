@@ -1,6 +1,5 @@
 """Template endpoints."""
 
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -15,22 +14,22 @@ router = APIRouter()
 
 class CreateTemplateRequest(BaseModel):
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     caption_style: dict
     layout: dict
-    hook_card_style: Optional[dict] = None
-    brand_kit: Optional[dict] = None
+    hook_card_style: dict | None = None
+    brand_kit: dict | None = None
     is_default: bool = False
 
 
 class UpdateTemplateRequest(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    caption_style: Optional[dict] = None
-    layout: Optional[dict] = None
-    hook_card_style: Optional[dict] = None
-    brand_kit: Optional[dict] = None
-    is_default: Optional[bool] = None
+    name: str | None = None
+    description: str | None = None
+    caption_style: dict | None = None
+    layout: dict | None = None
+    hook_card_style: dict | None = None
+    brand_kit: dict | None = None
+    is_default: bool | None = None
 
 
 @router.post("")
@@ -48,17 +47,17 @@ async def create_template(
         brand_kit=request.brand_kit,
         is_default=request.is_default,
     )
-    
+
     # If this is default, unset other defaults
     if request.is_default:
         await db.execute(
             Template.__table__.update().values(is_default=False)
         )
-    
+
     db.add(template)
     await db.commit()
     await db.refresh(template)
-    
+
     return {"success": True, "data": template.to_dict()}
 
 
@@ -69,7 +68,7 @@ async def list_templates(
     """List all templates."""
     result = await db.execute(select(Template).order_by(Template.name))
     templates = result.scalars().all()
-    
+
     return {"success": True, "data": [t.to_dict() for t in templates]}
 
 
@@ -81,10 +80,10 @@ async def get_template(
     """Get a template by ID."""
     result = await db.execute(select(Template).where(Template.id == template_id))
     template = result.scalar_one_or_none()
-    
+
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    
+
     return {"success": True, "data": template.to_dict()}
 
 
@@ -97,10 +96,10 @@ async def update_template(
     """Update a template."""
     result = await db.execute(select(Template).where(Template.id == template_id))
     template = result.scalar_one_or_none()
-    
+
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    
+
     # Update fields
     if request.name is not None:
         template.name = request.name
@@ -120,10 +119,10 @@ async def update_template(
                 Template.__table__.update().values(is_default=False)
             )
         template.is_default = request.is_default
-    
+
     await db.commit()
     await db.refresh(template)
-    
+
     return {"success": True, "data": template.to_dict()}
 
 
@@ -135,13 +134,13 @@ async def delete_template(
     """Delete a template."""
     result = await db.execute(select(Template).where(Template.id == template_id))
     template = result.scalar_one_or_none()
-    
+
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
-    
+
     await db.delete(template)
     await db.commit()
-    
+
     return {"success": True, "data": {"deleted": True}}
 
 

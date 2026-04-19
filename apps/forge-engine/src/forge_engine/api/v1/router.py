@@ -3,10 +3,28 @@
 from fastapi import APIRouter
 
 from forge_engine.api.v1.endpoints import (
-    projects, jobs, templates, profiles, capabilities, thumbnails,
-    websockets, channels, monitor, dictionaries, llm, assistant,
-    emotion, audio, ml_scoring, content, translation, virality,
-    compilation, social, analytics, reviews
+    analytics,
+    assistant,
+    audio,
+    capabilities,
+    channels,
+    compilation,
+    content,
+    dictionaries,
+    emotion,
+    jobs,
+    llm,
+    ml_scoring,
+    monitor,
+    profiles,
+    projects,
+    reviews,
+    social,
+    templates,
+    thumbnails,
+    translation,
+    virality,
+    websockets,
 )
 
 api_router = APIRouter()

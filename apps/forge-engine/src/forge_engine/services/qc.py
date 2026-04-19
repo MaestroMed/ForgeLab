@@ -6,14 +6,13 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
-class QCLevel(str, Enum):
+class QCLevel(StrEnum):
     PASS = "pass"       # All checks passed
     WARNING = "warning" # Minor issues, clip usable
     FAIL = "fail"       # Critical issues, re-export needed
@@ -25,8 +24,8 @@ class QCCheck:
     passed: bool
     level: QCLevel  # What level failure means (warning or fail)
     message: str
-    value: Optional[str] = None
-    expected: Optional[str] = None
+    value: str | None = None
+    expected: str | None = None
 
 
 @dataclass
@@ -72,7 +71,7 @@ class QCService:
     async def run(
         self,
         file_path: Path,
-        expected_duration: Optional[float] = None,
+        expected_duration: float | None = None,
         has_audio: bool = True,
         has_subtitles: bool = False,
         ffprobe_path: str = "ffprobe",
@@ -199,7 +198,7 @@ class QCService:
             duration_s=round(time.time() - start, 2),
         )
 
-    async def _probe(self, file_path: Path, ffprobe_path: str) -> Optional[dict]:
+    async def _probe(self, file_path: Path, ffprobe_path: str) -> dict | None:
         """Run ffprobe and return JSON output."""
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -214,7 +213,7 @@ class QCService:
             logger.error("ffprobe error: %s", e)
             return None
 
-    async def _measure_lufs(self, file_path: Path, ffprobe_path: str) -> Optional[float]:
+    async def _measure_lufs(self, file_path: Path, ffprobe_path: str) -> float | None:
         """Measure integrated loudness (LUFS) using ffmpeg ebur128 filter."""
         try:
             ffmpeg_path = ffprobe_path.replace("ffprobe", "ffmpeg")

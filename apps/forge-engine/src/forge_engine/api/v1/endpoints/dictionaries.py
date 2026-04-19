@@ -1,8 +1,8 @@
 """Dictionary management endpoints."""
 
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
 
 from ....services.dictionary import get_dictionary_service
 
@@ -20,7 +20,7 @@ async def list_dictionaries() -> dict:
     """List all available dictionaries."""
     service = get_dictionary_service()
     dictionaries = service.list_dictionaries()
-    
+
     return {
         "success": True,
         "data": dictionaries,
@@ -33,10 +33,10 @@ async def get_dictionary(dictionary_id: str) -> dict:
     """Get dictionary details."""
     service = get_dictionary_service()
     dictionary = service.get_dictionary(dictionary_id)
-    
+
     if not dictionary:
         raise HTTPException(status_code=404, detail=f"Dictionary '{dictionary_id}' not found")
-    
+
     return {
         "success": True,
         "data": {
@@ -55,12 +55,12 @@ async def get_dictionary(dictionary_id: str) -> dict:
 async def apply_corrections(request: ApplyCorrectionsRequest) -> dict:
     """Apply dictionary corrections to text."""
     service = get_dictionary_service()
-    
+
     if not service.get_dictionary(request.dictionary):
         raise HTTPException(status_code=404, detail=f"Dictionary '{request.dictionary}' not found")
-    
+
     corrected = service.apply_corrections(request.text, request.dictionary)
-    
+
     return {
         "success": True,
         "original": request.text,
@@ -75,7 +75,7 @@ async def reload_dictionaries() -> dict:
     service = get_dictionary_service()
     service.reload()
     dictionaries = service.list_dictionaries()
-    
+
     return {
         "success": True,
         "message": "Dictionaries reloaded",

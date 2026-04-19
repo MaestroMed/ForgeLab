@@ -10,24 +10,24 @@ Features:
 
 Usage:
     from forge_engine.services.sound_design import SoundDesignService
-    
+
     sound = SoundDesignService()
     await sound.apply_sound_design(clip_path, output_path, config)
 """
 
-import logging
 import asyncio
 import json
-from dataclasses import dataclass, field
-from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+import logging
 import subprocess
+from dataclasses import dataclass, field
+from enum import StrEnum
+from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-class SFXCategory(str, Enum):
+class SFXCategory(StrEnum):
     """Categories of sound effects."""
     TRANSITION = "transition"
     NOTIFICATION = "notification"
@@ -45,8 +45,8 @@ class SFXAsset:
     category: SFXCategory
     filename: str
     duration: float
-    tags: List[str] = field(default_factory=list)
-    
+    tags: list[str] = field(default_factory=list)
+
     # Recommended usage
     recommended_volume: float = 1.0
     recommended_offset: float = 0.0  # Offset from trigger point
@@ -70,7 +70,7 @@ class AudioTrack:
     path: str
     volume: float = 1.0
     start_time: float = 0.0
-    end_time: Optional[float] = None
+    end_time: float | None = None
     duck_priority: int = 0  # Higher = more important, less ducking
 
 
@@ -80,19 +80,19 @@ class SoundDesignConfig:
     # LUFS normalization
     target_lufs: float = -14.0  # Spotify/YouTube standard
     max_true_peak: float = -1.0
-    
+
     # Auto-duck settings
     duck_enabled: bool = True
     duck_threshold: float = -30.0  # dB threshold to trigger ducking
     duck_amount: float = -12.0  # How much to duck (dB)
     duck_attack: float = 0.1  # Seconds
     duck_release: float = 0.5  # Seconds
-    
+
     # Music settings
     music_volume: float = 0.3  # Default music volume (0-1)
     music_fade_in: float = 0.5
     music_fade_out: float = 1.0
-    
+
     # Master settings
     master_volume: float = 1.0
     limiter_enabled: bool = True
@@ -100,9 +100,9 @@ class SoundDesignConfig:
 
 class SFXLibrary:
     """Built-in sound effects library."""
-    
+
     # Default SFX assets (can be expanded with custom assets)
-    BUILT_IN_SFX: List[Dict[str, Any]] = [
+    BUILT_IN_SFX: list[dict[str, Any]] = [
         # Transitions
         {
             "id": "whoosh_fast",
@@ -128,7 +128,7 @@ class SFXLibrary:
             "duration": 1.0,
             "tags": ["transition", "cinematic", "epic"],
         },
-        
+
         # Notifications
         {
             "id": "pop_bright",
@@ -154,7 +154,7 @@ class SFXLibrary:
             "duration": 0.4,
             "tags": ["notification", "modern", "clean"],
         },
-        
+
         # UI sounds
         {
             "id": "click_soft",
@@ -172,7 +172,7 @@ class SFXLibrary:
             "duration": 0.15,
             "tags": ["hover", "subtle", "ui"],
         },
-        
+
         # Impacts
         {
             "id": "impact_bass",
@@ -198,7 +198,7 @@ class SFXLibrary:
             "duration": 0.3,
             "tags": ["hit", "punch", "action"],
         },
-        
+
         # Reactions
         {
             "id": "laugh_track",
@@ -225,12 +225,12 @@ class SFXLibrary:
             "tags": ["victory", "win", "celebration"],
         },
     ]
-    
-    def __init__(self, custom_sfx_path: Optional[str] = None):
+
+    def __init__(self, custom_sfx_path: str | None = None):
         self.custom_sfx_path = Path(custom_sfx_path) if custom_sfx_path else None
-        self._assets: Dict[str, SFXAsset] = {}
+        self._assets: dict[str, SFXAsset] = {}
         self._load_library()
-    
+
     def _load_library(self):
         """Load SFX library."""
         # Load built-in SFX
@@ -244,22 +244,22 @@ class SFXLibrary:
                 tags=sfx_data.get("tags", []),
             )
             self._assets[asset.id] = asset
-        
+
         # Load custom SFX if path provided
         if self.custom_sfx_path and self.custom_sfx_path.exists():
             self._load_custom_sfx()
-        
+
         logger.info("SFX library loaded: %d assets", len(self._assets))
-    
+
     def _load_custom_sfx(self):
         """Load custom SFX from directory."""
         manifest_path = self.custom_sfx_path / "manifest.json"
-        
+
         if manifest_path.exists():
             try:
                 with open(manifest_path) as f:
                     manifest = json.load(f)
-                
+
                 for sfx_data in manifest.get("assets", []):
                     asset = SFXAsset(
                         id=sfx_data["id"],
@@ -270,33 +270,33 @@ class SFXLibrary:
                         tags=sfx_data.get("tags", []),
                     )
                     self._assets[asset.id] = asset
-                    
+
             except Exception as e:
                 logger.warning("Failed to load custom SFX manifest: %s", e)
-    
-    def get_asset(self, sfx_id: str) -> Optional[SFXAsset]:
+
+    def get_asset(self, sfx_id: str) -> SFXAsset | None:
         """Get an SFX asset by ID."""
         return self._assets.get(sfx_id)
-    
+
     def search(
         self,
         query: str = "",
-        category: Optional[SFXCategory] = None,
-        tags: Optional[List[str]] = None,
-    ) -> List[SFXAsset]:
+        category: SFXCategory | None = None,
+        tags: list[str] | None = None,
+    ) -> list[SFXAsset]:
         """Search for SFX assets."""
         results = []
-        
+
         for asset in self._assets.values():
             # Category filter
             if category and asset.category != category:
                 continue
-            
+
             # Tag filter
             if tags:
                 if not any(tag in asset.tags for tag in tags):
                     continue
-            
+
             # Query filter
             if query:
                 query_lower = query.lower()
@@ -304,38 +304,38 @@ class SFXLibrary:
                     query_lower not in asset.id.lower() and
                     not any(query_lower in tag for tag in asset.tags)):
                     continue
-            
+
             results.append(asset)
-        
+
         return results
-    
-    def get_by_category(self, category: SFXCategory) -> List[SFXAsset]:
+
+    def get_by_category(self, category: SFXCategory) -> list[SFXAsset]:
         """Get all SFX in a category."""
         return [a for a in self._assets.values() if a.category == category]
-    
-    def list_all(self) -> List[SFXAsset]:
+
+    def list_all(self) -> list[SFXAsset]:
         """List all SFX assets."""
         return list(self._assets.values())
 
 
 class SoundDesignService:
     """Service for applying sound design to clips."""
-    
+
     def __init__(self):
         self.library = SFXLibrary()
         self.default_config = SoundDesignConfig()
-    
+
     async def apply_sound_design(
         self,
         input_path: str,
         output_path: str,
-        config: Optional[SoundDesignConfig] = None,
-        music_path: Optional[str] = None,
-        sfx_triggers: Optional[List[SFXTrigger]] = None,
-        progress_callback: Optional[callable] = None,
-    ) -> Dict[str, Any]:
+        config: SoundDesignConfig | None = None,
+        music_path: str | None = None,
+        sfx_triggers: list[SFXTrigger] | None = None,
+        progress_callback: callable | None = None,
+    ) -> dict[str, Any]:
         """Apply full sound design processing to a clip.
-        
+
         Args:
             input_path: Input video/audio path
             output_path: Output path
@@ -343,12 +343,12 @@ class SoundDesignService:
             music_path: Optional background music path
             sfx_triggers: Optional list of SFX triggers
             progress_callback: Progress callback
-            
+
         Returns:
             Result dictionary with loudness stats
         """
         cfg = config or self.default_config
-        
+
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             None,
@@ -357,34 +357,34 @@ class SoundDesignService:
                 music_path, sfx_triggers, progress_callback
             )
         )
-    
+
     def _apply_sound_design_sync(
         self,
         input_path: str,
         output_path: str,
         config: SoundDesignConfig,
-        music_path: Optional[str],
-        sfx_triggers: Optional[List[SFXTrigger]],
-        progress_callback: Optional[callable],
-    ) -> Dict[str, Any]:
+        music_path: str | None,
+        sfx_triggers: list[SFXTrigger] | None,
+        progress_callback: callable | None,
+    ) -> dict[str, Any]:
         """Synchronous sound design processing."""
         if progress_callback:
             progress_callback(5)
-        
+
         # Analyze input loudness
         input_loudness = self._analyze_loudness(input_path)
-        
+
         if progress_callback:
             progress_callback(20)
-        
+
         # Build FFmpeg filter chain
         filters = []
-        
+
         # Step 1: Auto-duck if music is added
         if music_path and config.duck_enabled:
             # This is complex in FFmpeg - simplified version
             logger.info("Auto-duck enabled for music")
-        
+
         # Step 2: LUFS normalization
         loudnorm_filter = self._build_loudnorm_filter(
             input_loudness,
@@ -392,41 +392,41 @@ class SoundDesignService:
             config.max_true_peak,
         )
         filters.append(loudnorm_filter)
-        
+
         if progress_callback:
             progress_callback(40)
-        
+
         # Step 3: Limiter
         if config.limiter_enabled:
             filters.append(f"alimiter=limit={config.max_true_peak}dB:attack=5:release=50")
-        
+
         # Step 4: Master volume
         if config.master_volume != 1.0:
             filters.append(f"volume={config.master_volume}")
-        
+
         # Build command
         filter_chain = ",".join(filters) if filters else "anull"
-        
+
         # If we have music, mix it
         if music_path:
-            result = self._mix_with_music(
+            self._mix_with_music(
                 input_path, music_path, output_path,
                 filter_chain, config, progress_callback
             )
         else:
-            result = self._process_audio(
+            self._process_audio(
                 input_path, output_path, filter_chain, progress_callback
             )
-        
+
         if progress_callback:
             progress_callback(90)
-        
+
         # Analyze output loudness
         output_loudness = self._analyze_loudness(output_path)
-        
+
         if progress_callback:
             progress_callback(100)
-        
+
         return {
             "success": True,
             "input_loudness": input_loudness,
@@ -436,8 +436,8 @@ class SoundDesignService:
                 "duck_enabled": config.duck_enabled,
             },
         }
-    
-    def _analyze_loudness(self, audio_path: str) -> Dict[str, float]:
+
+    def _analyze_loudness(self, audio_path: str) -> dict[str, float]:
         """Analyze audio loudness using FFmpeg."""
         try:
             cmd = [
@@ -445,18 +445,18 @@ class SoundDesignService:
                 "-af", "loudnorm=print_format=json",
                 "-f", "null", "-"
             ]
-            
+
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=60
             )
-            
+
             # Parse loudness stats from stderr
             output = result.stderr
-            
+
             # Find JSON block
             import re
             json_match = re.search(r'\{[^}]+\}', output, re.DOTALL)
-            
+
             if json_match:
                 data = json.loads(json_match.group())
                 return {
@@ -465,10 +465,10 @@ class SoundDesignService:
                     "input_lra": float(data.get("input_lra", 7)),
                     "input_thresh": float(data.get("input_thresh", -35)),
                 }
-            
+
         except Exception as e:
             logger.warning("Loudness analysis failed: %s", e)
-        
+
         # Return defaults
         return {
             "input_i": -23.0,
@@ -476,10 +476,10 @@ class SoundDesignService:
             "input_lra": 7.0,
             "input_thresh": -35.0,
         }
-    
+
     def _build_loudnorm_filter(
         self,
-        loudness: Dict[str, float],
+        loudness: dict[str, float],
         target_lufs: float,
         max_tp: float,
     ) -> str:
@@ -492,14 +492,14 @@ class SoundDesignService:
             f"measured_thresh={loudness['input_thresh']}:"
             f"linear=true:print_format=summary"
         )
-    
+
     def _process_audio(
         self,
         input_path: str,
         output_path: str,
         filter_chain: str,
-        progress_callback: Optional[callable],
-    ) -> Dict[str, Any]:
+        progress_callback: callable | None,
+    ) -> dict[str, Any]:
         """Process audio with filter chain."""
         cmd = [
             "ffmpeg", "-y",
@@ -509,22 +509,22 @@ class SoundDesignService:
             "-c:a", "aac", "-b:a", "192k",
             output_path
         ]
-        
+
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=300
             )
-            
+
             if result.returncode != 0:
                 logger.error("FFmpeg failed: %s", result.stderr)
                 return {"success": False, "error": result.stderr}
-            
+
             return {"success": True}
-            
+
         except Exception as e:
             logger.error("Audio processing failed: %s", e)
             return {"success": False, "error": str(e)}
-    
+
     def _mix_with_music(
         self,
         voice_path: str,
@@ -532,8 +532,8 @@ class SoundDesignService:
         output_path: str,
         voice_filter: str,
         config: SoundDesignConfig,
-        progress_callback: Optional[callable],
-    ) -> Dict[str, Any]:
+        progress_callback: callable | None,
+    ) -> dict[str, Any]:
         """Mix voice with background music including auto-duck."""
         # Get voice duration
         try:
@@ -546,11 +546,11 @@ class SoundDesignService:
             duration = float(result.stdout.strip())
         except Exception:
             duration = 60.0
-        
+
         # Build complex filter for mixing with ducking
         # [0:a] = voice, [1:a] = music
         music_vol = config.music_volume
-        
+
         # Simplified ducking using sidechaincompress
         filter_complex = (
             # Apply voice filters
@@ -567,7 +567,7 @@ class SoundDesignService:
             # Mix voice and ducked music
             f"[voice][ducked]amix=inputs=2:duration=first[out]"
         )
-        
+
         cmd = [
             "ffmpeg", "-y",
             "-i", voice_path,
@@ -579,29 +579,29 @@ class SoundDesignService:
             "-c:a", "aac", "-b:a", "192k",
             output_path
         ]
-        
+
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=300
             )
-            
+
             if result.returncode != 0:
                 logger.error("Music mixing failed: %s", result.stderr)
                 return {"success": False, "error": result.stderr}
-            
+
             return {"success": True, "with_music": True}
-            
+
         except Exception as e:
             logger.error("Music mixing failed: %s", e)
             return {"success": False, "error": str(e)}
-    
+
     async def normalize_lufs(
         self,
         input_path: str,
         output_path: str,
         target_lufs: float = -14.0,
         max_true_peak: float = -1.0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Quick LUFS normalization only."""
         config = SoundDesignConfig(
             target_lufs=target_lufs,
@@ -609,19 +609,19 @@ class SoundDesignService:
             duck_enabled=False,
             limiter_enabled=True,
         )
-        
+
         return await self.apply_sound_design(
             input_path, output_path, config
         )
-    
+
     def get_sfx_library(self) -> SFXLibrary:
         """Get the SFX library."""
         return self.library
-    
+
     def get_recommended_sfx(
         self,
         clip_type: str,
-    ) -> List[SFXAsset]:
+    ) -> list[SFXAsset]:
         """Get recommended SFX for a clip type."""
         recommendations = {
             "intro": [SFXCategory.TRANSITION, SFXCategory.IMPACT],
@@ -631,11 +631,11 @@ class SoundDesignService:
             "fail": [SFXCategory.REACTION],
             "victory": [SFXCategory.REACTION, SFXCategory.NOTIFICATION],
         }
-        
+
         categories = recommendations.get(clip_type, [SFXCategory.TRANSITION])
-        
+
         sfx = []
         for cat in categories:
             sfx.extend(self.library.get_by_category(cat))
-        
+
         return sfx

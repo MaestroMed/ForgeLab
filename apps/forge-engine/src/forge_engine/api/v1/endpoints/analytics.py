@@ -1,9 +1,9 @@
 """Analytics API endpoints."""
 
-from fastapi import APIRouter, HTTPException
+from typing import Any
+
+from fastapi import APIRouter
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
 
 from forge_engine.services.analytics import AnalyticsService
 
@@ -13,37 +13,37 @@ router = APIRouter()
 class RecordEventRequest(BaseModel):
     """Request to record an analytics event."""
     event_type: str
-    project_id: Optional[str] = None
-    segment_id: Optional[str] = None
-    clip_id: Optional[str] = None
-    platform: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    project_id: str | None = None
+    segment_id: str | None = None
+    clip_id: str | None = None
+    platform: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class ClipPerformanceRequest(BaseModel):
     """Request to update clip performance metrics."""
     clip_id: str
     platform: str
-    views: Optional[int] = None
-    likes: Optional[int] = None
-    comments: Optional[int] = None
-    shares: Optional[int] = None
-    watch_time_avg: Optional[float] = None
+    views: int | None = None
+    likes: int | None = None
+    comments: int | None = None
+    shares: int | None = None
+    watch_time_avg: float | None = None
 
 
 @router.get("/dashboard")
 async def get_dashboard(
-    project_id: Optional[str] = None,
+    project_id: str | None = None,
     days: int = 30
 ):
     """Get analytics dashboard data."""
     service = AnalyticsService.get_instance()
-    
+
     dashboard = await service.get_dashboard(
         project_id=project_id,
         days=days
     )
-    
+
     return dashboard
 
 
@@ -51,7 +51,7 @@ async def get_dashboard(
 async def get_overview():
     """Get quick analytics overview."""
     service = AnalyticsService.get_instance()
-    
+
     return await service.get_overview()
 
 
@@ -59,9 +59,9 @@ async def get_overview():
 async def get_clip_stats(clip_id: str):
     """Get performance stats for a specific clip."""
     service = AnalyticsService.get_instance()
-    
+
     stats = await service.get_clip_stats(clip_id)
-    
+
     if stats is None:
         return {
             "clip_id": clip_id,
@@ -70,7 +70,7 @@ async def get_clip_stats(clip_id: str):
             "total_engagement": 0,
             "message": "No performance data available"
         }
-    
+
     return stats
 
 
@@ -81,12 +81,12 @@ async def get_project_stats(
 ):
     """Get analytics for a specific project."""
     service = AnalyticsService.get_instance()
-    
+
     stats = await service.get_project_stats(
         project_id=project_id,
         days=days
     )
-    
+
     return stats
 
 
@@ -94,7 +94,7 @@ async def get_project_stats(
 async def record_event(request: RecordEventRequest):
     """Record an analytics event."""
     service = AnalyticsService.get_instance()
-    
+
     await service.record_event(
         event_type=request.event_type,
         project_id=request.project_id,
@@ -103,7 +103,7 @@ async def record_event(request: RecordEventRequest):
         platform=request.platform,
         metadata=request.metadata
     )
-    
+
     return {"success": True, "event_type": request.event_type}
 
 
@@ -111,7 +111,7 @@ async def record_event(request: RecordEventRequest):
 async def update_clip_performance(request: ClipPerformanceRequest):
     """Update performance metrics for a clip."""
     service = AnalyticsService.get_instance()
-    
+
     await service.update_clip_performance(
         clip_id=request.clip_id,
         platform=request.platform,
@@ -121,7 +121,7 @@ async def update_clip_performance(request: ClipPerformanceRequest):
         shares=request.shares,
         watch_time_avg=request.watch_time_avg
     )
-    
+
     return {
         "success": True,
         "clip_id": request.clip_id,
@@ -137,13 +137,13 @@ async def get_top_clips(
 ):
     """Get top performing clips."""
     service = AnalyticsService.get_instance()
-    
+
     clips = await service.get_top_clips(
         limit=limit,
         metric=metric,
         days=days
     )
-    
+
     return {
         "clips": clips,
         "metric": metric,
@@ -153,35 +153,35 @@ async def get_top_clips(
 
 @router.get("/trends")
 async def get_trends(
-    project_id: Optional[str] = None,
+    project_id: str | None = None,
     days: int = 30,
     granularity: str = "day"  # "hour", "day", "week"
 ):
     """Get analytics trends over time."""
     service = AnalyticsService.get_instance()
-    
+
     trends = await service.get_trends(
         project_id=project_id,
         days=days,
         granularity=granularity
     )
-    
+
     return trends
 
 
 @router.get("/export")
 async def export_analytics(
-    project_id: Optional[str] = None,
+    project_id: str | None = None,
     format: str = "json",  # "json", "csv"
     days: int = 90
 ):
     """Export analytics data."""
     service = AnalyticsService.get_instance()
-    
+
     data = await service.export_data(
         project_id=project_id,
         format=format,
         days=days
     )
-    
+
     return data

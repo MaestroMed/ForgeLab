@@ -6,7 +6,7 @@ Style viral optimisé : MAJUSCULES, jaune/blanc, police bold, effet karaoke visi
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -37,26 +37,26 @@ DEFAULT_STYLE = {
 
 class CaptionEngine:
     """Service for generating WORLD CLASS ASS subtitles."""
-    
+
     def __init__(self, width: int = TIKTOK_WIDTH, height: int = TIKTOK_HEIGHT):
         self.output_width = width
         self.output_height = height
-    
+
     def generate_ass(
         self,
-        transcript_segments: List[Dict[str, Any]],
+        transcript_segments: list[dict[str, Any]],
         style_name: str = "default",  # Ignored - only one style
-        custom_style: Optional[Dict[str, Any]] = None,
+        custom_style: dict[str, Any] | None = None,
         word_level: bool = True,
         max_words_per_line: int = 4,
         max_lines: int = 2,
-        facecam_position: Optional[str] = None
+        facecam_position: str | None = None
     ) -> str:
         """Generate ASS subtitle file with WORLD CLASS karaoke effect."""
-        
+
         # Start with the perfect style
         style = DEFAULT_STYLE.copy()
-        
+
         # Apply custom position if provided
         if custom_style:
             position_y = custom_style.get("positionY") or custom_style.get("position_y")
@@ -64,19 +64,19 @@ class CaptionEngine:
                 # Custom Y position from top - convert to margin_v (from bottom)
                 style["margin_v"] = max(100, self.output_height - position_y - 80)
                 style["alignment"] = 2  # Bottom-center alignment for margin_v
-            
+
             # Allow font size override
             font_size = custom_style.get("fontSize") or custom_style.get("font_size")
             if font_size:
                 style["font_size"] = max(60, min(font_size, 140))
-            
+
             # Allow words per line override
             words_per_line = custom_style.get("wordsPerLine") or custom_style.get("words_per_line")
             if words_per_line:
                 max_words_per_line = max(2, min(words_per_line, 8))
-        
+
         logger.info(f"[Captions] World Class style: font={style['font_family']} size={style['font_size']} margin_v={style['margin_v']}")
-        
+
         # Build ASS file
         lines = [
             "[Script Info]",
@@ -93,7 +93,7 @@ class CaptionEngine:
             "[Events]",
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
         ]
-        
+
         # Generate dialogue lines with WORLD CLASS karaoke effect
         for segment in transcript_segments:
             if word_level and "words" in segment and segment["words"]:
@@ -107,15 +107,15 @@ class CaptionEngine:
                     segment,
                     max_words_per_line
                 )
-            
+
             lines.extend(dialogue_lines)
-        
+
         return "\n".join(lines)
-    
-    def _generate_style_line(self, name: str, style: Dict[str, Any]) -> str:
+
+    def _generate_style_line(self, name: str, style: dict[str, Any]) -> str:
         """Generate ASS style line."""
         bold = -1 if style.get("bold", True) else 0
-        
+
         return (
             f"Style: {name},"
             f"{style.get('font_family', 'Anton')},"
@@ -135,16 +135,16 @@ class CaptionEngine:
             f"{style.get('margin_v', 960)},"
             f"1"  # Encoding
         )
-    
+
     def _generate_karaoke_captions(
         self,
-        segment: Dict[str, Any],
-        style: Dict[str, Any],
+        segment: dict[str, Any],
+        style: dict[str, Any],
         max_words_per_line: int
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Generate WORLD CLASS karaoke captions using multi-dialogue approach.
-        
+
         Each word timing generates a separate dialogue where:
         - The active word is YELLOW and slightly larger
         - Other words are WHITE
@@ -153,45 +153,45 @@ class CaptionEngine:
         words = segment.get("words", [])
         if not words:
             return self._generate_simple_captions(segment, max_words_per_line)
-        
+
         dialogues = []
-        
+
         # Colors from style
         white = style.get("primary_color", "&H00FFFFFF")
         yellow = style.get("highlight_color", "&H0000FFFF")
-        
+
         # Group words into chunks for display
         chunks = []
         current_chunk = []
-        
+
         for word in words:
             current_chunk.append(word)
             if len(current_chunk) >= max_words_per_line:
                 chunks.append(current_chunk)
                 current_chunk = []
-        
+
         if current_chunk:
             chunks.append(current_chunk)
-        
+
         # Generate dialogues for each chunk
         for chunk in chunks:
             if not chunk:
                 continue
-            
-            chunk_start = chunk[0]["start"]
-            chunk_end = chunk[-1]["end"]
-            
+
+            chunk[0]["start"]
+            chunk[-1]["end"]
+
             # For each word in the chunk, create a dialogue where THAT word is highlighted
             for word_idx, active_word in enumerate(chunk):
                 word_start = active_word["start"]
                 word_end = active_word["end"]
-                
+
                 # Build the text with inline color overrides
                 text_parts = []
                 for i, word in enumerate(chunk):
                     # Clean and UPPERCASE the word
                     clean_word = self._clean_word(word["word"]).upper()
-                    
+
                     if i == word_idx:
                         # ACTIVE WORD: Yellow + 110% scale
                         text_parts.append(
@@ -202,61 +202,61 @@ class CaptionEngine:
                         text_parts.append(
                             f"{{\\1c{white}}}{clean_word}{{\\r}}"
                         )
-                
+
                 text = " ".join(text_parts)
-                
+
                 # Add fade effect at chunk boundaries
                 if word_idx == 0:
                     text = "{\\fad(50,0)}" + text
                 elif word_idx == len(chunk) - 1:
                     text = "{\\fad(0,80)}" + text
-                
+
                 dialogues.append(
                     f"Dialogue: 0,{self._format_time(word_start)},{self._format_time(word_end)},"
                     f"Default,,0,0,0,,{text}"
                 )
-        
+
         return dialogues
-    
+
     def _generate_simple_captions(
         self,
-        segment: Dict[str, Any],
+        segment: dict[str, Any],
         max_words_per_line: int
-    ) -> List[str]:
+    ) -> list[str]:
         """Generate simple phrase-level captions (fallback when no word timing)."""
         text = segment.get("text", "").strip().upper()  # UPPERCASE
         start = segment.get("start", 0)
         end = segment.get("end", 0)
-        
+
         if not text:
             return []
-        
+
         # Wrap text
         words = text.split()
         wrapped_lines = []
         current_line = []
-        
+
         for word in words:
             current_line.append(word)
             if len(current_line) >= max_words_per_line:
                 wrapped_lines.append(" ".join(current_line))
                 current_line = []
-        
+
         if current_line:
             wrapped_lines.append(" ".join(current_line))
-        
+
         # Limit lines
         if len(wrapped_lines) > 2:
             wrapped_lines = wrapped_lines[:2]
-        
+
         display_text = "\\N".join(wrapped_lines)
         display_text = "{\\fad(100,100)}" + display_text
-        
+
         return [
             f"Dialogue: 0,{self._format_time(start)},{self._format_time(end)},"
             f"Default,,0,0,0,,{display_text}"
         ]
-    
+
     def _clean_word(self, word: str) -> str:
         """Clean a word for display."""
         word = word.strip()
@@ -265,7 +265,7 @@ class CaptionEngine:
         word = word.replace("{", "\\{")
         word = word.replace("}", "\\}")
         return word
-    
+
     def _format_time(self, seconds: float) -> str:
         """Format time for ASS (H:MM:SS.cc)."""
         hours = int(seconds // 3600)
@@ -273,14 +273,14 @@ class CaptionEngine:
         secs = seconds % 60
         centiseconds = int((secs % 1) * 100)
         secs = int(secs)
-        
+
         return f"{hours}:{minutes:02d}:{secs:02d}.{centiseconds:02d}"
-    
+
     def _hex_to_ass_color(self, hex_color: str) -> str:
         """Convert hex color (#RRGGBB) to ASS format (&H00BBGGRR)."""
         if not hex_color or hex_color == "transparent":
             return "&H00000000"
-        
+
         hex_color = hex_color.lstrip("#")
         if len(hex_color) == 6:
             r = int(hex_color[0:2], 16)
@@ -288,82 +288,82 @@ class CaptionEngine:
             b = int(hex_color[4:6], 16)
             return f"&H00{b:02X}{g:02X}{r:02X}"
         return "&H00FFFFFF"
-    
+
     # ============ OTHER FORMATS ============
-    
+
     def generate_srt(
         self,
-        transcript_segments: List[Dict[str, Any]],
+        transcript_segments: list[dict[str, Any]],
         max_words_per_line: int = 6
     ) -> str:
         """Generate SRT subtitle file content."""
         lines = []
-        
+
         for i, segment in enumerate(transcript_segments, 1):
             start = segment.get("start", 0)
             end = segment.get("end", 0)
             text = segment.get("text", "").strip().upper()  # UPPERCASE
-            
+
             if not text:
                 continue
-            
+
             # Wrap text
             words = text.split()
             wrapped = []
             current = []
-            
+
             for word in words:
                 current.append(word)
                 if len(current) >= max_words_per_line:
                     wrapped.append(" ".join(current))
                     current = []
-            
+
             if current:
                 wrapped.append(" ".join(current))
-            
+
             lines.append(str(i))
             lines.append(f"{self._format_srt_time(start)} --> {self._format_srt_time(end)}")
             lines.extend(wrapped)
             lines.append("")
-        
+
         return "\n".join(lines)
-    
+
     def generate_vtt(
         self,
-        transcript_segments: List[Dict[str, Any]],
+        transcript_segments: list[dict[str, Any]],
         max_words_per_line: int = 6
     ) -> str:
         """Generate VTT subtitle file content."""
         lines = ["WEBVTT", ""]
-        
+
         for segment in transcript_segments:
             start = segment.get("start", 0)
             end = segment.get("end", 0)
             text = segment.get("text", "").strip().upper()  # UPPERCASE
-            
+
             if not text:
                 continue
-            
+
             # Wrap text
             words = text.split()
             wrapped = []
             current = []
-            
+
             for word in words:
                 current.append(word)
                 if len(current) >= max_words_per_line:
                     wrapped.append(" ".join(current))
                     current = []
-            
+
             if current:
                 wrapped.append(" ".join(current))
-            
+
             lines.append(f"{self._format_vtt_time(start)} --> {self._format_vtt_time(end)}")
             lines.extend(wrapped)
             lines.append("")
-        
+
         return "\n".join(lines)
-    
+
     def _format_srt_time(self, seconds: float) -> str:
         """Format time for SRT (HH:MM:SS,mmm)."""
         hours = int(seconds // 3600)
@@ -371,7 +371,7 @@ class CaptionEngine:
         secs = int(seconds % 60)
         millis = int((seconds % 1) * 1000)
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
-    
+
     def _format_vtt_time(self, seconds: float) -> str:
         """Format time for VTT (HH:MM:SS.mmm)."""
         hours = int(seconds // 3600)
@@ -379,39 +379,39 @@ class CaptionEngine:
         secs = int(seconds % 60)
         millis = int((seconds % 1) * 1000)
         return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
-    
+
     def save_captions(
         self,
-        transcript_segments: List[Dict[str, Any]],
+        transcript_segments: list[dict[str, Any]],
         output_dir: Path,
         base_name: str = "captions",
         style_name: str = "default"
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """Save captions in multiple formats."""
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         paths = {}
-        
+
         # ASS
         ass_content = self.generate_ass(transcript_segments, style_name)
         ass_path = output_dir / f"{base_name}.ass"
         with open(ass_path, "w", encoding="utf-8") as f:
             f.write(ass_content)
         paths["ass"] = str(ass_path)
-        
+
         # SRT
         srt_content = self.generate_srt(transcript_segments)
         srt_path = output_dir / f"{base_name}.srt"
         with open(srt_path, "w", encoding="utf-8") as f:
             f.write(srt_content)
         paths["srt"] = str(srt_path)
-        
+
         # VTT
         vtt_content = self.generate_vtt(transcript_segments)
         vtt_path = output_dir / f"{base_name}.vtt"
         with open(vtt_path, "w", encoding="utf-8") as f:
             f.write(vtt_content)
         paths["vtt"] = str(vtt_path)
-        
+
         return paths

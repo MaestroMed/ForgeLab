@@ -5,15 +5,15 @@ Monitors all system components, jobs, and provides auto-recovery.
 
 import asyncio
 import logging
-import os
-import platform
-import psutil
 import time
-from dataclasses import dataclass, field
+from collections import deque
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Callable
-from collections import deque
+from typing import Any, Optional
+
+import psutil
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +25,8 @@ class LogEntry:
     level: str
     source: str
     message: str
-    extra: Optional[Dict[str, Any]] = None
-    
+    extra: dict[str, Any] | None = None
+
     def to_dict(self) -> dict:
         return {
             "timestamp": self.timestamp.isoformat(),
@@ -48,11 +48,11 @@ class SystemStats:
     disk_used_gb: float
     disk_total_gb: float
     gpu_available: bool = False
-    gpu_name: Optional[str] = None
+    gpu_name: str | None = None
     gpu_memory_used_gb: float = 0
     gpu_memory_total_gb: float = 0
     gpu_utilization: float = 0
-    
+
     def to_dict(self) -> dict:
         return {
             "cpu": {
@@ -84,9 +84,9 @@ class ServiceHealth:
     name: str
     status: str  # healthy, degraded, unhealthy, unknown
     last_check: datetime
-    message: Optional[str] = None
+    message: str | None = None
     latency_ms: float = 0
-    
+
     def to_dict(self) -> dict:
         return {
             "name": self.name,
@@ -104,11 +104,11 @@ class JobHealth:
     job_type: str
     status: str
     progress: float
-    started_at: Optional[datetime]
-    last_update: Optional[datetime]
+    started_at: datetime | None
+    last_update: datetime | None
     is_stuck: bool = False
     stuck_duration_seconds: float = 0
-    
+
     def to_dict(self) -> dict:
         return {
             "jobId": self.job_id,
@@ -124,9 +124,9 @@ class JobHealth:
 
 class MonitorService:
     """L'ŒIL - System monitoring and auto-recovery service."""
-    
+
     _instance: Optional["MonitorService"] = None
-    
+
     # Configuration
     JOB_STUCK_THRESHOLD_SECONDS = 180  # 3 minutes without progress = stuck
     PROJECT_STUCK_THRESHOLD_SECONDS = 600  # 10 minutes in transient state = stuck
@@ -134,33 +134,33 @@ class MonitorService:
     HEALTH_CHECK_INTERVAL = 15  # seconds - check more frequently
     AUTO_RECOVERY_ENABLED = False  # Disabled - was auto-relaunching multiple Whisper instances
     AUTO_RETRY_MAX = 3  # Maximum auto-retry attempts
-    
+
     def __init__(self):
         self._running = False
-        self._task: Optional[asyncio.Task] = None
+        self._task: asyncio.Task | None = None
         self._logs: deque[LogEntry] = deque(maxlen=self.LOG_BUFFER_SIZE)
-        self._services_health: Dict[str, ServiceHealth] = {}
-        self._jobs_health: Dict[str, JobHealth] = {}
-        self._last_job_progress: Dict[str, tuple[float, datetime]] = {}
-        self._event_handlers: List[Callable] = []
+        self._services_health: dict[str, ServiceHealth] = {}
+        self._jobs_health: dict[str, JobHealth] = {}
+        self._last_job_progress: dict[str, tuple[float, datetime]] = {}
+        self._event_handlers: list[Callable] = []
         self._start_time = datetime.now()
-        
+
         # Setup log capture
         self._setup_log_capture()
-    
+
     @classmethod
     def get_instance(cls) -> "MonitorService":
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
-    
+
     def _setup_log_capture(self):
         """Setup logging handler to capture all logs."""
         class MonitorHandler(logging.Handler):
             def __init__(self, monitor: "MonitorService"):
                 super().__init__()
                 self.monitor = monitor
-            
+
             def emit(self, record: logging.LogRecord):
                 try:
                     entry = LogEntry(
@@ -175,29 +175,30 @@ class MonitorService:
                         } if record.levelno >= logging.WARNING else None
                     )
                     self.monitor._logs.append(entry)
-                    
+
                     # Broadcast to WebSocket if error/warning
                     if record.levelno >= logging.WARNING:
                         self.monitor._broadcast_log(entry)
                 except Exception:
                     pass
-        
+
         # Add handler to root logger
         handler = MonitorHandler(self)
         handler.setLevel(logging.DEBUG)
         logging.getLogger().addHandler(handler)
-    
+
     def _broadcast_log(self, entry: LogEntry):
         """Broadcast log entry to WebSocket clients."""
         try:
-            from forge_engine.api.v1.endpoints.websockets import manager
             import asyncio
-            
+
+            from forge_engine.api.v1.endpoints.websockets import manager
+
             message = {
                 "type": "MONITOR_LOG",
                 "payload": entry.to_dict()
             }
-            
+
             # Get or create event loop
             try:
                 loop = asyncio.get_running_loop()
@@ -206,8 +207,8 @@ class MonitorService:
                 pass
         except Exception:
             pass
-    
-    def log(self, level: str, source: str, message: str, extra: Optional[dict] = None):
+
+    def log(self, level: str, source: str, message: str, extra: dict | None = None):
         """Add a log entry manually."""
         entry = LogEntry(
             timestamp=datetime.now(),
@@ -217,31 +218,31 @@ class MonitorService:
             extra=extra
         )
         self._logs.append(entry)
-        
+
         if level.upper() in ("WARNING", "ERROR", "CRITICAL"):
             self._broadcast_log(entry)
-    
-    def get_logs(self, limit: int = 100, level: Optional[str] = None, source: Optional[str] = None) -> List[dict]:
+
+    def get_logs(self, limit: int = 100, level: str | None = None, source: str | None = None) -> list[dict]:
         """Get recent logs with optional filtering."""
         logs = list(self._logs)
-        
+
         if level:
             logs = [l for l in logs if l.level == level.upper()]
         if source:
             logs = [l for l in logs if source.lower() in l.source.lower()]
-        
+
         # Return most recent first
         return [l.to_dict() for l in reversed(logs[-limit:])]
-    
+
     def get_system_stats(self) -> SystemStats:
         """Get current system statistics."""
         # CPU and Memory
         cpu_percent = psutil.cpu_percent(interval=0.1)
         memory = psutil.virtual_memory()
-        
+
         # Disk (main drive)
         disk = psutil.disk_usage(str(Path.home()))
-        
+
         stats = SystemStats(
             cpu_percent=cpu_percent,
             memory_percent=memory.percent,
@@ -251,7 +252,7 @@ class MonitorService:
             disk_used_gb=disk.used / (1024**3),
             disk_total_gb=disk.total / (1024**3),
         )
-        
+
         # GPU stats (if available)
         try:
             import torch
@@ -260,10 +261,10 @@ class MonitorService:
                 stats.gpu_name = torch.cuda.get_device_name(0)
                 props = torch.cuda.get_device_properties(0)
                 stats.gpu_memory_total_gb = props.total_memory / (1024**3)
-                
+
                 # Get current memory usage
                 stats.gpu_memory_used_gb = torch.cuda.memory_allocated(0) / (1024**3)
-                
+
                 # Try to get utilization via nvidia-smi
                 try:
                     import subprocess
@@ -277,16 +278,16 @@ class MonitorService:
                     pass
         except ImportError:
             pass
-        
+
         return stats
-    
+
     async def check_service_health(self, name: str, check_func: Callable) -> ServiceHealth:
         """Check health of a service."""
         start = time.time()
         try:
             result = await check_func() if asyncio.iscoroutinefunction(check_func) else check_func()
             latency = (time.time() - start) * 1000
-            
+
             if result:
                 health = ServiceHealth(
                     name=name,
@@ -310,41 +311,41 @@ class MonitorService:
                 message=str(e)[:200],
                 latency_ms=(time.time() - start) * 1000
             )
-        
+
         self._services_health[name] = health
         return health
-    
-    async def check_all_services(self) -> Dict[str, ServiceHealth]:
+
+    async def check_all_services(self) -> dict[str, ServiceHealth]:
         """Check health of all registered services."""
+        from forge_engine.core.database import engine
         from forge_engine.services.ffmpeg import FFmpegService
         from forge_engine.services.transcription import TranscriptionService
-        from forge_engine.core.database import engine
-        
+
         # FFmpeg
         ffmpeg = FFmpegService()
         await self.check_service_health("ffmpeg", ffmpeg.check_availability)
-        
+
         # Whisper
         transcription = TranscriptionService()
         await self.check_service_health("whisper", lambda: transcription.is_available())
-        
+
         # Database
         async def check_db():
             async with engine.connect() as conn:
                 await conn.execute("SELECT 1")
             return True
         await self.check_service_health("database", check_db)
-        
+
         return self._services_health
-    
-    def update_job_health(self, job_id: str, job_type: str, status: str, progress: float, started_at: Optional[datetime] = None):
+
+    def update_job_health(self, job_id: str, job_type: str, status: str, progress: float, started_at: datetime | None = None):
         """Update job health info."""
         now = datetime.now()
-        
+
         # Check if stuck
         is_stuck = False
         stuck_duration = 0
-        
+
         if job_id in self._last_job_progress:
             last_progress, last_time = self._last_job_progress[job_id]
             if progress == last_progress and status == "running":
@@ -356,7 +357,7 @@ class MonitorService:
                 self._last_job_progress[job_id] = (progress, now)
         else:
             self._last_job_progress[job_id] = (progress, now)
-        
+
         self._jobs_health[job_id] = JobHealth(
             job_id=job_id,
             job_type=job_type,
@@ -367,25 +368,26 @@ class MonitorService:
             is_stuck=is_stuck,
             stuck_duration_seconds=stuck_duration
         )
-    
-    def get_jobs_health(self) -> List[dict]:
+
+    def get_jobs_health(self) -> list[dict]:
         """Get health info for all tracked jobs."""
         return [j.to_dict() for j in self._jobs_health.values()]
-    
-    def get_stuck_jobs(self) -> List[JobHealth]:
+
+    def get_stuck_jobs(self) -> list[JobHealth]:
         """Get list of stuck jobs."""
         return [j for j in self._jobs_health.values() if j.is_stuck]
-    
+
     async def recover_stuck_jobs(self) -> int:
         """Attempt to recover stuck jobs and restart them."""
+        from sqlalchemy import select, update
+
         from forge_engine.core.database import async_session_maker
         from forge_engine.models import Project
         from forge_engine.models.job import JobRecord
-        from sqlalchemy import select, update
-        
+
         stuck_jobs = self.get_stuck_jobs()
         recovered = 0
-        
+
         async with async_session_maker() as db:
             for job in stuck_jobs:
                 try:
@@ -394,26 +396,26 @@ class MonitorService:
                         select(JobRecord).where(JobRecord.id == job.job_id)
                     )
                     job_record = result.scalar_one_or_none()
-                    
+
                     if not job_record:
                         continue
-                    
+
                     # Mark job as failed
                     await db.execute(
                         update(JobRecord)
                         .where(JobRecord.id == job.job_id)
                         .values(
-                            status="failed", 
+                            status="failed",
                             error=f"Auto-recovered: stuck for {job.stuck_duration_seconds:.0f}s"
                         )
                     )
-                    
+
                     # Get associated project
                     project_result = await db.execute(
                         select(Project).where(Project.id == job_record.project_id)
                     )
                     project = project_result.scalar_one_or_none()
-                    
+
                     if project:
                         # Reset project to appropriate state based on job type
                         if job.job_type == "ingest":
@@ -422,42 +424,43 @@ class MonitorService:
                             project.status = "ingested"
                         elif job.job_type == "export":
                             project.status = "analyzed"
-                        
+
                         self.log("INFO", "monitor", f"Reset project {project.id[:8]} to '{project.status}'")
-                    
+
                     # Clean up tracking
                     if job.job_id in self._jobs_health:
                         del self._jobs_health[job.job_id]
                     if job.job_id in self._last_job_progress:
                         del self._last_job_progress[job.job_id]
-                    
+
                     recovered += 1
                     self.log("INFO", "monitor", f"Recovered stuck job: {job.job_id[:8]} ({job.job_type})")
-                    
+
                 except Exception as e:
                     self.log("ERROR", "monitor", f"Failed to recover job {job.job_id[:8]}: {e}")
-            
+
             await db.commit()
-        
+
         return recovered
-    
+
     async def recover_stuck_projects(self) -> int:
         """Recover projects stuck in transient states."""
+        from sqlalchemy import and_, select
+
         from forge_engine.core.database import async_session_maker
         from forge_engine.models import Project
         from forge_engine.models.job import JobRecord
-        from sqlalchemy import select, and_
-        
+
         recovered = 0
         transient_states = ["ingesting", "analyzing", "downloading", "exporting"]
-        
+
         async with async_session_maker() as db:
             # Find projects in transient states
             result = await db.execute(
                 select(Project).where(Project.status.in_(transient_states))
             )
             projects = result.scalars().all()
-            
+
             for project in projects:
                 try:
                     # Check if there's an active job for this project
@@ -470,42 +473,43 @@ class MonitorService:
                         )
                     )
                     active_job = job_result.scalar_one_or_none()
-                    
+
                     if not active_job:
                         # No active job - project is orphaned, reset it
                         old_status = project.status
-                        
+
                         if old_status in ["ingesting", "downloading"]:
                             project.status = "created"
                         elif old_status == "analyzing":
                             project.status = "ingested"
                         elif old_status == "exporting":
                             project.status = "analyzed"
-                        
-                        self.log("WARNING", "monitor", 
+
+                        self.log("WARNING", "monitor",
                             f"Recovered orphaned project {project.id[:8]}: '{old_status}' -> '{project.status}'")
                         recovered += 1
-                    
+
                 except Exception as e:
                     self.log("ERROR", "monitor", f"Failed to check project {project.id[:8]}: {e}")
-            
+
             await db.commit()
-        
+
         return recovered
-    
+
     async def auto_restart_failed_jobs(self) -> int:
         """Auto-restart recently failed jobs that haven't exceeded retry limit."""
+        from sqlalchemy import and_, select
+
         from forge_engine.core.database import async_session_maker
+        from forge_engine.core.jobs import JobManager, JobType
         from forge_engine.models import Project
         from forge_engine.models.job import JobRecord
-        from forge_engine.core.jobs import JobManager, JobType
-        from sqlalchemy import select, and_
-        
+
         restarted = 0
-        
+
         # Only restart jobs that failed in the last 10 minutes
         cutoff = datetime.now() - timedelta(minutes=10)
-        
+
         async with async_session_maker() as db:
             result = await db.execute(
                 select(JobRecord).where(
@@ -516,26 +520,26 @@ class MonitorService:
                 ).order_by(JobRecord.completed_at.desc()).limit(10)
             )
             failed_jobs = result.scalars().all()
-            
+
             for job_record in failed_jobs:
                 try:
                     # Check retry count in metadata
                     retry_count = 0
                     if job_record.result and isinstance(job_record.result, dict):
                         retry_count = job_record.result.get("_retry_count", 0)
-                    
+
                     if retry_count >= self.AUTO_RETRY_MAX:
                         continue
-                    
+
                     # Get project
                     project_result = await db.execute(
                         select(Project).where(Project.id == job_record.project_id)
                     )
                     project = project_result.scalar_one_or_none()
-                    
+
                     if not project:
                         continue
-                    
+
                     # Check if there's already a new job for this project
                     existing_result = await db.execute(
                         select(JobRecord).where(
@@ -549,10 +553,10 @@ class MonitorService:
                     )
                     if existing_result.scalar_one_or_none():
                         continue  # Already has a replacement job
-                    
+
                     # Restart the job
                     job_manager = JobManager.get_instance()
-                    
+
                     if job_record.type == "ingest":
                         from forge_engine.services.ingest import IngestService
                         service = IngestService()
@@ -564,7 +568,7 @@ class MonitorService:
                             _retry_count=retry_count + 1
                         )
                         project.status = "ingesting"
-                        
+
                     elif job_record.type == "analyze":
                         from forge_engine.services.analysis import AnalysisService
                         service = AnalysisService()
@@ -575,34 +579,35 @@ class MonitorService:
                             _retry_count=retry_count + 1
                         )
                         project.status = "analyzing"
-                    
+
                     await db.commit()
                     restarted += 1
-                    self.log("INFO", "monitor", 
+                    self.log("INFO", "monitor",
                         f"Auto-restarted {job_record.type} job for project {project.id[:8]} (retry #{retry_count + 1})")
-                    
+
                 except Exception as e:
                     self.log("ERROR", "monitor", f"Failed to restart job: {e}")
-        
+
         return restarted
-    
+
     async def ensure_workflow_continuity(self) -> dict:
         """Ensure all projects are progressing through their workflow."""
+        from sqlalchemy import and_, select
+
         from forge_engine.core.database import async_session_maker
+        from forge_engine.core.jobs import JobManager, JobType
         from forge_engine.models import Project
         from forge_engine.models.job import JobRecord
-        from forge_engine.core.jobs import JobManager, JobType
-        from sqlalchemy import select, and_, not_
-        
+
         stats = {"ingested_without_analysis": 0, "actions_taken": 0}
-        
+
         async with async_session_maker() as db:
             # Find projects that are "ingested" but have no pending/running analysis job
             result = await db.execute(
                 select(Project).where(Project.status == "ingested")
             )
             ingested_projects = result.scalars().all()
-            
+
             for project in ingested_projects:
                 # Check if there's a pending/running analysis job
                 job_result = await db.execute(
@@ -614,44 +619,44 @@ class MonitorService:
                         )
                     )
                 )
-                
+
                 if not job_result.scalar_one_or_none():
                     stats["ingested_without_analysis"] += 1
-                    
+
                     # Check project metadata for auto_analyze flag
                     auto_analyze = True
                     if project.project_meta and isinstance(project.project_meta, dict):
                         auto_analyze = project.project_meta.get("auto_analyze", True)
-                    
+
                     if auto_analyze and self.AUTO_RECOVERY_ENABLED:
                         # Auto-start analysis
                         try:
                             from forge_engine.services.analysis import AnalysisService
                             job_manager = JobManager.get_instance()
                             service = AnalysisService()
-                            
+
                             await job_manager.create_job(
                                 job_type=JobType.ANALYZE,
                                 handler=service.run_analysis,
                                 project_id=project.id,
                             )
-                            
+
                             project.status = "analyzing"
                             await db.commit()
-                            
+
                             stats["actions_taken"] += 1
-                            self.log("INFO", "monitor", 
+                            self.log("INFO", "monitor",
                                 f"Auto-started analysis for project {project.id[:8]}")
-                            
+
                         except Exception as e:
                             self.log("ERROR", "monitor", f"Failed to auto-start analysis: {e}")
-        
+
         return stats
-    
+
     def get_uptime(self) -> float:
         """Get service uptime in seconds."""
         return (datetime.now() - self._start_time).total_seconds()
-    
+
     def get_full_status(self) -> dict:
         """Get full system status."""
         return {
@@ -670,29 +675,29 @@ class MonitorService:
                 "warnings": sum(1 for l in self._logs if l.level == "WARNING"),
             }
         }
-    
+
     def _format_uptime(self, seconds: float) -> str:
         """Format uptime as human readable string."""
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
         secs = int(seconds % 60)
-        
+
         if hours > 0:
             return f"{hours}h {minutes}m {secs}s"
         elif minutes > 0:
             return f"{minutes}m {secs}s"
         else:
             return f"{secs}s"
-    
+
     async def start(self):
         """Start the monitoring background task."""
         if self._running:
             return
-        
+
         self._running = True
         self._task = asyncio.create_task(self._monitor_loop())
         self.log("INFO", "monitor", "L'ŒIL monitoring service started")
-    
+
     async def stop(self):
         """Stop the monitoring background task."""
         self._running = False
@@ -703,21 +708,21 @@ class MonitorService:
             except asyncio.CancelledError:
                 pass
         self.log("INFO", "monitor", "L'ŒIL monitoring service stopped")
-    
+
     async def _monitor_loop(self):
         """Background monitoring loop with comprehensive auto-recovery."""
         cycle_count = 0
-        
+
         while self._running:
             try:
                 cycle_count += 1
-                
+
                 # Check services health
                 await self.check_all_services()
-                
+
                 # === AUTO-RECOVERY PIPELINE ===
                 if self.AUTO_RECOVERY_ENABLED:
-                    
+
                     # 1. Recover stuck jobs (every cycle)
                     stuck = self.get_stuck_jobs()
                     if stuck:
@@ -725,25 +730,25 @@ class MonitorService:
                         recovered = await self.recover_stuck_jobs()
                         if recovered > 0:
                             self.log("INFO", "recovery", f"Recovered {recovered} stuck job(s)")
-                    
+
                     # 2. Recover orphaned projects (every cycle)
                     orphaned = await self.recover_stuck_projects()
                     if orphaned > 0:
                         self.log("INFO", "recovery", f"Recovered {orphaned} orphaned project(s)")
-                    
+
                     # 3. Auto-restart failed jobs (every 2 cycles = 30s)
                     if cycle_count % 2 == 0:
                         restarted = await self.auto_restart_failed_jobs()
                         if restarted > 0:
                             self.log("INFO", "recovery", f"Auto-restarted {restarted} failed job(s)")
-                    
+
                     # 4. Ensure workflow continuity (every 4 cycles = 60s)
                     if cycle_count % 4 == 0:
                         workflow_stats = await self.ensure_workflow_continuity()
                         if workflow_stats["actions_taken"] > 0:
-                            self.log("INFO", "recovery", 
+                            self.log("INFO", "recovery",
                                 f"Workflow continuity: {workflow_stats['actions_taken']} action(s) taken")
-                
+
                 # Broadcast status update to WebSocket clients
                 try:
                     from forge_engine.api.v1.endpoints.websockets import manager
@@ -759,9 +764,9 @@ class MonitorService:
                     await manager.broadcast(message)
                 except Exception:
                     pass
-                
+
             except Exception as e:
                 self.log("ERROR", "monitor", f"Monitor loop error: {e}")
-            
+
             await asyncio.sleep(self.HEALTH_CHECK_INTERVAL)
 

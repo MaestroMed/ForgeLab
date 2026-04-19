@@ -3,8 +3,8 @@ Font resolution utility.
 Prefers bundled fonts in resources/fonts/, falls back to system fonts.
 Never fails silently — always returns a usable path.
 """
-import platform
 import logging
+import platform
 from pathlib import Path
 
 logger = logging.getLogger(__name__)

@@ -8,17 +8,15 @@ Handles the retroactive quality loop:
 """
 
 from datetime import datetime
-from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, and_
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge_engine.core.database import get_db
-from forge_engine.models.review import ClipReview, ClipQueue
+from forge_engine.models.review import ClipQueue, ClipReview
 from forge_engine.models.segment import Segment
-from forge_engine.models.artifact import Artifact
 
 router = APIRouter()
 
@@ -31,53 +29,53 @@ class CreateReviewRequest(BaseModel):
     """Submit a review for an exported clip."""
     segment_id: str
     project_id: str
-    artifact_id: Optional[str] = None
+    artifact_id: str | None = None
     rating: int = Field(..., ge=1, le=5, description="1-5 stars")
-    quality_tags: Optional[List[str]] = None
-    issue_tags: Optional[List[str]] = None
-    notes: Optional[str] = None
-    publish_decision: Optional[str] = None  # approve, reject, edit_needed, maybe
+    quality_tags: list[str] | None = None
+    issue_tags: list[str] | None = None
+    notes: str | None = None
+    publish_decision: str | None = None  # approve, reject, edit_needed, maybe
 
 
 class UpdateReviewRequest(BaseModel):
     """Update an existing review."""
-    rating: Optional[int] = Field(None, ge=1, le=5)
-    quality_tags: Optional[List[str]] = None
-    issue_tags: Optional[List[str]] = None
-    notes: Optional[str] = None
-    publish_decision: Optional[str] = None
+    rating: int | None = Field(None, ge=1, le=5)
+    quality_tags: list[str] | None = None
+    issue_tags: list[str] | None = None
+    notes: str | None = None
+    publish_decision: str | None = None
 
 
 class UpdatePerformanceRequest(BaseModel):
     """Update clip performance data after publication."""
     platform: str
-    views: Optional[int] = None
-    likes: Optional[int] = None
-    comments: Optional[int] = None
-    shares: Optional[int] = None
+    views: int | None = None
+    likes: int | None = None
+    comments: int | None = None
+    shares: int | None = None
 
 
 class QueueClipRequest(BaseModel):
     """Add a clip to the publication queue."""
     segment_id: str
     project_id: str
-    artifact_id: Optional[str] = None
+    artifact_id: str | None = None
     video_path: str
-    cover_path: Optional[str] = None
-    title: Optional[str] = None
-    description: Optional[str] = None
-    hashtags: Optional[List[str]] = None
-    target_platform: Optional[str] = "youtube"
-    channel_name: Optional[str] = "EtoStark"
+    cover_path: str | None = None
+    title: str | None = None
+    description: str | None = None
+    hashtags: list[str] | None = None
+    target_platform: str | None = "youtube"
+    channel_name: str | None = "EtoStark"
 
 
 class ApproveClipRequest(BaseModel):
     """Approve a clip for publication."""
-    title: Optional[str] = None
-    description: Optional[str] = None
-    hashtags: Optional[List[str]] = None
-    target_platform: Optional[str] = None
-    scheduled_at: Optional[str] = None  # ISO datetime
+    title: str | None = None
+    description: str | None = None
+    hashtags: list[str] | None = None
+    target_platform: str | None = None
+    scheduled_at: str | None = None  # ISO datetime
 
 
 # ================================================================
@@ -90,7 +88,7 @@ async def create_review(
     db: AsyncSession = Depends(get_db)
 ) -> dict:
     """Submit a review for an exported clip.
-    
+
     This feeds into the ML scoring model to improve future predictions.
     """
     # Get segment to compare scores
@@ -98,11 +96,11 @@ async def create_review(
         select(Segment).where(Segment.id == request.segment_id)
     )
     segment = segment_result.scalar_one_or_none()
-    
+
     predicted_score = segment.score_total if segment else None
     human_score = request.rating * 20.0  # 1-5 -> 20-100
     score_delta = (predicted_score - human_score) if predicted_score else None
-    
+
     review = ClipReview(
         project_id=request.project_id,
         segment_id=request.segment_id,
@@ -116,15 +114,15 @@ async def create_review(
         human_score=human_score,
         score_delta=score_delta,
     )
-    
+
     db.add(review)
     await db.flush()
-    
+
     # Feed into ML scoring model
     try:
         from forge_engine.services.ml_scoring import MLScoringService
         ml_service = MLScoringService.get_instance()
-        
+
         if segment:
             segment_dict = {
                 "id": segment.id,
@@ -145,7 +143,7 @@ async def create_review(
         # Don't fail the review if ML feedback fails
         import logging
         logging.getLogger(__name__).warning(f"ML feedback failed: {e}")
-    
+
     return {
         "success": True,
         "data": review.to_dict(),
@@ -155,9 +153,9 @@ async def create_review(
 
 @router.get("/reviews")
 async def list_reviews(
-    project_id: Optional[str] = None,
-    segment_id: Optional[str] = None,
-    min_rating: Optional[int] = None,
+    project_id: str | None = None,
+    segment_id: str | None = None,
+    min_rating: int | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db)
@@ -165,7 +163,7 @@ async def list_reviews(
     """List reviews with optional filters."""
     query = select(ClipReview)
     count_query = select(func.count()).select_from(ClipReview)
-    
+
     if project_id:
         query = query.where(ClipReview.project_id == project_id)
         count_query = count_query.where(ClipReview.project_id == project_id)
@@ -175,16 +173,16 @@ async def list_reviews(
     if min_rating:
         query = query.where(ClipReview.rating >= min_rating)
         count_query = count_query.where(ClipReview.rating >= min_rating)
-    
+
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
-    
+
     query = query.order_by(ClipReview.created_at.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
-    
+
     result = await db.execute(query)
     reviews = result.scalars().all()
-    
+
     return {
         "success": True,
         "data": {
@@ -206,10 +204,10 @@ async def get_review(
         select(ClipReview).where(ClipReview.id == review_id)
     )
     review = result.scalar_one_or_none()
-    
+
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
-    
+
     return {"success": True, "data": review.to_dict()}
 
 
@@ -224,10 +222,10 @@ async def update_review(
         select(ClipReview).where(ClipReview.id == review_id)
     )
     review = result.scalar_one_or_none()
-    
+
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
-    
+
     if request.rating is not None:
         review.rating = request.rating
         review.human_score = request.rating * 20.0
@@ -241,7 +239,7 @@ async def update_review(
         review.notes = request.notes
     if request.publish_decision is not None:
         review.publish_decision = request.publish_decision
-    
+
     return {"success": True, "data": review.to_dict()}
 
 
@@ -256,10 +254,10 @@ async def update_performance(
         select(ClipReview).where(ClipReview.id == review_id)
     )
     review = result.scalar_one_or_none()
-    
+
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
-    
+
     review.platform = request.platform
     if request.views is not None:
         review.views = request.views
@@ -269,7 +267,7 @@ async def update_performance(
         review.comments = request.comments
     if request.shares is not None:
         review.shares = request.shares
-    
+
     return {"success": True, "data": review.to_dict()}
 
 
@@ -281,9 +279,9 @@ async def update_performance(
 async def get_ml_status() -> dict:
     """Get ML scoring model status and accuracy metrics."""
     from forge_engine.services.ml_scoring import MLScoringService
-    
+
     ml_service = MLScoringService.get_instance()
-    
+
     return {
         "available": ml_service.is_available(),
         "modelTrained": ml_service.is_model_trained(),
@@ -300,23 +298,23 @@ async def train_ml_model(
 ) -> dict:
     """Trigger ML model training with collected reviews."""
     from forge_engine.services.ml_scoring import MLScoringService
-    
+
     ml_service = MLScoringService.get_instance()
-    
+
     if not ml_service.is_available():
         raise HTTPException(status_code=400, detail="scikit-learn not available")
-    
+
     if not force and not ml_service.can_train():
         raise HTTPException(
             status_code=400,
             detail=f"Not enough training data: {ml_service.get_training_data_count()} / {ml_service.MIN_TRAINING_EXAMPLES}"
         )
-    
+
     metadata = await ml_service.train_model(force=force)
-    
+
     if metadata is None:
         raise HTTPException(status_code=500, detail="Training failed")
-    
+
     return {
         "success": True,
         "model": {
@@ -342,24 +340,24 @@ async def get_ml_accuracy(
         )
     )
     reviews = result.scalars().all()
-    
+
     if not reviews:
         return {
             "totalReviews": 0,
             "accuracy": None,
             "message": "No reviews with score comparisons yet"
         }
-    
+
     deltas = [r.score_delta for r in reviews if r.score_delta is not None]
     abs_deltas = [abs(d) for d in deltas]
-    
+
     avg_delta = sum(deltas) / len(deltas) if deltas else 0
     avg_abs_delta = sum(abs_deltas) / len(abs_deltas) if abs_deltas else 0
-    
+
     # Categorize accuracy
     within_10 = sum(1 for d in abs_deltas if d <= 10)
     within_20 = sum(1 for d in abs_deltas if d <= 20)
-    
+
     return {
         "totalReviews": len(reviews),
         "averageDelta": round(avg_delta, 1),
@@ -378,8 +376,8 @@ async def get_ml_accuracy(
 
 @router.get("/queue")
 async def list_queue(
-    status: Optional[str] = None,
-    channel: Optional[str] = None,
+    status: str | None = None,
+    channel: str | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db)
@@ -387,23 +385,23 @@ async def list_queue(
     """List clips in the queue, sorted by viral score."""
     query = select(ClipQueue)
     count_query = select(func.count()).select_from(ClipQueue)
-    
+
     if status:
         query = query.where(ClipQueue.status == status)
         count_query = count_query.where(ClipQueue.status == status)
     if channel:
         query = query.where(ClipQueue.channel_name == channel)
         count_query = count_query.where(ClipQueue.channel_name == channel)
-    
+
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
-    
+
     query = query.order_by(ClipQueue.viral_score.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
-    
+
     result = await db.execute(query)
     clips = result.scalars().all()
-    
+
     return {
         "success": True,
         "data": {
@@ -417,20 +415,20 @@ async def list_queue(
 
 @router.get("/queue/pending")
 async def list_pending_clips(
-    channel: Optional[str] = None,
+    channel: str | None = None,
     db: AsyncSession = Depends(get_db)
 ) -> dict:
     """List clips pending review (for mobile app feed)."""
     query = select(ClipQueue).where(ClipQueue.status == "pending_review")
-    
+
     if channel:
         query = query.where(ClipQueue.channel_name == channel)
-    
+
     query = query.order_by(ClipQueue.viral_score.desc())
-    
+
     result = await db.execute(query)
     clips = result.scalars().all()
-    
+
     return {
         "success": True,
         "data": [c.to_dict() for c in clips],
@@ -449,10 +447,10 @@ async def approve_clip(
         select(ClipQueue).where(ClipQueue.id == clip_id)
     )
     clip = result.scalar_one_or_none()
-    
+
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    
+
     clip.status = "approved"
     if request.title:
         clip.title = request.title
@@ -465,7 +463,7 @@ async def approve_clip(
     if request.scheduled_at:
         clip.scheduled_at = datetime.fromisoformat(request.scheduled_at)
         clip.status = "scheduled"
-    
+
     return {"success": True, "data": clip.to_dict()}
 
 
@@ -479,21 +477,21 @@ async def reject_clip(
         select(ClipQueue).where(ClipQueue.id == clip_id)
     )
     clip = result.scalar_one_or_none()
-    
+
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    
+
     clip.status = "rejected"
-    
+
     return {"success": True, "data": clip.to_dict()}
 
 
 @router.patch("/queue/{clip_id}")
 async def update_queued_clip(
     clip_id: str,
-    title: Optional[str] = None,
-    description: Optional[str] = None,
-    hashtags: Optional[List[str]] = None,
+    title: str | None = None,
+    description: str | None = None,
+    hashtags: list[str] | None = None,
     db: AsyncSession = Depends(get_db)
 ) -> dict:
     """Edit a queued clip's metadata before publication."""
@@ -501,15 +499,15 @@ async def update_queued_clip(
         select(ClipQueue).where(ClipQueue.id == clip_id)
     )
     clip = result.scalar_one_or_none()
-    
+
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    
+
     if title is not None:
         clip.title = title
     if description is not None:
         clip.description = description
     if hashtags is not None:
         clip.hashtags = hashtags
-    
+
     return {"success": True, "data": clip.to_dict()}

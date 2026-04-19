@@ -2,21 +2,21 @@
 
 import asyncio
 import logging
-import uuid
-import json
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from enum import Enum
-from typing import Any, Callable, Coroutine, Dict, List, Optional
+from enum import StrEnum
+from typing import Any, Optional
 
 from sqlalchemy import select, update
+
 from forge_engine.core.database import async_session_maker
 from forge_engine.models.job import JobRecord
 
 logger = logging.getLogger(__name__)
 
 
-class JobStatus(str, Enum):
+class JobStatus(StrEnum):
     """Job status enumeration."""
     PENDING = "pending"
     RUNNING = "running"
@@ -25,7 +25,7 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class JobType(str, Enum):
+class JobType(StrEnum):
     """Job type enumeration."""
     INGEST = "ingest"
     ANALYZE = "analyze"
@@ -53,23 +53,23 @@ class Job:
     """Represents a background job (Transient Object)."""
     id: str
     type: JobType
-    project_id: Optional[str] = None
+    project_id: str | None = None
     status: JobStatus = JobStatus.PENDING
     progress: float = 0.0
     stage: str = ""
     message: str = ""
-    error: Optional[str] = None
-    result: Optional[Dict[str, Any]] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)  # For warnings, jump cuts, etc.
+    error: str | None = None
+    result: dict[str, Any] | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)  # For warnings, jump cuts, etc.
     created_at: datetime = field(default_factory=datetime.utcnow)
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
     # Internal - loaded from registry
-    _handler: Optional[Callable[..., Coroutine]] = field(default=None, repr=False)
-    _kwargs: Dict[str, Any] = field(default_factory=dict, repr=False)
-    
-    def to_dict(self) -> Dict[str, Any]:
+    _handler: Callable[..., Coroutine] | None = field(default=None, repr=False)
+    _kwargs: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for API response."""
         return {
             "id": self.id,
@@ -90,9 +90,9 @@ class Job:
 
 class JobManager:
     """Manages background job execution with SQLite persistence."""
-    
+
     _instance: Optional["JobManager"] = None
-    
+
     # Timeout settings per job type (in seconds)
     JOB_TIMEOUTS = {
         JobType.DOWNLOAD.value: 3600,      # 1 hour for downloads
@@ -103,44 +103,44 @@ class JobManager:
         JobType.RENDER_PROXY.value: 600,   # 10 min for proxy
         JobType.GENERATE_VARIANTS.value: 1800,
     }
-    
+
     # Stall detection: if no progress for this many seconds, mark as stalled
     STALL_THRESHOLD = 300  # 5 minutes
-    
+
     def __init__(self):
-        self._handlers: Dict[str, Callable] = {}
+        self._handlers: dict[str, Callable] = {}
         self._running = False
-        self._workers: List[asyncio.Task] = []
+        self._workers: list[asyncio.Task] = []
         self._max_workers = 1  # Single worker to avoid SQLite race conditions
         self._pick_lock = asyncio.Lock()  # Mutex for job picking
-        self._listeners: Dict[str, List[Callable[[Job], None]]] = {}
-        self._main_loop: Optional[asyncio.AbstractEventLoop] = None
-        self._last_progress: Dict[str, tuple] = {}  # job_id -> (progress, timestamp)
-    
+        self._listeners: dict[str, list[Callable[[Job], None]]] = {}
+        self._main_loop: asyncio.AbstractEventLoop | None = None
+        self._last_progress: dict[str, tuple] = {}  # job_id -> (progress, timestamp)
+
     def set_main_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Store reference to main event loop for thread-safe updates."""
         self._main_loop = loop
         logger.info("JobManager main loop registered")
-    
+
     @classmethod
     def get_instance(cls) -> "JobManager":
         """Get singleton instance."""
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
-    
+
     def register_handler(self, job_type: JobType, handler: Callable[..., Coroutine]):
         """Register a handler for a job type."""
         self._handlers[job_type.value] = handler
         logger.info("Registered handler for %s", job_type.value)
-    
+
     async def start(self) -> None:
         """Start the job manager workers."""
         if self._running:
             return
-        
+
         self._running = True
-        
+
         # Mark orphaned "running" jobs as FAILED so they don't auto-restart.
         # Users can manually retry individual jobs from the UI.
         async with async_session_maker() as db:
@@ -164,13 +164,13 @@ class JobManager:
         for i in range(self._max_workers):
             worker = asyncio.create_task(self._worker(i))
             self._workers.append(worker)
-        
+
         # Start stall/timeout monitor
         monitor_task = asyncio.create_task(self._monitor_stuck_jobs())
         self._workers.append(monitor_task)
-        
+
         logger.info("Persistent Job manager started with %d workers + monitor", self._max_workers)
-    
+
     async def stop(self) -> None:
         """Stop the job manager."""
         self._running = False
@@ -180,25 +180,25 @@ class JobManager:
             await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
         logger.info("Job manager stopped")
-    
+
     async def _worker(self, worker_id: int) -> None:
         """Worker loop polling DB for pending jobs.
-        
+
         Uses an asyncio.Lock to guarantee only one worker picks a given job,
         even though SQLite does not support SELECT FOR UPDATE.
         """
         logger.info("Worker %d started", worker_id)
-        
+
         while self._running:
             try:
                 job_id = None
                 handler = None
                 kwargs = {}
-                
+
                 async with self._pick_lock:
                     async with async_session_maker() as db:
                         cutoff = datetime.utcnow() - timedelta(hours=24)
-                        
+
                         from sqlalchemy import case
                         priority_order = case(
                             {
@@ -213,7 +213,7 @@ class JobManager:
                             value=JobRecord.type,
                             else_=10
                         )
-                        
+
                         result = await db.execute(
                             select(JobRecord)
                             .where(JobRecord.status == JobStatus.PENDING.value)
@@ -222,23 +222,23 @@ class JobManager:
                             .limit(1)
                         )
                         record = result.scalar_one_or_none()
-                        
+
                         if record:
                             job_id = record.id
                             job_type = record.type
                             project_id = record.project_id
                             kwargs = record.result if record.result else {}
-                            
+
                             record.status = JobStatus.RUNNING.value
                             record.started_at = datetime.utcnow()
                             await db.commit()
-                            
+
                             priority = JOB_PRIORITY.get(job_type, 10)
                             logger.info("Worker picked up job %s (%s, priority=%d)",
                                         job_id[:8], job_type, priority)
-                            
+
                             handler = self._handlers.get(job_type)
-                
+
                 if job_id and handler:
                     job = Job(
                         id=job_id,
@@ -251,13 +251,13 @@ class JobManager:
                     await self._execute_job(job)
                 else:
                     await asyncio.sleep(2)
-                    
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.exception("Worker %d loop error: %s", worker_id, e)
                 await asyncio.sleep(5)
-    
+
     async def _execute_job(self, job: Job) -> None:
         """Execute job logic."""
         try:
@@ -274,7 +274,7 @@ class JobManager:
             if job._handler:
                 # Pass project_id explicitly since it's stored separately from kwargs
                 result = await job._handler(job=job, project_id=job.project_id, **job._kwargs)
-                
+
                 # Update success
                 async with async_session_maker() as db:
                     await db.execute(
@@ -309,14 +309,14 @@ class JobManager:
                     )
                 )
                 await db.commit()
-        
+
         self._notify_listeners(job)
 
     async def create_job(
         self,
         job_type: JobType,
-        handler: Optional[Callable[..., Coroutine]] = None,
-        project_id: Optional[str] = None,
+        handler: Callable[..., Coroutine] | None = None,
+        project_id: str | None = None,
         **kwargs
     ) -> Job:
         """Create job in DB. Uses registered handler if none provided."""
@@ -325,22 +325,22 @@ class JobManager:
             self.register_handler(job_type, handler)
         elif job_type.value not in self._handlers:
             raise ValueError(f"No handler registered for job type: {job_type.value}")
-        
+
         async with async_session_maker() as db:
             record = JobRecord(
                 type=job_type.value,
                 project_id=project_id,
                 status=JobStatus.PENDING.value,
                 # Store args in result column for now (hack)
-                result=kwargs, 
+                result=kwargs,
                 created_at=datetime.utcnow()
             )
             db.add(record)
             await db.commit()
             await db.refresh(record)
-            
+
             logger.info("Created persistent job %s", record.id)
-            
+
             # Return transient object
             return Job(
                 id=record.id,
@@ -350,14 +350,14 @@ class JobManager:
                 created_at=record.created_at
             )
 
-    async def get_job(self, job_id: str) -> Optional[Job]:
+    async def get_job(self, job_id: str) -> Job | None:
         """Fetch job from DB."""
         async with async_session_maker() as db:
             result = await db.execute(select(JobRecord).where(JobRecord.id == job_id))
             record = result.scalar_one_or_none()
             if not record:
                 return None
-            
+
             return Job(
                 id=record.id,
                 type=JobType(record.type),
@@ -373,7 +373,7 @@ class JobManager:
                 completed_at=record.completed_at
             )
 
-    async def get_jobs_for_project(self, project_id: str) -> List[Job]:
+    async def get_jobs_for_project(self, project_id: str) -> list[Job]:
         """Fetch jobs for project."""
         async with async_session_maker() as db:
             result = await db.execute(
@@ -397,7 +397,7 @@ class JobManager:
                 ) for r in records
             ]
 
-    async def get_all_jobs(self, limit: int = 100) -> List[Job]:
+    async def get_all_jobs(self, limit: int = 100) -> list[Job]:
         """Fetch all jobs (most recent first)."""
         async with async_session_maker() as db:
             result = await db.execute(
@@ -426,7 +426,7 @@ class JobManager:
         job.progress = progress
         job.stage = stage
         job.message = message
-        
+
         # Notify L'ŒIL monitor for health tracking
         try:
             from forge_engine.services.monitor import MonitorService
@@ -436,13 +436,13 @@ class JobManager:
             monitor.update_job_health(job.id, job_type, status, progress, job.started_at)
         except Exception:
             pass  # Don't fail job update if monitor fails
-        
+
         # Notify listeners (including WebSocket)
         self._notify_listeners(job)
-        
+
         # Fire and forget DB update - use thread-safe method
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
             asyncio.create_task(self._update_db_progress(job.id, progress, stage, message))
         except RuntimeError:
             # No event loop in this thread (called from executor)
@@ -481,20 +481,20 @@ class JobManager:
             await db.commit()
         logger.info("Job %s cancelled", job_id)
         return True
-    
-    async def retry_job(self, job_id: str) -> Optional[Job]:
+
+    async def retry_job(self, job_id: str) -> Job | None:
         """Retry a failed or cancelled job by resetting it to pending."""
         async with async_session_maker() as db:
             result = await db.execute(select(JobRecord).where(JobRecord.id == job_id))
             record = result.scalar_one_or_none()
-            
+
             if not record:
                 return None
-            
+
             if record.status not in [JobStatus.FAILED.value, JobStatus.CANCELLED.value]:
                 logger.warning("Cannot retry job %s with status %s", job_id, record.status)
                 return None
-            
+
             # Reset to pending
             record.status = JobStatus.PENDING.value
             record.progress = 0.0
@@ -503,12 +503,12 @@ class JobManager:
             record.completed_at = None
             record.stage = ""
             record.message = "Retrying..."
-            
+
             await db.commit()
             await db.refresh(record)
-            
+
             logger.info("Job %s reset to pending for retry", job_id)
-            
+
             return Job(
                 id=record.id,
                 type=JobType(record.type),
@@ -516,30 +516,30 @@ class JobManager:
                 status=JobStatus.PENDING,
                 created_at=record.created_at
             )
-    
+
     async def _monitor_stuck_jobs(self) -> None:
         """Monitor for stuck/stalled jobs and handle timeouts."""
         logger.info("Job stall monitor started")
-        
+
         while self._running:
             try:
                 await asyncio.sleep(60)  # Check every minute
-                
+
                 async with async_session_maker() as db:
                     # Find running jobs
                     result = await db.execute(
                         select(JobRecord).where(JobRecord.status == JobStatus.RUNNING.value)
                     )
                     running_jobs = result.scalars().all()
-                    
+
                     now = datetime.utcnow()
-                    
+
                     for record in running_jobs:
                         job_id = record.id
                         job_type = record.type
                         started_at = record.started_at
                         progress = record.progress
-                        
+
                         # Check timeout
                         timeout = self.JOB_TIMEOUTS.get(job_type, 7200)  # Default 2h
                         if started_at and (now - started_at).total_seconds() > timeout:
@@ -555,13 +555,13 @@ class JobManager:
                             )
                             await db.commit()
                             continue
-                        
+
                         # Check stall (no progress for STALL_THRESHOLD seconds)
                         last_progress_data = self._last_progress.get(job_id)
                         if last_progress_data:
                             last_progress, last_time = last_progress_data
                             if progress == last_progress and (now - last_time).total_seconds() > self.STALL_THRESHOLD:
-                                logger.warning("Job %s stalled at %.1f%% for >%ds", 
+                                logger.warning("Job %s stalled at %.1f%% for >%ds",
                                              job_id[:8], progress, self.STALL_THRESHOLD)
                                 # Mark as failed with stall error
                                 await db.execute(
@@ -576,10 +576,10 @@ class JobManager:
                                 await db.commit()
                                 del self._last_progress[job_id]
                                 continue
-                        
+
                         # Update last known progress
                         self._last_progress[job_id] = (progress, now)
-                    
+
                     # Clean up old entries from _last_progress
                     completed_ids = set()
                     for job_id in list(self._last_progress.keys()):
@@ -589,10 +589,10 @@ class JobManager:
                         status = result.scalar_one_or_none()
                         if status and status != JobStatus.RUNNING.value:
                             completed_ids.add(job_id)
-                    
+
                     for job_id in completed_ids:
                         del self._last_progress[job_id]
-                        
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -608,7 +608,7 @@ class JobManager:
                 .where(JobRecord.status == JobStatus.RUNNING.value)
             )
             return result.scalar() or 0
-    
+
     async def get_pending_jobs_count(self) -> int:
         """Get count of pending jobs."""
         async with async_session_maker() as db:
@@ -618,7 +618,7 @@ class JobManager:
                 .where(JobRecord.status == JobStatus.PENDING.value)
             )
             return result.scalar() or 0
-    
+
     async def get_jobs_stats(self) -> dict:
         """Get job statistics."""
         async with async_session_maker() as db:
@@ -633,7 +633,7 @@ class JobManager:
             for row in result.all():
                 stats[row.status] = row.count
             return stats
-    
+
     def register_global_listener(self, callback: Callable[[Job], None]) -> None:
         """Register a listener for ALL job updates."""
         if "global" not in self._listeners:
@@ -648,11 +648,11 @@ class JobManager:
                 callback(job)
             except Exception as e:
                 logger.exception("Listener error: %s", e)
-        
+
         # Global listeners
         global_listeners = self._listeners.get("global", [])
         if global_listeners and job.progress % 5 < 0.5:  # Log every ~5%
-            logger.info("Notifying %d global listeners for job %s (%.1f%%)", 
+            logger.info("Notifying %d global listeners for job %s (%.1f%%)",
                        len(global_listeners), job.id[:8], job.progress)
         for callback in global_listeners:
             try:

@@ -2,9 +2,9 @@
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Optional
 
 from forge_engine.core.config import settings
 
@@ -19,7 +19,7 @@ class CompilationClip:
     end_time: float
     duration: float
     score: float
-    tags: List[str]
+    tags: list[str]
     transition: str = "cut"  # cut, crossfade, zoom
 
 
@@ -33,7 +33,7 @@ class CompilationConfig:
     transition_style: str = "cut"  # cut, crossfade, mix
     include_intro: bool = True
     include_outro: bool = True
-    music_track: Optional[str] = None
+    music_track: str | None = None
     music_volume: float = 0.2
     sort_by: str = "score"  # score, chronological, random
 
@@ -41,62 +41,62 @@ class CompilationConfig:
 @dataclass
 class CompilationResult:
     """Result of compilation generation."""
-    clips: List[CompilationClip]
+    clips: list[CompilationClip]
     total_duration: float
-    output_path: Optional[str] = None
+    output_path: str | None = None
     status: str = "pending"
 
 
 class CompilationService:
     """
     Service for automatically generating best-of compilations.
-    
+
     Selects top clips and arranges them into a cohesive video.
     """
-    
+
     _instance: Optional["CompilationService"] = None
-    
+
     def __init__(self):
         self._ffmpeg = None
-    
+
     @classmethod
     def get_instance(cls) -> "CompilationService":
         """Get singleton instance."""
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
-    
+
     def _get_ffmpeg(self):
         """Get FFmpeg service."""
         if self._ffmpeg is None:
             from forge_engine.services.ffmpeg import FFmpegService
             self._ffmpeg = FFmpegService.get_instance()
         return self._ffmpeg
-    
+
     async def select_clips(
         self,
-        segments: List[Dict[str, Any]],
+        segments: list[dict[str, Any]],
         config: CompilationConfig
-    ) -> List[CompilationClip]:
+    ) -> list[CompilationClip]:
         """
         Select best clips for compilation.
-        
+
         Args:
             segments: List of available segments with scores
             config: Compilation configuration
-        
+
         Returns:
             List of selected clips
         """
         if not segments:
             return []
-        
+
         # Filter by duration
         valid_segments = [
             s for s in segments
             if config.min_clip_duration <= s.get("duration", 0) <= config.max_clip_duration
         ]
-        
+
         # Sort by score
         if config.sort_by == "score":
             valid_segments.sort(
@@ -108,34 +108,34 @@ class CompilationService:
         elif config.sort_by == "random":
             import random
             random.shuffle(valid_segments)
-        
+
         # Select clips until we hit target duration
-        selected: List[CompilationClip] = []
+        selected: list[CompilationClip] = []
         total_duration = 0
-        
+
         for segment in valid_segments:
             if len(selected) >= config.max_clips:
                 break
-            
+
             duration = segment.get("duration", 0)
             if total_duration + duration > config.target_duration:
                 continue
-            
+
             # Check for overlap with existing clips
             start = segment.get("start_time", 0)
             end = segment.get("end_time", 0)
-            
+
             overlaps = False
             for existing in selected:
                 if (start < existing.end_time and end > existing.start_time):
                     overlaps = True
                     break
-            
+
             if overlaps:
                 continue
-            
+
             score_data = segment.get("score", {})
-            
+
             clip = CompilationClip(
                 segment_id=segment.get("id", ""),
                 start_time=start,
@@ -145,29 +145,29 @@ class CompilationService:
                 tags=score_data.get("tags", []),
                 transition=config.transition_style
             )
-            
+
             selected.append(clip)
             total_duration += duration
-        
+
         # Sort chronologically for final arrangement
         selected.sort(key=lambda c: c.start_time)
-        
+
         logger.info(f"Selected {len(selected)} clips for compilation ({total_duration:.1f}s)")
-        
+
         return selected
-    
+
     async def generate_compilation(
         self,
         project_id: str,
         source_video: str,
-        clips: List[CompilationClip],
+        clips: list[CompilationClip],
         config: CompilationConfig,
-        output_path: Optional[str] = None,
-        progress_callback: Optional[Callable[[float, str], None]] = None
+        output_path: str | None = None,
+        progress_callback: Callable[[float, str], None] | None = None
     ) -> CompilationResult:
         """
         Generate a compilation video from selected clips.
-        
+
         Args:
             project_id: Project ID
             source_video: Path to source video
@@ -175,7 +175,7 @@ class CompilationService:
             config: Compilation configuration
             output_path: Output path (auto-generated if None)
             progress_callback: Progress callback (percent, message)
-        
+
         Returns:
             CompilationResult with output path
         """
@@ -185,20 +185,20 @@ class CompilationService:
                 total_duration=0,
                 status="error"
             )
-        
+
         if output_path is None:
             project_dir = settings.LIBRARY_PATH / "projects" / project_id / "exports"
             project_dir.mkdir(parents=True, exist_ok=True)
             output_path = str(project_dir / "compilation.mp4")
-        
+
         ffmpeg = self._get_ffmpeg()
-        
+
         if progress_callback:
             progress_callback(5, "Préparation de la compilation...")
-        
+
         # Build FFmpeg filter complex for concatenation
         total_duration = sum(c.duration for c in clips)
-        
+
         # Create concat demuxer file
         concat_list = []
         for i, clip in enumerate(clips):
@@ -207,15 +207,15 @@ class CompilationService:
                 "end": clip.end_time,
                 "transition": clip.transition
             })
-        
+
         if progress_callback:
             progress_callback(10, "Extraction des clips...")
-        
+
         # Extract and concatenate clips
         # For now, use a simple filter complex approach
         filter_parts = []
         input_streams = []
-        
+
         for i, clip in enumerate(clips):
             # Trim each clip
             filter_parts.append(
@@ -227,17 +227,17 @@ class CompilationService:
                 f"asetpts=PTS-STARTPTS[a{i}]"
             )
             input_streams.append(f"[v{i}][a{i}]")
-        
+
         # Concatenate
         filter_parts.append(
             f"{''.join(input_streams)}concat=n={len(clips)}:v=1:a=1[outv][outa]"
         )
-        
+
         filter_complex = ";".join(filter_parts)
-        
+
         if progress_callback:
             progress_callback(20, "Rendu de la compilation...")
-        
+
         # Run FFmpeg
         cmd = [
             str(ffmpeg.ffmpeg_path),
@@ -254,15 +254,15 @@ class CompilationService:
             "-y",
             output_path
         ]
-        
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        
+
         stdout, stderr = await proc.communicate()
-        
+
         if proc.returncode != 0:
             logger.error(f"Compilation failed: {stderr.decode(errors='replace')[:500]}")
             return CompilationResult(
@@ -270,51 +270,48 @@ class CompilationService:
                 total_duration=total_duration,
                 status="error"
             )
-        
+
         if progress_callback:
             progress_callback(100, "Compilation terminée!")
-        
+
         return CompilationResult(
             clips=clips,
             total_duration=total_duration,
             output_path=output_path,
             status="completed"
         )
-    
+
     async def suggest_compilation(
         self,
-        segments: List[Dict[str, Any]],
+        segments: list[dict[str, Any]],
         style: str = "highlights"
     ) -> CompilationConfig:
         """
         Suggest compilation configuration based on content.
-        
+
         Args:
             segments: Available segments
             style: Compilation style (highlights, story, funny, intense)
-        
+
         Returns:
             Suggested CompilationConfig
         """
         # Analyze segment distribution
-        total_content = sum(s.get("duration", 0) for s in segments)
-        avg_score = sum(s.get("score", {}).get("total", 0) for s in segments) / len(segments) if segments else 0
-        
+        sum(s.get("duration", 0) for s in segments)
+        sum(s.get("score", {}).get("total", 0) for s in segments) / len(segments) if segments else 0
+
         # Collect all tags
         all_tags = []
         for s in segments:
             all_tags.extend(s.get("score", {}).get("tags", []))
-        
+
         # Count tag frequencies
         tag_counts = {}
         for tag in all_tags:
             tag_counts[tag] = tag_counts.get(tag, 0) + 1
-        
+
         # Determine dominant content type
-        has_humor = "humour" in tag_counts or "funny" in tag_counts
-        has_gaming = "gaming" in tag_counts or "esport" in tag_counts
-        has_reactions = "surprise" in tag_counts or "rage" in tag_counts
-        
+
         # Configure based on style
         if style == "highlights":
             return CompilationConfig(
@@ -325,7 +322,7 @@ class CompilationService:
                 transition_style="cut",
                 sort_by="score"
             )
-        
+
         elif style == "funny":
             return CompilationConfig(
                 target_duration=120,
@@ -335,7 +332,7 @@ class CompilationService:
                 transition_style="cut",
                 sort_by="score"  # Will filter by humor tag
             )
-        
+
         elif style == "intense":
             return CompilationConfig(
                 target_duration=90,
@@ -345,7 +342,7 @@ class CompilationService:
                 transition_style="crossfade",
                 sort_by="score"
             )
-        
+
         else:  # story - chronological
             return CompilationConfig(
                 target_duration=300,

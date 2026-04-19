@@ -1,15 +1,14 @@
 """Export profile endpoints."""
 
 import uuid
-from typing import Optional
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from forge_engine.core.database import get_db, async_session_maker
+from forge_engine.core.database import get_db
 from forge_engine.models.profile import ExportProfile
 
 router = APIRouter()
@@ -18,27 +17,27 @@ router = APIRouter()
 class ProfileCreate(BaseModel):
     """Request to create a profile."""
     name: str
-    description: Optional[str] = None
-    layout_config: Optional[dict] = None
-    subtitle_style: Optional[dict] = None
-    intro_config: Optional[dict] = None
-    music_config: Optional[dict] = None
-    export_settings: Optional[dict] = None
-    segment_filters: Optional[dict] = None
+    description: str | None = None
+    layout_config: dict | None = None
+    subtitle_style: dict | None = None
+    intro_config: dict | None = None
+    music_config: dict | None = None
+    export_settings: dict | None = None
+    segment_filters: dict | None = None
     is_default: bool = False
 
 
 class ProfileUpdate(BaseModel):
     """Request to update a profile."""
-    name: Optional[str] = None
-    description: Optional[str] = None
-    layout_config: Optional[dict] = None
-    subtitle_style: Optional[dict] = None
-    intro_config: Optional[dict] = None
-    music_config: Optional[dict] = None
-    export_settings: Optional[dict] = None
-    segment_filters: Optional[dict] = None
-    is_default: Optional[bool] = None
+    name: str | None = None
+    description: str | None = None
+    layout_config: dict | None = None
+    subtitle_style: dict | None = None
+    intro_config: dict | None = None
+    music_config: dict | None = None
+    export_settings: dict | None = None
+    segment_filters: dict | None = None
+    is_default: bool | None = None
 
 
 @router.get("")
@@ -48,7 +47,7 @@ async def list_profiles(db: AsyncSession = Depends(get_db)) -> dict:
         select(ExportProfile).order_by(ExportProfile.name)
     )
     profiles = result.scalars().all()
-    
+
     return {
         "success": True,
         "data": [p.to_dict() for p in profiles]
@@ -59,13 +58,13 @@ async def list_profiles(db: AsyncSession = Depends(get_db)) -> dict:
 async def get_default_profile(db: AsyncSession = Depends(get_db)) -> dict:
     """Get the default profile."""
     result = await db.execute(
-        select(ExportProfile).where(ExportProfile.is_default == True)
+        select(ExportProfile).where(ExportProfile.is_default)
     )
     profile = result.scalar_one_or_none()
-    
+
     if not profile:
         return {"success": True, "data": None}
-    
+
     return {"success": True, "data": profile.to_dict()}
 
 
@@ -76,10 +75,10 @@ async def get_profile(profile_id: str, db: AsyncSession = Depends(get_db)) -> di
         select(ExportProfile).where(ExportProfile.id == profile_id)
     )
     profile = result.scalar_one_or_none()
-    
+
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    
+
     return {"success": True, "data": profile.to_dict()}
 
 
@@ -91,7 +90,7 @@ async def create_profile(request: ProfileCreate, db: AsyncSession = Depends(get_
         await db.execute(
             update(ExportProfile).values(is_default=False)
         )
-    
+
     profile = ExportProfile(
         id=str(uuid.uuid4()),
         name=request.name,
@@ -104,18 +103,18 @@ async def create_profile(request: ProfileCreate, db: AsyncSession = Depends(get_
         segment_filters=request.segment_filters or {},
         is_default=request.is_default,
     )
-    
+
     db.add(profile)
     await db.commit()
     await db.refresh(profile)
-    
+
     return {"success": True, "data": profile.to_dict()}
 
 
 @router.put("/{profile_id}")
 async def update_profile(
-    profile_id: str, 
-    request: ProfileUpdate, 
+    profile_id: str,
+    request: ProfileUpdate,
     db: AsyncSession = Depends(get_db)
 ) -> dict:
     """Update an export profile."""
@@ -123,10 +122,10 @@ async def update_profile(
         select(ExportProfile).where(ExportProfile.id == profile_id)
     )
     profile = result.scalar_one_or_none()
-    
+
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    
+
     # If setting as default, unset other defaults
     if request.is_default:
         await db.execute(
@@ -134,7 +133,7 @@ async def update_profile(
             .where(ExportProfile.id != profile_id)
             .values(is_default=False)
         )
-    
+
     # Update fields
     if request.name is not None:
         profile.name = request.name
@@ -154,12 +153,12 @@ async def update_profile(
         profile.segment_filters = request.segment_filters
     if request.is_default is not None:
         profile.is_default = request.is_default
-    
+
     profile.updated_at = datetime.utcnow()
-    
+
     await db.commit()
     await db.refresh(profile)
-    
+
     return {"success": True, "data": profile.to_dict()}
 
 
@@ -170,13 +169,13 @@ async def delete_profile(profile_id: str, db: AsyncSession = Depends(get_db)) ->
         select(ExportProfile).where(ExportProfile.id == profile_id)
     )
     profile = result.scalar_one_or_none()
-    
+
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    
+
     await db.delete(profile)
     await db.commit()
-    
+
     return {"success": True, "data": {"deleted": True}}
 
 
@@ -187,15 +186,15 @@ async def set_default_profile(profile_id: str, db: AsyncSession = Depends(get_db
         select(ExportProfile).where(ExportProfile.id == profile_id)
     )
     profile = result.scalar_one_or_none()
-    
+
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    
+
     # Unset all defaults
     await db.execute(update(ExportProfile).values(is_default=False))
-    
+
     # Set this one as default
     profile.is_default = True
     await db.commit()
-    
+
     return {"success": True, "data": profile.to_dict()}

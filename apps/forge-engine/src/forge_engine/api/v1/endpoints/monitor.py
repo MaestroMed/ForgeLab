@@ -1,6 +1,5 @@
 """Monitor/Admin endpoints - L'ŒIL."""
 
-from typing import Optional
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
@@ -11,7 +10,7 @@ router = APIRouter()
 
 
 class RecoverRequest(BaseModel):
-    job_ids: Optional[list[str]] = None  # If None, recover all stuck jobs
+    job_ids: list[str] | None = None  # If None, recover all stuck jobs
 
 
 @router.get("/status")
@@ -37,8 +36,8 @@ async def get_stats() -> dict:
 @router.get("/logs")
 async def get_logs(
     limit: int = Query(100, ge=1, le=1000),
-    level: Optional[str] = None,
-    source: Optional[str] = None
+    level: str | None = None,
+    source: str | None = None
 ) -> dict:
     """Get recent logs."""
     monitor = MonitorService.get_instance()
@@ -73,7 +72,7 @@ async def get_jobs_health() -> dict:
 
 
 @router.post("/recover")
-async def recover_stuck_jobs(request: Optional[RecoverRequest] = None) -> dict:
+async def recover_stuck_jobs(request: RecoverRequest | None = None) -> dict:
     """Recover stuck jobs."""
     monitor = MonitorService.get_instance()
     recovered = await monitor.recover_stuck_jobs()
@@ -88,28 +87,29 @@ async def recover_stuck_jobs(request: Optional[RecoverRequest] = None) -> dict:
 @router.post("/reset-project/{project_id}")
 async def reset_project_status(project_id: str, status: str = "ingested") -> dict:
     """Reset a project's status."""
+    from sqlalchemy import select
+
     from forge_engine.core.database import async_session_maker
     from forge_engine.models import Project
-    from sqlalchemy import select
-    
+
     valid_statuses = ["created", "ingested", "analyzed", "ready"]
     if status not in valid_statuses:
         return {"success": False, "error": f"Invalid status. Must be one of: {valid_statuses}"}
-    
+
     async with async_session_maker() as db:
         result = await db.execute(select(Project).where(Project.id == project_id))
         project = result.scalar_one_or_none()
-        
+
         if not project:
             return {"success": False, "error": "Project not found"}
-        
+
         old_status = project.status
         project.status = status
         await db.commit()
-        
+
         monitor = MonitorService.get_instance()
         monitor.log("INFO", "admin", f"Reset project {project_id[:8]} from '{old_status}' to '{status}'")
-        
+
         return {
             "success": True,
             "data": {
@@ -124,12 +124,14 @@ async def reset_project_status(project_id: str, status: str = "ingested") -> dic
 async def cleanup_old_jobs(days: int = 7) -> dict:
     """Clean up old completed/failed jobs."""
     from datetime import datetime, timedelta
+
+    from sqlalchemy import delete
+
     from forge_engine.core.database import async_session_maker
     from forge_engine.models.job import JobRecord
-    from sqlalchemy import delete
-    
+
     cutoff = datetime.utcnow() - timedelta(days=days)
-    
+
     async with async_session_maker() as db:
         result = await db.execute(
             delete(JobRecord)
@@ -138,10 +140,10 @@ async def cleanup_old_jobs(days: int = 7) -> dict:
         )
         deleted = result.rowcount
         await db.commit()
-        
+
         monitor = MonitorService.get_instance()
         monitor.log("INFO", "admin", f"Cleaned up {deleted} old jobs (older than {days} days)")
-        
+
         return {
             "success": True,
             "data": {
@@ -191,16 +193,16 @@ async def toggle_auto_recovery(enabled: bool = True) -> dict:
 async def force_workflow_check() -> dict:
     """Force an immediate workflow continuity check."""
     monitor = MonitorService.get_instance()
-    
+
     results = {
         "stuckJobs": await monitor.recover_stuck_jobs(),
         "stuckProjects": await monitor.recover_stuck_projects(),
         "restartedJobs": await monitor.auto_restart_failed_jobs(),
         "workflowActions": (await monitor.ensure_workflow_continuity())["actions_taken"],
     }
-    
+
     monitor.log("INFO", "admin", f"Force workflow check: {results}")
-    
+
     return {
         "success": True,
         "data": results
@@ -210,26 +212,27 @@ async def force_workflow_check() -> dict:
 @router.post("/restart-project/{project_id}")
 async def restart_project_workflow(project_id: str, from_step: str = "ingest") -> dict:
     """Restart a project's workflow from a specific step."""
-    from forge_engine.core.database import async_session_maker
-    from forge_engine.models import Project
-    from forge_engine.core.jobs import JobManager, JobType
     from sqlalchemy import select
-    
+
+    from forge_engine.core.database import async_session_maker
+    from forge_engine.core.jobs import JobManager, JobType
+    from forge_engine.models import Project
+
     monitor = MonitorService.get_instance()
-    
+
     valid_steps = ["ingest", "analyze"]
     if from_step not in valid_steps:
         return {"success": False, "error": f"Invalid step. Must be one of: {valid_steps}"}
-    
+
     async with async_session_maker() as db:
         result = await db.execute(select(Project).where(Project.id == project_id))
         project = result.scalar_one_or_none()
-        
+
         if not project:
             return {"success": False, "error": "Project not found"}
-        
+
         job_manager = JobManager.get_instance()
-        
+
         if from_step == "ingest":
             from forge_engine.services.ingest import IngestService
             service = IngestService()
@@ -240,7 +243,7 @@ async def restart_project_workflow(project_id: str, from_step: str = "ingest") -
                 auto_analyze=True,
             )
             project.status = "ingesting"
-            
+
         elif from_step == "analyze":
             from forge_engine.services.analysis import AnalysisService
             service = AnalysisService()
@@ -250,11 +253,11 @@ async def restart_project_workflow(project_id: str, from_step: str = "ingest") -
                 project_id=project.id,
             )
             project.status = "analyzing"
-        
+
         await db.commit()
-        
+
         monitor.log("INFO", "admin", f"Restarted project {project_id[:8]} from '{from_step}'")
-        
+
         return {
             "success": True,
             "data": {
@@ -271,10 +274,10 @@ async def get_pipeline_status() -> dict:
     """Get auto-pipeline and scheduler status."""
     from forge_engine.services.auto_pipeline import AutoPipelineService
     from forge_engine.services.publish_scheduler import PublishSchedulerService
-    
+
     pipeline = AutoPipelineService.get_instance()
     scheduler = PublishSchedulerService.get_instance()
-    
+
     return {
         "success": True,
         "data": {
@@ -289,13 +292,13 @@ async def start_pipeline() -> dict:
     """Manually start the auto-pipeline and scheduler."""
     from forge_engine.services.auto_pipeline import AutoPipelineService
     from forge_engine.services.publish_scheduler import PublishSchedulerService
-    
+
     pipeline = AutoPipelineService.get_instance()
     scheduler = PublishSchedulerService.get_instance()
-    
+
     await pipeline.start()
     await scheduler.start()
-    
+
     return {
         "success": True,
         "message": "Auto-pipeline and scheduler started",
@@ -307,13 +310,13 @@ async def stop_pipeline() -> dict:
     """Manually stop the auto-pipeline and scheduler."""
     from forge_engine.services.auto_pipeline import AutoPipelineService
     from forge_engine.services.publish_scheduler import PublishSchedulerService
-    
+
     pipeline = AutoPipelineService.get_instance()
     scheduler = PublishSchedulerService.get_instance()
-    
+
     await pipeline.stop()
     await scheduler.stop()
-    
+
     return {
         "success": True,
         "message": "Auto-pipeline and scheduler stopped",

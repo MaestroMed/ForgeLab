@@ -3,18 +3,17 @@
 import os
 import shutil
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from forge_engine.core.config import settings
 from forge_engine.services.ffmpeg import FFmpegService
-from forge_engine.services.transcription import TranscriptionService
 from forge_engine.services.gpu_manager import GPUManager
+from forge_engine.services.transcription import TranscriptionService
 from forge_engine.services.transcription_provider import (
-    TranscriptionProviderManager,
     ProviderType,
+    TranscriptionProviderManager,
 )
 
 router = APIRouter()
@@ -30,7 +29,7 @@ async def get_capabilities() -> dict:
     """Get system capabilities."""
     ffmpeg = FFmpegService()
     transcription = TranscriptionService()
-    
+
     # Check FFmpeg
     ffmpeg_available = await ffmpeg.check_availability()
     ffmpeg_info = {
@@ -44,12 +43,12 @@ async def get_capabilities() -> dict:
         "hasLibass": False,
         "encoders": [],
     }
-    
+
     # Check Whisper - get actual device info via ctranslate2 (what faster-whisper actually uses)
     whisper_device = "cpu"
     whisper_compute_type = "float32"
     cuda_available = False
-    
+
     try:
         import ctranslate2
         cuda_count = ctranslate2.get_cuda_device_count()
@@ -59,7 +58,7 @@ async def get_capabilities() -> dict:
             whisper_compute_type = settings.WHISPER_COMPUTE_TYPE
     except (ImportError, Exception):
         pass
-    
+
     # Fallback to torch if available
     if not cuda_available:
         try:
@@ -69,7 +68,7 @@ async def get_capabilities() -> dict:
                 whisper_compute_type = settings.WHISPER_COMPUTE_TYPE
         except ImportError:
             pass
-    
+
     # Check if model is loaded (singleton check)
     model_loaded = False
     try:
@@ -77,7 +76,7 @@ async def get_capabilities() -> dict:
         model_loaded = singleton_transcription._model is not None if hasattr(singleton_transcription, '_model') else False
     except Exception:
         pass
-    
+
     whisper_info = {
         "available": transcription.is_available(),
         "models": ["tiny", "base", "small", "medium", "large", "large-v2", "large-v3"],
@@ -86,12 +85,12 @@ async def get_capabilities() -> dict:
         "computeType": whisper_compute_type,
         "modelLoaded": model_loaded,
     }
-    
+
     # Check GPU via GPUManager (supports multi-GPU)
     gpu_manager = GPUManager.get_instance()
     await gpu_manager.initialize()
     gpu_status = await gpu_manager.get_status()
-    
+
     gpu_info = {
         "available": gpu_status["has_cuda"],
         "count": gpu_status["gpu_count"],
@@ -99,7 +98,7 @@ async def get_capabilities() -> dict:
         "freeVramGb": gpu_status["free_vram_gb"],
         "gpus": gpu_status["gpus"],
     }
-    
+
     # Storage info
     library_path = Path(settings.LIBRARY_PATH)
     try:
@@ -113,7 +112,7 @@ async def get_capabilities() -> dict:
             "libraryPath": str(library_path),
             "freeSpace": 0,
         }
-    
+
     # Check transcription providers
     try:
         provider_manager = TranscriptionProviderManager.get_instance()
@@ -124,7 +123,7 @@ async def get_capabilities() -> dict:
             "default_provider": "local",
             "providers": {}
         }
-    
+
     return {
         "ffmpeg": ffmpeg_info,
         "whisper": whisper_info,
@@ -140,11 +139,11 @@ async def get_transcription_providers() -> dict:
     try:
         manager = TranscriptionProviderManager.get_instance()
         status = manager.get_status()
-        
+
         # Add API key status (without revealing keys)
         openai_configured = bool(os.environ.get("OPENAI_API_KEY"))
         deepgram_configured = bool(os.environ.get("DEEPGRAM_API_KEY"))
-        
+
         return {
             "success": True,
             "current": status["default_provider"],
@@ -196,22 +195,22 @@ async def set_transcription_provider(request: ProviderSettingRequest) -> dict:
     """Set the default transcription provider."""
     try:
         manager = TranscriptionProviderManager.get_instance()
-        
+
         # Map string to enum
         provider_map = {
             "local": ProviderType.LOCAL,
             "openai": ProviderType.OPENAI,
             "deepgram": ProviderType.DEEPGRAM,
         }
-        
+
         if request.provider not in provider_map:
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid provider: {request.provider}. Must be one of: local, openai, deepgram"
             )
-        
+
         provider_type = provider_map[request.provider]
-        
+
         # Check if provider is available
         if provider_type not in manager.available_providers:
             if provider_type == ProviderType.OPENAI:
@@ -229,9 +228,9 @@ async def set_transcription_provider(request: ProviderSettingRequest) -> dict:
                     status_code=400,
                     detail=f"Provider {request.provider} is not available."
                 )
-        
+
         manager.default_provider = provider_type
-        
+
         return {
             "success": True,
             "provider": request.provider,

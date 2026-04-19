@@ -62,6 +62,8 @@ where = ["src"]
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+
+[tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
@@ -74,9 +76,18 @@ select = [
 ignore = [
     "E501",  # line too long (handled by black)
     "B008",  # do not perform function calls in argument defaults
+    "B904",  # raise without from err (exception chaining — fix later)
+    "B905",  # zip() without strict= (fix later)
+    "B018",  # useless expression (often docstrings)
+    "B007",  # loop variable unused
+    "E402",  # module import not at top (after conditional imports)
+    "E741",  # ambiguous variable name (l, O, I)
+    "E722",  # bare except (fix later)
+    "F401",  # imported but unused (optional ML deps in try/except)
+    "W293",  # blank line contains whitespace
 ]
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 known-first-party = ["forge_engine"]
 
 [tool.black]

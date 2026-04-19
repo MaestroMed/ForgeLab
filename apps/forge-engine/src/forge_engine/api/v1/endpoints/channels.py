@@ -1,15 +1,14 @@
 """Channel monitoring endpoints."""
 
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge_engine.core.database import get_db
-from forge_engine.models import WatchedChannel, DetectedVOD
+from forge_engine.models import DetectedVOD, WatchedChannel
 
 router = APIRouter()
 
@@ -19,17 +18,17 @@ class AddChannelRequest(BaseModel):
     channel_id: str
     channel_name: str
     platform: str  # twitch, youtube
-    display_name: Optional[str] = None
+    display_name: str | None = None
     check_interval: int = 3600  # 1 hour default
     auto_import: bool = False
     enabled: bool = True
 
 
 class UpdateChannelRequest(BaseModel):
-    display_name: Optional[str] = None
-    check_interval: Optional[int] = None
-    auto_import: Optional[bool] = None
-    enabled: Optional[bool] = None
+    display_name: str | None = None
+    check_interval: int | None = None
+    auto_import: bool | None = None
+    enabled: bool | None = None
 
 
 class UpdateVODStatusRequest(BaseModel):
@@ -39,23 +38,23 @@ class UpdateVODStatusRequest(BaseModel):
 # Endpoints
 @router.get("")
 async def list_channels(
-    platform: Optional[str] = None,
+    platform: str | None = None,
     enabled_only: bool = False,
     db: AsyncSession = Depends(get_db)
 ) -> dict:
     """List all watched channels."""
     query = select(WatchedChannel)
-    
+
     if platform:
         query = query.where(WatchedChannel.platform == platform)
     if enabled_only:
-        query = query.where(WatchedChannel.enabled == True)
-    
+        query = query.where(WatchedChannel.enabled)
+
     query = query.order_by(WatchedChannel.created_at.desc())
-    
+
     result = await db.execute(query)
     channels = result.scalars().all()
-    
+
     return {
         "success": True,
         "data": [c.to_dict() for c in channels]
@@ -77,7 +76,7 @@ async def add_channel(
     )
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Channel already being monitored")
-    
+
     channel = WatchedChannel(
         channel_id=request.channel_id,
         channel_name=request.channel_name,
@@ -87,16 +86,16 @@ async def add_channel(
         auto_import=request.auto_import,
         enabled=request.enabled,
     )
-    
+
     db.add(channel)
     await db.commit()
     await db.refresh(channel)
-    
+
     # Try to get channel info via scraper
     try:
         from forge_engine.services.playwright_scraper import PlaywrightScraper
         scraper = PlaywrightScraper.get_instance()
-        
+
         if request.platform == "twitch":
             info = await scraper.get_twitch_channel_info(request.channel_id)
             if info:
@@ -105,7 +104,7 @@ async def add_channel(
                 await db.commit()
     except Exception:
         pass  # Continue without additional info
-    
+
     return {"success": True, "data": channel.to_dict()}
 
 
@@ -119,10 +118,10 @@ async def get_channel(
         select(WatchedChannel).where(WatchedChannel.id == channel_id)
     )
     channel = result.scalar_one_or_none()
-    
+
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
-    
+
     return {"success": True, "data": channel.to_dict()}
 
 
@@ -137,10 +136,10 @@ async def update_channel(
         select(WatchedChannel).where(WatchedChannel.id == channel_id)
     )
     channel = result.scalar_one_or_none()
-    
+
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
-    
+
     if request.display_name is not None:
         channel.display_name = request.display_name
     if request.check_interval is not None:
@@ -149,10 +148,10 @@ async def update_channel(
         channel.auto_import = request.auto_import
     if request.enabled is not None:
         channel.enabled = request.enabled
-    
+
     await db.commit()
     await db.refresh(channel)
-    
+
     return {"success": True, "data": channel.to_dict()}
 
 
@@ -166,13 +165,13 @@ async def delete_channel(
         select(WatchedChannel).where(WatchedChannel.id == channel_id)
     )
     channel = result.scalar_one_or_none()
-    
+
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
-    
+
     await db.delete(channel)
     await db.commit()
-    
+
     return {"success": True, "message": "Channel removed"}
 
 
@@ -186,13 +185,13 @@ async def check_channel_now(
         select(WatchedChannel).where(WatchedChannel.id == channel_id)
     )
     channel = result.scalar_one_or_none()
-    
+
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
-    
+
     from forge_engine.services.playwright_scraper import PlaywrightScraper
     scraper = PlaywrightScraper.get_instance()
-    
+
     # Get VODs
     if channel.platform == "twitch":
         vods = await scraper.get_twitch_vods(channel.channel_id, limit=10)
@@ -202,11 +201,11 @@ async def check_channel_now(
         )
     else:
         vods = []
-    
+
     # Find new VODs
     known_ids = set(channel.last_vod_ids or [])
     new_vods = []
-    
+
     for vod in vods:
         if vod.id not in known_ids:
             # Create DetectedVOD record
@@ -225,13 +224,13 @@ async def check_channel_now(
             )
             db.add(detected)
             new_vods.append(detected)
-    
+
     # Update channel state
     channel.last_check_at = datetime.utcnow()
     channel.last_vod_ids = [v.id for v in vods]
-    
+
     await db.commit()
-    
+
     return {
         "success": True,
         "data": {
@@ -245,37 +244,37 @@ async def check_channel_now(
 # VOD endpoints
 @router.get("/vods/detected")
 async def list_detected_vods(
-    status: Optional[str] = None,
-    platform: Optional[str] = None,
+    status: str | None = None,
+    platform: str | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db)
 ) -> dict:
     """List detected VODs."""
     query = select(DetectedVOD)
-    
+
     if status:
         query = query.where(DetectedVOD.status == status)
     if platform:
         query = query.where(DetectedVOD.platform == platform)
-    
+
     # Count
     count_query = select(func.count()).select_from(DetectedVOD)
     if status:
         count_query = count_query.where(DetectedVOD.status == status)
     if platform:
         count_query = count_query.where(DetectedVOD.platform == platform)
-    
+
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
-    
+
     # Paginate
     query = query.order_by(DetectedVOD.detected_at.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
-    
+
     result = await db.execute(query)
     vods = result.scalars().all()
-    
+
     return {
         "success": True,
         "data": {
@@ -298,17 +297,17 @@ async def update_vod_status(
         select(DetectedVOD).where(DetectedVOD.id == vod_id)
     )
     vod = result.scalar_one_or_none()
-    
+
     if not vod:
         raise HTTPException(status_code=404, detail="VOD not found")
-    
+
     if request.status not in ("new", "imported", "ignored"):
         raise HTTPException(status_code=400, detail="Invalid status")
-    
+
     vod.status = request.status
     await db.commit()
     await db.refresh(vod)
-    
+
     return {"success": True, "data": vod.to_dict()}
 
 
@@ -322,24 +321,24 @@ async def import_detected_vod(
         select(DetectedVOD).where(DetectedVOD.id == vod_id)
     )
     vod = result.scalar_one_or_none()
-    
+
     if not vod:
         raise HTTPException(status_code=404, detail="VOD not found")
-    
+
     if vod.status == "imported":
         raise HTTPException(status_code=400, detail="VOD already imported")
-    
+
     # Import via YouTube-DL service
-    from forge_engine.services.youtube_dl import YouTubeDLService
-    from forge_engine.models import Project
-    from forge_engine.core.jobs import JobManager, JobType
-    from forge_engine.services.ingest import IngestService
-    from forge_engine.core.database import async_session_maker
     from forge_engine.core.config import settings
-    
-    yt_service = YouTubeDLService.get_instance()
+    from forge_engine.core.database import async_session_maker
+    from forge_engine.core.jobs import JobManager, JobType
+    from forge_engine.models import Project
+    from forge_engine.services.ingest import IngestService
+    from forge_engine.services.youtube_dl import YouTubeDLService
+
+    YouTubeDLService.get_instance()
     job_manager = JobManager.get_instance()
-    
+
     # Create project
     project = Project(
         name=vod.title,
@@ -353,52 +352,52 @@ async def import_detected_vod(
             "detectedVodId": vod.id,
         }
     )
-    
+
     db.add(project)
     await db.commit()
     await db.refresh(project)
-    
+
     # Update VOD status
     vod.status = "imported"
     vod.project_id = project.id
     await db.commit()
-    
+
     # Create download job
     async def download_handler(job, **kwargs):
         project_id = kwargs.get("project_id")
         url = kwargs.get("url")
-        
+
         async with async_session_maker() as session:
             result = await session.execute(select(Project).where(Project.id == project_id))
             proj = result.scalar_one_or_none()
-            
+
             if not proj:
                 raise ValueError(f"Project not found: {project_id}")
-            
+
             yt = YouTubeDLService.get_instance()
-            
+
             def progress_cb(pct, msg):
                 job_manager.update_progress(job, pct * 0.9, "download", msg)
-            
+
             project_dir = settings.LIBRARY_PATH / "projects" / project_id
             source_dir = project_dir / "source"
             source_dir.mkdir(parents=True, exist_ok=True)
-            
+
             downloaded_path = await yt.download_video(url, source_dir, "best", progress_cb)
-            
+
             if not downloaded_path:
                 proj.status = "error"
                 proj.error_message = "Download failed"
                 await session.commit()
                 raise ValueError("Download failed")
-            
+
             proj.source_path = str(downloaded_path)
             proj.source_filename = downloaded_path.name
             proj.status = "created"
             await session.commit()
-            
+
             job_manager.update_progress(job, 100, "complete", "Download complete")
-            
+
             # Auto-chain to ingest
             ingest_service = IngestService()
             await job_manager.create_job(
@@ -407,16 +406,16 @@ async def import_detected_vod(
                 project_id=project_id,
                 auto_analyze=True,
             )
-            
+
             return {"downloaded_path": str(downloaded_path)}
-    
+
     job = await job_manager.create_job(
         job_type=JobType.INGEST,
         handler=download_handler,
         project_id=project.id,
         url=vod.url,
     )
-    
+
     return {
         "success": True,
         "data": {

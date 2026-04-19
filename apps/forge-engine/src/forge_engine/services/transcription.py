@@ -8,8 +8,7 @@ Features:
 """
 
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from forge_engine.core.config import settings
 
@@ -18,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 def auto_detect_batch_size(vram_gb: float) -> int:
     """Automatically detect optimal batch_size based on VRAM.
-    
+
     Batch size recommendations based on testing:
     - 32GB (RTX 5090): batch_size=48-64
     - 24GB (RTX 4090): batch_size=32
@@ -26,7 +25,7 @@ def auto_detect_batch_size(vram_gb: float) -> int:
     - 12GB (RTX 4070 Ti): batch_size=16
     - 8GB (RTX 3070): batch_size=8
     - 6GB or less: batch_size=4
-    
+
     Formula: ~2.5 batch per GB, capped by model size requirements.
     """
     if vram_gb >= 30:
@@ -45,7 +44,7 @@ def auto_detect_batch_size(vram_gb: float) -> int:
 
 def auto_detect_num_workers(vram_gb: float) -> int:
     """Automatically detect optimal num_workers based on VRAM.
-    
+
     More workers = better GPU utilization but more VRAM usage.
     """
     if vram_gb >= 24:
@@ -58,37 +57,37 @@ def auto_detect_num_workers(vram_gb: float) -> int:
 
 class TranscriptionService:
     """Service for audio transcription using faster-whisper with batched inference.
-    
+
     Uses BatchedInferencePipeline for 4-6x speedup on GPU.
     """
-    
+
     _instance: Optional["TranscriptionService"] = None
     _model = None
     _batched_model = None  # BatchedInferencePipeline for turbo mode
-    _model_name: Optional[str] = None
-    
+    _model_name: str | None = None
+
     def __init__(self):
         self.model_name = settings.WHISPER_MODEL
         self.device = settings.WHISPER_DEVICE
         self.compute_type = settings.WHISPER_COMPUTE_TYPE
-        
+
         # Auto-detect batch size based on VRAM
-        self._detected_vram_gb: Optional[float] = None
-        self._auto_batch_size: Optional[int] = None
-        self._auto_num_workers: Optional[int] = None
-        
+        self._detected_vram_gb: float | None = None
+        self._auto_batch_size: int | None = None
+        self._auto_num_workers: int | None = None
+
         # Will be auto-detected on first use, or use configured value as fallback
         self.batch_size = getattr(settings, 'WHISPER_BATCH_SIZE', 16)
-        
+
         # Try to auto-detect GPU and optimize settings
         self._auto_detect_gpu_settings()
-    
+
     @classmethod
     def get_instance(cls) -> "TranscriptionService":
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
-    
+
     def is_available(self) -> bool:
         """Check if faster-whisper is available."""
         try:
@@ -96,7 +95,7 @@ class TranscriptionService:
             return True
         except ImportError:
             return False
-    
+
     def _auto_detect_gpu_settings(self):
         """Auto-detect GPU and optimize batch_size/num_workers."""
         try:
@@ -109,11 +108,11 @@ class TranscriptionService:
                 # Get first GPU's VRAM in GB
                 vram_mb = float(result.stdout.strip().split('\n')[0])
                 self._detected_vram_gb = vram_mb / 1024
-                
+
                 # Auto-detect optimal settings
                 self._auto_batch_size = auto_detect_batch_size(self._detected_vram_gb)
                 self._auto_num_workers = auto_detect_num_workers(self._detected_vram_gb)
-                
+
                 # Update batch_size if auto-detected is better than default
                 if self._auto_batch_size != self.batch_size:
                     logger.info(
@@ -123,24 +122,24 @@ class TranscriptionService:
                     self.batch_size = self._auto_batch_size
         except Exception as e:
             logger.debug("GPU auto-detection failed (will use defaults): %s", e)
-    
+
     @property
-    def detected_vram_gb(self) -> Optional[float]:
+    def detected_vram_gb(self) -> float | None:
         """Get detected GPU VRAM in GB."""
         return self._detected_vram_gb
-    
+
     @property
     def optimal_batch_size(self) -> int:
         """Get optimal batch size for current GPU."""
         return self._auto_batch_size or self.batch_size
-    
+
     @property
     def optimal_num_workers(self) -> int:
         """Get optimal num_workers for current GPU."""
         return self._auto_num_workers or getattr(settings, 'WHISPER_NUM_WORKERS', 2)
-    
+
     @staticmethod
-    def get_available_models() -> List[Dict[str, Any]]:
+    def get_available_models() -> list[dict[str, Any]]:
         """Get list of available Whisper models with metadata."""
         return [
             {
@@ -184,23 +183,23 @@ class TranscriptionService:
                 "vram_gb": 1,
             },
         ]
-    
-    def _load_model(self, model_name: Optional[str] = None):
+
+    def _load_model(self, model_name: str | None = None):
         """Load the Whisper model with BatchedInferencePipeline for turbo mode."""
         if not self.is_available():
             raise RuntimeError("faster-whisper is not installed")
-        
+
         from faster_whisper import WhisperModel
-        
+
         target_model = model_name or self.model_name
-        
+
         if self._model is None or self._model_name != target_model:
             logger.info("Loading Whisper model: %s", target_model)
-            
+
             # Determine device using ctranslate2
             device = self.device
             compute_type = self.compute_type
-            
+
             if device == "auto":
                 # Use ctranslate2 directly for CUDA detection (what faster-whisper uses)
                 try:
@@ -233,16 +232,16 @@ class TranscriptionService:
                 except Exception as e:
                     logger.warning("CUDA detection failed: %s, using CPU", e)
                     device = "cpu"
-            
+
             if device == "cpu":
                 compute_type = "float32"
-            
+
             # Try loading model with fallback
             try:
                 # Use auto-detected or configured num_workers
                 num_workers = self.optimal_num_workers
                 batch_size = self.optimal_batch_size
-                
+
                 logger.info(
                     "Loading Whisper on %s (%s, workers=%d, batch_size=%d, vram=%.1fGB)...",
                     device, compute_type, num_workers, batch_size,
@@ -257,7 +256,7 @@ class TranscriptionService:
                 )
                 self._model_name = target_model
                 logger.info("Whisper model loaded successfully on %s (%s)", device, compute_type)
-                
+
                 # Create BatchedInferencePipeline for turbo mode (4-6x speedup on GPU)
                 if device == "cuda":
                     try:
@@ -272,7 +271,7 @@ class TranscriptionService:
                         self._batched_model = None
                 else:
                     self._batched_model = None
-                    
+
             except Exception as e:
                 if device == "cuda":
                     logger.warning("CUDA loading failed (%s), falling back to CPU", e)
@@ -290,20 +289,20 @@ class TranscriptionService:
                     logger.info("Whisper model loaded on CPU (fallback, workers=1)")
                 else:
                     raise
-    
+
     async def transcribe(
         self,
         audio_path: str,
-        language: Optional[str] = None,
+        language: str | None = None,
         word_timestamps: bool = True,
-        initial_prompt: Optional[str] = None,
-        custom_dictionary: Optional[List[str]] = None,
-        progress_callback: Optional[callable] = None,
-        model_override: Optional[str] = None,  # Use different model (e.g. "distil-large-v3" for preview)
-        turbo_mode: Optional[bool] = None,  # Override turbo mode setting
-    ) -> Dict[str, Any]:
+        initial_prompt: str | None = None,
+        custom_dictionary: list[str] | None = None,
+        progress_callback: callable | None = None,
+        model_override: str | None = None,  # Use different model (e.g. "distil-large-v3" for preview)
+        turbo_mode: bool | None = None,  # Override turbo mode setting
+    ) -> dict[str, Any]:
         """Transcribe audio file.
-        
+
         Args:
             audio_path: Path to audio file
             language: Language code (default: settings.WHISPER_LANGUAGE)
@@ -315,7 +314,7 @@ class TranscriptionService:
             turbo_mode: Override turbo mode (batched inference)
         """
         import asyncio
-        
+
         # Run in executor since faster-whisper is synchronous
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
@@ -331,32 +330,32 @@ class TranscriptionService:
                 turbo_mode
             )
         )
-    
+
     def _transcribe_sync(
         self,
         audio_path: str,
-        language: Optional[str],
+        language: str | None,
         word_timestamps: bool,
-        initial_prompt: Optional[str],
-        custom_dictionary: Optional[List[str]],
-        progress_callback: Optional[callable],
-        model_override: Optional[str] = None,
-        turbo_mode: Optional[bool] = None
-    ) -> Dict[str, Any]:
+        initial_prompt: str | None,
+        custom_dictionary: list[str] | None,
+        progress_callback: callable | None,
+        model_override: str | None = None,
+        turbo_mode: bool | None = None
+    ) -> dict[str, Any]:
         """Synchronous transcription with optional model override.
-        
+
         Supports preview mode with distil-large-v3 for rapid transcription.
         """
         if progress_callback:
             progress_callback(0)
-        
+
         # Use configured default language if not specified
         if language is None:
             language = settings.WHISPER_LANGUAGE
             logger.info("Using default language from config: %s", language)
         else:
             logger.info("Using specified language: %s", language)
-        
+
         # Handle model override (e.g. for preview mode with distil-large-v3)
         target_model = model_override or self.model_name
         if model_override and model_override != self.model_name:
@@ -365,13 +364,13 @@ class TranscriptionService:
             if self._model_name != model_override:
                 self._model = None
                 self._batched_model = None
-            
+
         logger.info("Loading model for transcription: %s", target_model)
         self._load_model(target_model)
-        
+
         if progress_callback:
             progress_callback(2)
-        
+
         # Build initial prompt with custom dictionary
         prompt = initial_prompt or ""
         if custom_dictionary:
@@ -379,7 +378,7 @@ class TranscriptionService:
             dict_words = custom_dictionary[:200]
             prompt = ", ".join(dict_words) + ". " + prompt
             logger.info("Using custom dictionary with %d words", len(dict_words))
-        
+
         # Get audio duration for progress estimation
         try:
             import subprocess
@@ -390,31 +389,31 @@ class TranscriptionService:
             audio_duration = float(result.stdout.strip()) if result.returncode == 0 else 0
         except Exception:
             audio_duration = 0
-        
+
         logger.info("Starting transcription of %s (duration: %.1fs)...", audio_path, audio_duration)
-        
+
         if progress_callback:
             progress_callback(5)
-        
+
         # ========================================
         # TURBO MODE: Use BatchedInferencePipeline for 4-6x speedup
         # ========================================
         # Determine if we should use turbo mode
         turbo_enabled = turbo_mode if turbo_mode is not None else getattr(settings, 'WHISPER_TURBO_MODE', True)
         use_batched = self._batched_model is not None and turbo_enabled
-        
+
         # VAD parameters optimized for streaming content
-        vad_params = dict(
-            threshold=0.5,
-            min_speech_duration_ms=250,
-            min_silence_duration_ms=800,  # Slightly aggressive for streams
-            speech_pad_ms=150
-        )
-        
+        vad_params = {
+            "threshold": 0.5,
+            "min_speech_duration_ms": 250,
+            "min_silence_duration_ms": 800,  # Slightly aggressive for streams
+            "speech_pad_ms": 150
+        }
+
         if use_batched:
             # TURBO MODE: Batched inference (4-6x faster on GPU)
             logger.info("TURBO MODE: Using BatchedInferencePipeline (batch_size=%d)", self.batch_size)
-            
+
             segments, info = self._batched_model.transcribe(
                 audio_path,
                 language=language,
@@ -428,7 +427,7 @@ class TranscriptionService:
             # Standard mode (fallback)
             use_vad = audio_duration < 3600  # Only use VAD for videos < 1h in standard mode
             logger.info("Standard mode: VAD=%s (duration: %.0fs)", use_vad, audio_duration)
-            
+
             segments, info = self._model.transcribe(
                 audio_path,
                 language=language,
@@ -441,18 +440,18 @@ class TranscriptionService:
                 log_prob_threshold=-1.0,
                 no_speech_threshold=0.6
             )
-        
+
         logger.info("Transcription %s started, processing segments...", "TURBO" if use_batched else "standard")
         if progress_callback:
             progress_callback(7)
-        
+
         # Process segments - iterate on generator for real-time progress
         result_segments = []
         full_text_parts = []
         segment_count = 0
         last_end = 0
         last_progress_log = 0
-        
+
         for segment in segments:
             seg_data = {
                 "id": segment_count,
@@ -460,7 +459,7 @@ class TranscriptionService:
                 "end": segment.end,
                 "text": segment.text.strip(),
             }
-            
+
             if word_timestamps and segment.words:
                 seg_data["words"] = [
                     {
@@ -471,12 +470,12 @@ class TranscriptionService:
                     }
                     for word in segment.words
                 ]
-            
+
             result_segments.append(seg_data)
             full_text_parts.append(segment.text.strip())
             segment_count += 1
             last_end = segment.end
-            
+
             # Update progress based on audio position
             if audio_duration > 0:
                 pct = min(95, 7 + (last_end / audio_duration) * 88)
@@ -488,12 +487,12 @@ class TranscriptionService:
                     last_progress_log = int(pct)
             elif segment_count % 20 == 0:
                 logger.info("Transcribed %d segments (%.1fs)...", segment_count, last_end)
-        
+
         if progress_callback:
             progress_callback(100)
-        
+
         logger.info("Transcription complete: %d segments, %.1fs duration", segment_count, info.duration)
-        
+
         return {
             "language": info.language,
             "language_probability": info.language_probability,
@@ -501,11 +500,11 @@ class TranscriptionService:
             "segments": result_segments,
             "text": " ".join(full_text_parts),
         }
-    
+
     def detect_hooks_and_punchlines(
         self,
-        segments: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        segments: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Detect potential hooks and punchlines in transcript."""
         # Hook patterns (French + English)
         hook_patterns = [
@@ -520,53 +519,53 @@ class TranscriptionService:
             # Setup patterns
             r"\b(alors|donc|en fait|tu sais|vous savez|basically|so basically|let me tell you)\b",
         ]
-        
+
         import re
-        
+
         enhanced_segments = []
         for seg in segments:
             text = seg.get("text", "").lower()
-            
+
             hook_score = 0
             hook_reasons = []
-            
+
             for pattern in hook_patterns:
                 if re.search(pattern, text, re.IGNORECASE):
                     hook_score += 1
                     hook_reasons.append(f"Pattern: {pattern}")
-            
+
             # Check for question structure
             if text.strip().endswith("?"):
                 hook_score += 2
                 hook_reasons.append("Question")
-            
+
             # Check for short punchy sentences
             words = text.split()
             if 3 <= len(words) <= 10:
                 hook_score += 1
                 hook_reasons.append("Short punchy")
-            
+
             enhanced_segments.append({
                 **seg,
                 "hook_score": hook_score,
                 "hook_reasons": hook_reasons,
                 "is_potential_hook": hook_score >= 2,
             })
-        
+
         return enhanced_segments
-    
+
     def generate_topic_labels(
         self,
-        segments: List[Dict[str, Any]],
+        segments: list[dict[str, Any]],
         window_size: int = 5
-    ) -> List[str]:
+    ) -> list[str]:
         """Generate topic labels for groups of segments."""
         labels = []
-        
+
         for i in range(0, len(segments), window_size):
             window = segments[i:i + window_size]
             combined_text = " ".join(s.get("text", "") for s in window)
-            
+
             # Simple heuristic: use first meaningful sentence
             sentences = combined_text.split(".")
             if sentences:
@@ -575,9 +574,9 @@ class TranscriptionService:
                     label += "..."
             else:
                 label = f"Segment {i // window_size + 1}"
-            
+
             labels.append(label)
-        
+
         return labels
 
 

@@ -1,8 +1,9 @@
 """FORGE Engine services."""
 
 from forge_engine.services.ffmpeg import FFmpegService
-from forge_engine.services.transcription import TranscriptionService
 from forge_engine.services.ingest import IngestService
+from forge_engine.services.transcription import TranscriptionService
+
 
 # Lazy imports for services requiring optional dependencies
 def get_analysis_service():

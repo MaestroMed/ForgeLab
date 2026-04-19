@@ -1,8 +1,8 @@
 """Compilation (Best-of) API endpoints."""
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
 
 from forge_engine.services.compilation import CompilationService
 
@@ -12,10 +12,10 @@ router = APIRouter()
 class CreateCompilationRequest(BaseModel):
     """Request to create a best-of compilation."""
     project_id: str
-    segment_ids: Optional[List[str]] = None  # If None, auto-select best
+    segment_ids: list[str] | None = None  # If None, auto-select best
     max_duration: float = 60.0  # Max total duration in seconds
     min_segment_score: float = 60.0
-    title: Optional[str] = None
+    title: str | None = None
     include_transitions: bool = True
     transition_type: str = "crossfade"  # "crossfade", "cut", "zoom"
     output_format: str = "9:16"
@@ -26,8 +26,8 @@ class CompilationStatusResponse(BaseModel):
     job_id: str
     status: str
     progress: float
-    output_path: Optional[str] = None
-    error: Optional[str] = None
+    output_path: str | None = None
+    error: str | None = None
 
 
 @router.get("/status")
@@ -48,13 +48,13 @@ async def create_compilation(
 ):
     """Create a best-of compilation from segments."""
     service = CompilationService.get_instance()
-    
+
     if not service.is_available():
         raise HTTPException(
             status_code=503,
             detail="Compilation service not available"
         )
-    
+
     # Start compilation job
     job_id = await service.create_compilation(
         project_id=request.project_id,
@@ -66,7 +66,7 @@ async def create_compilation(
         transition_type=request.transition_type,
         output_format=request.output_format
     )
-    
+
     return {
         "job_id": job_id,
         "status": "started",
@@ -78,12 +78,12 @@ async def create_compilation(
 async def get_compilation_job(job_id: str):
     """Get status of a compilation job."""
     service = CompilationService.get_instance()
-    
+
     status = await service.get_job_status(job_id)
-    
+
     if status is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     return CompilationStatusResponse(**status)
 
 
@@ -96,14 +96,14 @@ async def auto_select_segments(
 ):
     """Auto-select best segments for a compilation."""
     service = CompilationService.get_instance()
-    
+
     segments = await service.auto_select_segments(
         project_id=project_id,
         max_duration=max_duration,
         min_score=min_score,
         diversity_weight=diversity_weight
     )
-    
+
     return {
         "segments": segments,
         "count": len(segments),
@@ -115,10 +115,10 @@ async def auto_select_segments(
 async def cancel_compilation(job_id: str):
     """Cancel a running compilation job."""
     service = CompilationService.get_instance()
-    
+
     success = await service.cancel_job(job_id)
-    
+
     if not success:
         raise HTTPException(status_code=404, detail="Job not found or already completed")
-    
+
     return {"success": True, "message": "Compilation cancelled"}

@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -23,56 +23,56 @@ class LLMScoreResult:
     clarity_score: float  # 0-10
     engagement_score: float  # 0-10
     reasoning: str
-    tags: List[str]
-    raw_response: Optional[str] = None
+    tags: list[str]
+    raw_response: str | None = None
 
 
 @dataclass
 class ContentGenerationResult:
     """Result from content generation."""
-    titles: List[str]
+    titles: list[str]
     description: str
-    hashtags: List[str]
-    hook_suggestion: Optional[str] = None
+    hashtags: list[str]
+    hook_suggestion: str | None = None
 
 
 class LocalLLMService:
     """Service for local LLM inference using Ollama."""
-    
+
     # Default Ollama settings (overridden by config)
     DEFAULT_MODEL = settings.LLM_MODEL if hasattr(settings, 'LLM_MODEL') else "llama3.2"
     FALLBACK_MODELS = ["llama3.1", "mistral", "phi3"]
     BASE_URL = settings.LLM_OLLAMA_URL if hasattr(settings, 'LLM_OLLAMA_URL') else "http://127.0.0.1:11434"
     TIMEOUT = float(settings.LLM_TIMEOUT if hasattr(settings, 'LLM_TIMEOUT') else 120)
-    
+
     _instance: Optional["LocalLLMService"] = None
-    _available: Optional[bool] = None
-    _current_model: Optional[str] = None
-    
+    _available: bool | None = None
+    _current_model: str | None = None
+
     def __init__(self):
         self.client = httpx.AsyncClient(
             base_url=self.BASE_URL,
             timeout=httpx.Timeout(self.TIMEOUT)
         )
-    
+
     @classmethod
     def get_instance(cls) -> "LocalLLMService":
         """Get singleton instance."""
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
-    
+
     async def check_availability(self) -> bool:
         """Check if Ollama is running and has a model available."""
         if self._available is not None:
             return self._available
-        
+
         try:
             response = await self.client.get("/api/tags")
             if response.status_code == 200:
                 data = response.json()
                 models = [m.get("name", "").split(":")[0] for m in data.get("models", [])]
-                
+
                 # Find best available model
                 for preferred in [self.DEFAULT_MODEL] + self.FALLBACK_MODELS:
                     if any(preferred in m for m in models):
@@ -80,14 +80,14 @@ class LocalLLMService:
                         self._available = True
                         logger.info(f"LLM service available with model: {self._current_model}")
                         return True
-                
+
                 # Use first available model
                 if models:
                     self._current_model = models[0].split(":")[0]
                     self._available = True
                     logger.info(f"LLM service using model: {self._current_model}")
                     return True
-                
+
                 logger.warning("Ollama running but no models found")
                 self._available = False
                 return False
@@ -95,27 +95,27 @@ class LocalLLMService:
             logger.warning(f"Ollama not available: {e}")
             self._available = False
             return False
-        
+
         return False
-    
+
     def is_available(self) -> bool:
         """Check cached availability status."""
         return self._available or False
-    
+
     async def generate(
         self,
         prompt: str,
-        system: Optional[str] = None,
-        model: Optional[str] = None,
+        system: str | None = None,
+        model: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 1024
-    ) -> Optional[str]:
+    ) -> str | None:
         """Generate text using Ollama."""
         if not await self.check_availability():
             return None
-        
+
         model = model or self._current_model or self.DEFAULT_MODEL
-        
+
         try:
             payload = {
                 "model": model,
@@ -126,47 +126,47 @@ class LocalLLMService:
                     "num_predict": max_tokens,
                 }
             }
-            
+
             if system:
                 payload["system"] = system
-            
+
             response = await self.client.post("/api/generate", json=payload)
-            
+
             if response.status_code == 200:
                 data = response.json()
                 return data.get("response", "")
             else:
                 logger.error(f"Ollama error: {response.status_code} - {response.text[:200]}")
                 return None
-                
+
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")
             return None
-    
+
     async def score_segment_context(
         self,
         transcript: str,
         duration: float,
-        context: Optional[str] = None
-    ) -> Optional[LLMScoreResult]:
+        context: str | None = None
+    ) -> LLMScoreResult | None:
         """
         Use LLM to analyze segment context and score viral potential.
-        
+
         Args:
             transcript: The segment transcript text
             duration: Segment duration in seconds
             context: Optional additional context (channel name, content type, etc.)
-        
+
         Returns:
             LLMScoreResult with detailed scores and reasoning
         """
         if not await self.check_availability():
             return None
-        
+
         # Truncate very long transcripts
         if len(transcript) > 2000:
             transcript = transcript[:1000] + "\n...[truncated]...\n" + transcript[-500:]
-        
+
         system_prompt = """Tu es un expert en contenu viral pour TikTok, YouTube Shorts et Instagram Reels.
 Tu analyses des segments de stream/podcast pour évaluer leur potentiel viral.
 Tu dois répondre UNIQUEMENT en JSON valide, sans texte avant ou après."""
@@ -193,10 +193,10 @@ Réponds UNIQUEMENT avec ce JSON (pas de markdown, pas de texte autour):
             system=system_prompt,
             temperature=0.3  # Lower temperature for more consistent scoring
         )
-        
+
         if not response:
             return None
-        
+
         try:
             # Try to extract JSON from response
             json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
@@ -204,7 +204,7 @@ Réponds UNIQUEMENT avec ce JSON (pas de markdown, pas de texte autour):
                 data = json.loads(json_match.group())
             else:
                 data = json.loads(response)
-            
+
             return LLMScoreResult(
                 humor_score=float(data.get("humor_score", 5)),
                 surprise_score=float(data.get("surprise_score", 5)),
@@ -219,37 +219,37 @@ Réponds UNIQUEMENT avec ce JSON (pas de markdown, pas de texte autour):
             logger.warning(f"Failed to parse LLM response: {e}")
             logger.debug(f"Raw response: {response[:500]}")
             return None
-    
+
     async def generate_content(
         self,
         transcript: str,
-        segment_tags: List[str],
+        segment_tags: list[str],
         platform: str = "tiktok"
-    ) -> Optional[ContentGenerationResult]:
+    ) -> ContentGenerationResult | None:
         """
         Generate viral titles, descriptions, and hashtags for a clip.
-        
+
         Args:
             transcript: The clip transcript
             segment_tags: Tags identified for the segment
             platform: Target platform (tiktok, youtube, instagram)
-        
+
         Returns:
             ContentGenerationResult with generated content
         """
         if not await self.check_availability():
             return None
-        
+
         # Truncate transcript for faster processing
         if len(transcript) > 1500:
             transcript = transcript[:750] + "\n...\n" + transcript[-500:]
-        
+
         platform_hints = {
             "tiktok": "TikTok (titres courts, hashtags trending, emojis)",
             "youtube": "YouTube Shorts (titres accrocheurs, description SEO)",
             "instagram": "Instagram Reels (hashtags populaires, description engageante)"
         }
-        
+
         system_prompt = """Tu es un expert en growth et marketing sur les réseaux sociaux.
 Tu génères du contenu viral optimisé pour chaque plateforme.
 Réponds UNIQUEMENT en JSON valide."""
@@ -280,17 +280,17 @@ Réponds UNIQUEMENT avec ce JSON:
             system=system_prompt,
             temperature=0.8  # Higher temperature for creative content
         )
-        
+
         if not response:
             return None
-        
+
         try:
             json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
             if json_match:
                 data = json.loads(json_match.group())
             else:
                 data = json.loads(response)
-            
+
             return ContentGenerationResult(
                 titles=data.get("titles", [])[:5],
                 description=str(data.get("description", ""))[:300],
@@ -300,25 +300,25 @@ Réponds UNIQUEMENT avec ce JSON:
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.warning(f"Failed to parse content generation response: {e}")
             return None
-    
+
     async def analyze_hook_quality(
         self,
         opening_text: str,
         full_transcript: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Analyze the quality of a hook/opening and suggest improvements.
-        
+
         Args:
             opening_text: The first few seconds of transcript
             full_transcript: Complete transcript for context
-        
+
         Returns:
             Analysis with score and suggestions
         """
         if not await self.check_availability():
             return {"available": False}
-        
+
         system_prompt = """Tu analyses des accroches de vidéos virales.
 Réponds UNIQUEMENT en JSON valide."""
 
@@ -344,10 +344,10 @@ Réponds en JSON:
             system=system_prompt,
             temperature=0.5
         )
-        
+
         if not response:
             return {"available": True, "parsed": False}
-        
+
         try:
             json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
             if json_match:
@@ -357,42 +357,42 @@ Réponds en JSON:
                 return data
         except:
             pass
-        
+
         return {"available": True, "parsed": False, "raw": response[:500]}
-    
+
     async def batch_score_segments(
         self,
-        segments: List[Dict[str, Any]],
+        segments: list[dict[str, Any]],
         max_concurrent: int = 3
-    ) -> List[Optional[LLMScoreResult]]:
+    ) -> list[LLMScoreResult | None]:
         """
         Score multiple segments concurrently with rate limiting.
-        
+
         Args:
             segments: List of segments with 'transcript' and 'duration' keys
             max_concurrent: Maximum concurrent LLM calls
-        
+
         Returns:
             List of LLMScoreResult (or None for failed segments)
         """
         semaphore = asyncio.Semaphore(max_concurrent)
-        
-        async def score_with_limit(seg: Dict) -> Optional[LLMScoreResult]:
+
+        async def score_with_limit(seg: dict) -> LLMScoreResult | None:
             async with semaphore:
                 return await self.score_segment_context(
                     transcript=seg.get("transcript", ""),
                     duration=seg.get("duration", 60)
                 )
-        
+
         tasks = [score_with_limit(seg) for seg in segments]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # Convert exceptions to None
         return [
             r if isinstance(r, LLMScoreResult) else None
             for r in results
         ]
-    
+
     async def close(self):
         """Close the HTTP client."""
         await self.client.aclose()

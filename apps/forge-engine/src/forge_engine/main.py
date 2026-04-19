@@ -2,17 +2,17 @@
 
 import asyncio
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from forge_engine.api.v1.router import api_router
 from forge_engine.core.config import settings
-from forge_engine.core.database import init_db, close_db
+from forge_engine.core.database import close_db, init_db
 from forge_engine.core.jobs import JobManager
 
 # Configure logging
@@ -44,70 +44,70 @@ async def cleanup_orphan_ffmpeg():
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan manager."""
     logger.info("Starting FORGE Engine v%s", settings.VERSION)
-    
+
     # Clean up any orphan FFmpeg processes from crashed runs
     await cleanup_orphan_ffmpeg()
-    
+
     # Initialize database
     await init_db()
     logger.info("Database initialized")
-    
+
     # Start job manager
     job_manager = JobManager.get_instance()
-    
+
     # Register WebSocket listener and set main loop for thread-safe callbacks
     from forge_engine.api.v1.endpoints.websockets import job_update_listener, set_main_loop
     main_loop = asyncio.get_running_loop()
     set_main_loop(main_loop)
     job_manager.set_main_loop(main_loop)  # Also store in JobManager for DB updates
     job_manager.register_global_listener(job_update_listener)
-    
+
     # Register job handlers
-    from forge_engine.services.ingest import IngestService
+    from forge_engine.core.jobs import JobType
     from forge_engine.services.analysis import AnalysisService
     from forge_engine.services.export import ExportService
+    from forge_engine.services.ingest import IngestService
     from forge_engine.services.youtube_dl import YouTubeDLService
-    from forge_engine.core.jobs import JobType
-    
+
     ingest_service = IngestService()
     analysis_service = AnalysisService()
     export_service = ExportService()
     youtube_service = YouTubeDLService.get_instance()
-    
+
     # Download handler for URL imports
     async def download_handler(job, project_id: str = None, **kwargs):
         """Handle download jobs from URL imports."""
-        from pathlib import Path
         from sqlalchemy import select
+
         from forge_engine.core.config import settings
         from forge_engine.core.database import async_session_maker
         from forge_engine.models import Project
-        
+
         job_manager_instance = JobManager.get_instance()
-        
+
         url = kwargs.get("url")
         quality = kwargs.get("quality", "best")
         auto_ingest = kwargs.get("auto_ingest", True)
         auto_analyze = kwargs.get("auto_analyze", True)
-        
+
         if not url:
             raise ValueError("No URL provided for download")
-        
+
         async with async_session_maker() as db:
             result = await db.execute(select(Project).where(Project.id == project_id))
             project = result.scalar_one_or_none()
-            
+
             if not project:
                 raise ValueError(f"Project not found: {project_id}")
-            
+
             # Setup project directory
             project_dir = settings.LIBRARY_PATH / "projects" / project.id
             source_dir = project_dir / "source"
             source_dir.mkdir(parents=True, exist_ok=True)
-            
+
             def progress_callback(pct, msg):
                 job_manager_instance.update_progress(job, pct * 0.9, "download", msg)
-            
+
             # Download video
             downloaded_path = await youtube_service.download_video(
                 url=url,
@@ -115,18 +115,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 quality=quality,
                 progress_callback=progress_callback
             )
-            
+
             if not downloaded_path or not downloaded_path.exists():
                 raise ValueError("Download failed - no file created")
-            
+
             # Update project with source path
             project.source_path = str(downloaded_path)
             project.source_filename = downloaded_path.name
             project.status = "pending"
             await db.commit()
-            
+
             job_manager_instance.update_progress(job, 95, "complete", "Téléchargement terminé")
-            
+
             # Auto-chain to ingest if requested
             if auto_ingest:
                 ingest_job = await job_manager_instance.create_job(
@@ -135,17 +135,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     auto_analyze=auto_analyze
                 )
                 logger.info("Created ingest job %s for project %s", ingest_job.id, project.id)
-            
+
             return {"downloaded_path": str(downloaded_path)}
-    
+
     job_manager.register_handler(JobType.DOWNLOAD, download_handler)
     job_manager.register_handler(JobType.INGEST, ingest_service.run_ingest)
     job_manager.register_handler(JobType.ANALYZE, analysis_service.run_analysis)
     job_manager.register_handler(JobType.EXPORT, export_service.run_export)
-    
+
     asyncio.create_task(job_manager.start())
     logger.info("Job manager started")
-    
+
     # Check FFmpeg
     from forge_engine.services.ffmpeg import FFmpegService
     ffmpeg = FFmpegService()
@@ -153,13 +153,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("FFmpeg available - NVENC: %s", ffmpeg.has_nvenc)
     else:
         logger.warning("FFmpeg not found! Video processing will fail.")
-    
+
     # Start L'ŒIL monitoring service
     from forge_engine.services.monitor import MonitorService
     monitor = MonitorService.get_instance()
     await monitor.start()
     logger.info("L'ŒIL monitoring service started")
-    
+
     # Auto Pipeline and Publish Scheduler are available but not auto-started.
     # Enable manually via API: POST /v1/monitor/pipeline/start
     from forge_engine.services.auto_pipeline import AutoPipelineService
@@ -169,9 +169,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from forge_engine.services.publish_scheduler import PublishSchedulerService
     scheduler = PublishSchedulerService.get_instance()
     logger.info("Publish Scheduler loaded (start via API when ready)")
-    
+
     yield
-    
+
     # Cleanup
     logger.info("Shutting down FORGE Engine...")
     await scheduler.stop()
@@ -192,7 +192,7 @@ def create_app() -> FastAPI:
         docs_url="/docs" if settings.DEBUG else None,
         redoc_url="/redoc" if settings.DEBUG else None,
     )
-    
+
     # CORS middleware
     app.add_middleware(
         CORSMiddleware,
@@ -201,16 +201,16 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    
+
     # Health check endpoint
     @app.get("/health")
     async def health_check():
         from forge_engine.services.ffmpeg import FFmpegService
         from forge_engine.services.transcription import TranscriptionService
-        
+
         ffmpeg = FFmpegService()
         transcription = TranscriptionService()
-        
+
         return {
             "status": "healthy",
             "version": settings.VERSION,
@@ -221,39 +221,41 @@ def create_app() -> FastAPI:
                 "database": True,
             },
         }
-    
+
     # Include API router
     app.include_router(api_router, prefix="/v1")
-    
+
     # Mount static files for library (video serving)
     library_path = settings.LIBRARY_PATH
     if library_path.exists():
         app.mount("/library", StaticFiles(directory=str(library_path)), name="library")
         logger.info("Library mounted at /library: %s", library_path)
-    
+
     # Serve clip queue videos (for mobile review app)
     @app.get("/clips/{clip_id}/video")
     async def serve_clip_video(clip_id: str):
         """Serve a queued clip's video file for mobile streaming."""
         from pathlib import Path
+
         from fastapi import HTTPException
+        from sqlalchemy import select
+
         from forge_engine.core.database import async_session_maker
         from forge_engine.models.review import ClipQueue
-        from sqlalchemy import select
-        
+
         async with async_session_maker() as db:
             result = await db.execute(
                 select(ClipQueue).where(ClipQueue.id == clip_id)
             )
             clip = result.scalar_one_or_none()
-            
+
             if not clip:
                 raise HTTPException(status_code=404, detail="Clip not found")
-            
+
             video_path = Path(clip.video_path)
             if not video_path.exists():
                 raise HTTPException(status_code=404, detail="Video file not found")
-            
+
             return FileResponse(
                 video_path,
                 media_type="video/mp4",
@@ -262,7 +264,7 @@ def create_app() -> FastAPI:
                     "Cache-Control": "public, max-age=3600",
                 }
             )
-    
+
     # Serve project files
     ALLOWED_MEDIA_TYPES = {"proxy", "audio"}
 
@@ -271,6 +273,7 @@ def create_app() -> FastAPI:
         """Serve project media files (proxy, audio)."""
         import uuid as _uuid
         from pathlib import Path
+
         from fastapi import HTTPException
 
         # Validate project_id is a proper UUID to prevent path traversal
@@ -319,7 +322,7 @@ def create_app() -> FastAPI:
         # Log what we tried
         logger.warning("Media not found for %s/%s. Tried: %s", project_id, file_type, paths_to_try)
         raise HTTPException(status_code=404, detail=f"File not found: {file_type}")
-    
+
     return app
 
 
@@ -330,7 +333,7 @@ app = create_app()
 def main():
     """Run the application."""
     import uvicorn
-    
+
     uvicorn.run(
         "forge_engine.main:app",
         host=settings.HOST,

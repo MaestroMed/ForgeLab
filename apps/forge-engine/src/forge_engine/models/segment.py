@@ -2,9 +2,8 @@
 
 import uuid
 from datetime import datetime
-from typing import Optional
 
-from sqlalchemy import String, Float, Boolean, Text, DateTime, JSON, ForeignKey
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from forge_engine.core.database import Base
@@ -12,23 +11,23 @@ from forge_engine.core.database import Base
 
 class Segment(Base):
     """Segment model - represents a detected viral clip segment."""
-    
+
     __tablename__ = "segments"
-    
+
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), nullable=False)
-    
+
     # Timing
     start_time: Mapped[float] = mapped_column(Float, nullable=False)
     end_time: Mapped[float] = mapped_column(Float, nullable=False)
     duration: Mapped[float] = mapped_column(Float, nullable=False)
-    
+
     # Content
-    topic_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    hook_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    transcript: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    transcript_segments: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    
+    topic_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    hook_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transcript_segments: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
     # Scoring
     score_total: Mapped[float] = mapped_column(Float, default=0.0)
     score_hook: Mapped[float] = mapped_column(Float, default=0.0)
@@ -37,27 +36,27 @@ class Segment(Base):
     score_tension: Mapped[float] = mapped_column(Float, default=0.0)
     score_clarity: Mapped[float] = mapped_column(Float, default=0.0)
     score_rhythm: Mapped[float] = mapped_column(Float, default=0.0)
-    score_reasons: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    score_tags: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    
+    score_reasons: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    score_tags: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
     # Cold open
     cold_open_recommended: Mapped[bool] = mapped_column(Boolean, default=False)
-    cold_open_start_time: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    
+    cold_open_start_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     # Layout
-    layout_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    facecam_rect: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    content_rect: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    
+    layout_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    facecam_rect: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    content_rect: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # Variants
-    variants: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    
+    variants: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    
+
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="segments")
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary for API response."""
         return {

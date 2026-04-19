@@ -3,11 +3,9 @@
 import asyncio
 import logging
 import os
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge_engine.core.config import settings
 from forge_engine.core.database import async_session_maker
@@ -20,42 +18,42 @@ logger = logging.getLogger(__name__)
 
 class IngestService:
     """Service for ingesting and preparing video files."""
-    
+
     def __init__(self):
         self.ffmpeg = FFmpegService()
-    
+
     async def run_ingest(
         self,
         job: Job,
-        project_id: Optional[str] = None,
+        project_id: str | None = None,
         create_proxy: bool = True,
         extract_audio: bool = True,
         audio_track: int = 0,
         normalize_audio: bool = True,
         auto_analyze: bool = True,
-        dictionary_name: Optional[str] = None
-    ) -> Dict[str, Any]:
+        dictionary_name: str | None = None
+    ) -> dict[str, Any]:
         """Run the ingestion pipeline."""
         job_manager = JobManager.get_instance()
-        
+
         # Use job.project_id if project_id not provided
         project_id = project_id or job.project_id
         if not project_id:
             raise ValueError("No project_id provided")
-        
+
         async with async_session_maker() as db:
             # Get project
             result = await db.execute(select(Project).where(Project.id == project_id))
             project = result.scalar_one_or_none()
-            
+
             if not project:
                 raise ValueError(f"Project not found: {project_id}")
-            
+
             source_path = project.source_path
-            
+
             if not os.path.exists(source_path):
                 raise FileNotFoundError(f"Source file not found: {source_path}")
-            
+
             # Create project directory structure
             project_dir = settings.LIBRARY_PATH / "projects" / project_id
             source_dir = project_dir / "source"
@@ -63,13 +61,13 @@ class IngestService:
             analysis_dir = project_dir / "analysis"
             renders_dir = project_dir / "renders"
             exports_dir = project_dir / "exports"
-            
+
             for d in [source_dir, proxy_dir, analysis_dir, renders_dir, exports_dir]:
                 d.mkdir(parents=True, exist_ok=True)
-            
+
             # Update progress
             job_manager.update_progress(job, 5, "probe", "Analyzing source file...")
-            
+
             # Probe source file
             try:
                 video_info = await self.ffmpeg.get_video_info(source_path)
@@ -78,22 +76,22 @@ class IngestService:
                 project.error_message = f"Failed to probe video: {e}"
                 await db.commit()
                 raise
-            
+
             # Update project with video info
             project.width = video_info["width"]
             project.height = video_info["height"]
             project.duration = video_info["duration"]
             project.fps = video_info["fps"]
             project.audio_tracks = video_info["audio_tracks"]
-            
+
             await db.commit()
-            
+
             job_manager.update_progress(job, 10, "probe", f"Video: {video_info['width']}x{video_info['height']}, {video_info['duration']:.1f}s")
-            
+
             # Extract thumbnail
             job_manager.update_progress(job, 12, "thumbnail", "Extracting thumbnail...")
             thumbnail_path = project_dir / "thumbnail.jpg"
-            
+
             try:
                 success = await self.ffmpeg.extract_thumbnail(
                     source_path,
@@ -110,55 +108,52 @@ class IngestService:
                     logger.warning("Thumbnail extraction failed, continuing without thumbnail")
             except Exception as e:
                 logger.warning("Thumbnail extraction error: %s", e)
-            
+
             # ========================================
             # PARALLEL PROCESSING: Proxy + Audio
             # ========================================
             # These operations are independent and can run in parallel
             # This provides ~35% speedup on ingestion
-            
+
             proxy_path = proxy_dir / "proxy.mp4"
             audio_path = analysis_dir / "audio.wav"
-            
+
             # Track individual progress for combined display
             proxy_progress_value = [0.0]
             audio_progress_value = [0.0]
-            
+
             def update_combined_progress():
                 """Update job progress based on both tasks."""
                 # Proxy: 15-55% (40% range), Audio: 15-95% (35% range, faster)
                 # Combined: 15-95% based on average
                 combined = (proxy_progress_value[0] + audio_progress_value[0]) / 2
                 job_manager.update_progress(
-                    job, 
+                    job,
                     15 + combined * 0.8,  # 15% to 95%
-                    "parallel", 
+                    "parallel",
                     f"Proxy: {proxy_progress_value[0]:.0f}% | Audio: {audio_progress_value[0]:.0f}%"
                 )
-            
+
             def proxy_progress(p):
                 proxy_progress_value[0] = p
                 update_combined_progress()
-            
+
             def audio_progress(p):
                 audio_progress_value[0] = p
                 update_combined_progress()
-            
+
             # Check if we should skip proxy (NVENC available = fast final render)
-            skip_proxy = False
             if settings.SKIP_PROXY_IF_NVENC and self.ffmpeg.has_nvenc:
-                skip_proxy = True
                 create_proxy = False
                 logger.info("Skipping proxy creation (NVENC available for fast final render)")
-            
+
             job_manager.update_progress(job, 15, "parallel", "Traitement parallèle: Proxy + Audio...")
             logger.info("Starting PARALLEL processing: Proxy=%s, Audio=%s", create_proxy, extract_audio)
-            
+
             # Create tasks for parallel execution
-            tasks = []
             proxy_result = [False]
             audio_result = [False]
-            
+
             async def run_proxy():
                 if create_proxy:
                     result = await self.ffmpeg.create_proxy(
@@ -174,7 +169,7 @@ class IngestService:
                 # No proxy needed, mark as complete
                 proxy_progress_value[0] = 100.0
                 return True
-            
+
             async def run_audio():
                 if extract_audio:
                     result = await self.ffmpeg.extract_audio(
@@ -189,35 +184,35 @@ class IngestService:
                     audio_result[0] = result
                     return result
                 return True
-            
+
             # Run both tasks in parallel
             results = await asyncio.gather(run_proxy(), run_audio(), return_exceptions=True)
-            
+
             # Handle results
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
                     logger.error("Parallel task %d failed: %s", i, result)
-            
+
             # Update project with results
             if create_proxy and proxy_result[0]:
                 project.proxy_path = str(proxy_path)
                 logger.info("Proxy created successfully")
             elif create_proxy:
                 logger.warning("Proxy creation failed, continuing without proxy")
-            
+
             if extract_audio and audio_result[0]:
                 project.audio_path = str(audio_path)
                 logger.info("Audio extracted successfully")
             elif extract_audio:
                 logger.warning("Audio extraction failed, some features may be limited")
-            
+
             await db.commit()
             logger.info("PARALLEL processing complete")
-            
+
             # Update project status
             project.status = "ingested"
             await db.commit()
-            
+
             # Broadcast project update via WebSocket
             from forge_engine.api.v1.endpoints.websockets import broadcast_project_update
             broadcast_project_update({
@@ -229,27 +224,27 @@ class IngestService:
                 "duration": project.duration,
                 "updatedAt": project.updated_at.isoformat() if project.updated_at else None,
             })
-            
+
             job_manager.update_progress(job, 100, "complete", "Ingestion complete")
-            
+
             # Auto-chain to analysis if enabled
             if auto_analyze:
                 logger.info("Auto-chaining to analysis for project %s", project_id)
-                from forge_engine.services.analysis import AnalysisService
                 from forge_engine.core.jobs import JobType
-                
+                from forge_engine.services.analysis import AnalysisService
+
                 analysis_service = AnalysisService()
-                
+
                 # Update project status
                 project.status = "analyzing"
                 await db.commit()
-                
+
                 broadcast_project_update({
                     "id": project.id,
                     "status": "analyzing",
                     "name": project.name,
                 })
-                
+
                 # Create analysis job
                 await job_manager.create_job(
                     job_type=JobType.ANALYZE,
@@ -265,7 +260,7 @@ class IngestService:
                     dictionary_name=dictionary_name,
                 )
                 logger.info("Analysis job created for project %s (dictionary: %s)", project_id, dictionary_name or "none")
-            
+
             return {
                 "project_id": project_id,
                 "proxy_path": project.proxy_path,

@@ -1,13 +1,13 @@
 """ML Scoring API endpoints."""
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
 
 from forge_engine.services.ml_scoring import (
     MLScoringService,
     SegmentFeatures,
-    is_ml_scoring_available
 )
 
 router = APIRouter()
@@ -15,20 +15,20 @@ router = APIRouter()
 
 class PredictRequest(BaseModel):
     """Request to predict score for a segment."""
-    segment: Dict[str, Any]
-    audio_data: Optional[Dict[str, Any]] = None
-    emotion_data: Optional[Dict[str, Any]] = None
-    llm_scores: Optional[Dict[str, Any]] = None
+    segment: dict[str, Any]
+    audio_data: dict[str, Any] | None = None
+    emotion_data: dict[str, Any] | None = None
+    llm_scores: dict[str, Any] | None = None
     total_duration: float = 0
     blend_with_heuristic: bool = True
 
 
 class FeedbackRequest(BaseModel):
     """Request to add user feedback."""
-    segment: Dict[str, Any]
+    segment: dict[str, Any]
     rating: float  # 0-10
-    audio_data: Optional[Dict[str, Any]] = None
-    emotion_data: Optional[Dict[str, Any]] = None
+    audio_data: dict[str, Any] | None = None
+    emotion_data: dict[str, Any] | None = None
     total_duration: float = 0
 
 
@@ -41,7 +41,7 @@ class TrainRequest(BaseModel):
 async def get_ml_status():
     """Get ML scoring status and model info."""
     service = MLScoringService.get_instance()
-    
+
     return {
         "available": service.is_available(),
         "model_trained": service.is_model_trained(),
@@ -56,20 +56,20 @@ async def get_ml_status():
 async def predict_score(request: PredictRequest):
     """Predict viral score using ML model."""
     service = MLScoringService.get_instance()
-    
+
     if not service.is_available():
         raise HTTPException(
             status_code=503,
             detail="ML scoring not available (scikit-learn not installed)"
         )
-    
+
     if not service.is_model_trained():
         return {
             "score": None,
             "ml_enhanced": False,
             "message": "Model not trained yet. Add more feedback examples."
         }
-    
+
     result = await service.score_segment_async(
         segment=request.segment,
         audio_data=request.audio_data,
@@ -78,7 +78,7 @@ async def predict_score(request: PredictRequest):
         total_duration=request.total_duration,
         blend_with_heuristic=request.blend_with_heuristic
     )
-    
+
     return result
 
 
@@ -86,13 +86,13 @@ async def predict_score(request: PredictRequest):
 async def add_feedback(request: FeedbackRequest):
     """Add user feedback for ML training."""
     service = MLScoringService.get_instance()
-    
+
     if not service.is_available():
         raise HTTPException(
             status_code=503,
             detail="ML scoring not available"
         )
-    
+
     service.add_feedback(
         segment=request.segment,
         rating=request.rating,
@@ -100,7 +100,7 @@ async def add_feedback(request: FeedbackRequest):
         emotion_data=request.emotion_data,
         total_duration=request.total_duration
     )
-    
+
     return {
         "success": True,
         "training_examples": service.get_training_data_count(),
@@ -112,24 +112,24 @@ async def add_feedback(request: FeedbackRequest):
 async def train_model(request: TrainRequest):
     """Train the ML model on collected feedback."""
     service = MLScoringService.get_instance()
-    
+
     if not service.is_available():
         raise HTTPException(
             status_code=503,
             detail="ML scoring not available"
         )
-    
+
     if not request.force and not service.can_train():
         return {
             "success": False,
             "message": f"Need at least {service.MIN_TRAINING_EXAMPLES} examples, have {service.get_training_data_count()}"
         }
-    
+
     metadata = await service.train_model(force=request.force)
-    
+
     if metadata is None:
         raise HTTPException(status_code=500, detail="Training failed")
-    
+
     return {
         "success": True,
         "model_info": {

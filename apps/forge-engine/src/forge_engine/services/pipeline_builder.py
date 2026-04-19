@@ -6,7 +6,6 @@ instead of sequential re-encodes.
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -22,25 +21,25 @@ class PipelineConfig:
     # Layout
     output_width: int = 1080
     output_height: int = 1920
-    facecam_rect: Optional[dict] = None   # {x, y, w, h} normalized 0-1
-    content_rect: Optional[dict] = None
+    facecam_rect: dict | None = None   # {x, y, w, h} normalized 0-1
+    content_rect: dict | None = None
 
     # Subtitles
-    ass_path: Optional[Path] = None       # Pre-generated ASS file
+    ass_path: Path | None = None       # Pre-generated ASS file
 
     # Jump cuts — list of (start, end) in clip-relative seconds to KEEP
     keep_ranges: list = field(default_factory=list)  # [(start, end), ...]
 
     # Cold open — if set, reorder: hook first, then rest
-    cold_open_hook_start: Optional[float] = None
-    cold_open_hook_end: Optional[float] = None
+    cold_open_hook_start: float | None = None
+    cold_open_hook_end: float | None = None
 
     # Intro overlay
-    intro_path: Optional[Path] = None     # Pre-rendered intro clip
+    intro_path: Path | None = None     # Pre-rendered intro clip
     intro_duration: float = 0.0
 
     # Music
-    music_path: Optional[Path] = None
+    music_path: Path | None = None
     music_volume: float = 0.15
     speech_volume: float = 1.0
 
@@ -221,7 +220,7 @@ class PipelineSinglePass:
         )
         return cmd
 
-    def _get_loudnorm_filter(self, platform: str) -> Optional[str]:
+    def _get_loudnorm_filter(self, platform: str) -> str | None:
         """Return loudnorm filter string for the target platform LUFS."""
         targets = {
             "tiktok": -14,

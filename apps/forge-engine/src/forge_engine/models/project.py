@@ -2,9 +2,8 @@
 
 import uuid
 from datetime import datetime
-from typing import Optional
 
-from sqlalchemy import String, Integer, Float, Text, DateTime, JSON
+from sqlalchemy import JSON, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from forge_engine.core.database import Base
@@ -12,48 +11,48 @@ from forge_engine.core.database import Base
 
 class Project(Base):
     """Project model - represents a VOD import and its processing state."""
-    
+
     __tablename__ = "projects"
-    
+
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    
+
     # Source file info
     source_path: Mapped[str] = mapped_column(Text, nullable=False)
     source_filename: Mapped[str] = mapped_column(String(255), nullable=False)
-    duration: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    width: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    height: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    fps: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    duration: Mapped[float | None] = mapped_column(Float, nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fps: Mapped[float | None] = mapped_column(Float, nullable=True)
     audio_tracks: Mapped[int] = mapped_column(Integer, default=1)
-    
+
     # Generated files
-    proxy_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    audio_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    thumbnail_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
+    proxy_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    audio_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    thumbnail_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Status
     status: Mapped[str] = mapped_column(
-        String(20), 
+        String(20),
         default="created",
         nullable=False
     )  # created, ingesting, ingested, analyzing, analyzed, ready, error
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Profile reference
-    profile_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
-    
+    profile_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
     # Extra metadata
-    project_meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    
+    project_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, 
-        default=datetime.utcnow, 
+        DateTime,
+        default=datetime.utcnow,
         onupdate=datetime.utcnow
     )
-    
+
     # Relationships
     segments: Mapped[list["Segment"]] = relationship(
         "Segment",
@@ -65,7 +64,7 @@ class Project(Base):
         back_populates="project",
         cascade="all, delete-orphan"
     )
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary for API response."""
         return {
@@ -90,6 +89,6 @@ class Project(Base):
 
 
 # Import at end to avoid circular imports
-from forge_engine.models.segment import Segment
 from forge_engine.models.artifact import Artifact
+from forge_engine.models.segment import Segment
 

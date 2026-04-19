@@ -2,21 +2,21 @@
 
 import logging
 import os
-from typing import List, Optional
+from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge_engine.core.database import get_db
 
 logger = logging.getLogger(__name__)
 from forge_engine.core.jobs import JobManager, JobType
-from forge_engine.models import Project, Segment, Artifact
-from forge_engine.services.ingest import IngestService
+from forge_engine.models import Artifact, Project, Segment
 from forge_engine.services.analysis import AnalysisService
 from forge_engine.services.export import ExportService
+from forge_engine.services.ingest import IngestService
 
 router = APIRouter()
 
@@ -25,7 +25,7 @@ router = APIRouter()
 class CreateProjectRequest(BaseModel):
     name: str
     source_path: str
-    profile_id: Optional[str] = None
+    profile_id: str | None = None
 
 
 class IngestRequest(BaseModel):
@@ -39,13 +39,13 @@ class IngestRequest(BaseModel):
 class AnalyzeRequest(BaseModel):
     transcribe: bool = True
     whisper_model: str = "large-v3"
-    language: Optional[str] = None
+    language: str | None = None
     detect_scenes: bool = True
     analyze_audio: bool = True
     detect_faces: bool = True
     score_segments: bool = True
-    custom_dictionary: Optional[list[str]] = None
-    dictionary_name: Optional[str] = None  # Named dictionary (e.g. "etostark")
+    custom_dictionary: list[str] | None = None
+    dictionary_name: str | None = None  # Named dictionary (e.g. "etostark")
 
 
 class CaptionStyleRequest(BaseModel):
@@ -57,7 +57,7 @@ class CaptionStyleRequest(BaseModel):
     outlineColor: str = "#000000"
     outlineWidth: int = 2
     position: str = "bottom"  # bottom, center, top
-    positionY: Optional[int] = None  # Custom Y position (0-1920, overrides position)
+    positionY: int | None = None  # Custom Y position (0-1920, overrides position)
     animation: str = "none"  # none, fade, pop, bounce, glow, wave
     highlightColor: str = "#FFD700"
     wordsPerLine: int = 6
@@ -75,12 +75,12 @@ class LayoutZoneRequest(BaseModel):
     y: float
     width: float
     height: float
-    sourceCrop: Optional[SourceCropRequest] = None
+    sourceCrop: SourceCropRequest | None = None
 
 
 class LayoutConfigRequest(BaseModel):
-    facecam: Optional[LayoutZoneRequest] = None
-    content: Optional[LayoutZoneRequest] = None
+    facecam: LayoutZoneRequest | None = None
+    content: LayoutZoneRequest | None = None
     facecamRatio: float = 0.4
 
 
@@ -106,7 +106,7 @@ class MusicConfigRequest(BaseModel):
 class JumpCutConfigRequest(BaseModel):
     enabled: bool = False
     sensitivity: str = "normal"  # "light", "normal", "aggressive"
-    min_silence_ms: Optional[int] = None  # Override: minimum silence to cut (ms)
+    min_silence_ms: int | None = None  # Override: minimum silence to cut (ms)
     padding_ms: int = 50  # Padding to keep before/after speech
     transition: str = "hard"  # "hard", "zoom", "crossfade"
 
@@ -114,7 +114,7 @@ class JumpCutConfigRequest(BaseModel):
 class ExportRequest(BaseModel):
     segment_id: str
     variant: str = "A"
-    template_id: Optional[str] = None
+    template_id: str | None = None
     platform: str = "tiktok"
     include_captions: bool = True
     burn_subtitles: bool = True
@@ -122,11 +122,11 @@ class ExportRequest(BaseModel):
     include_metadata: bool = False  # Default: only video file
     include_post: bool = False  # Default: only video file
     use_nvenc: bool = True
-    caption_style: Optional[CaptionStyleRequest] = None
-    layout_config: Optional[LayoutConfigRequest] = None
-    intro_config: Optional[IntroConfigRequest] = None
-    music_config: Optional[MusicConfigRequest] = None
-    jump_cut_config: Optional[JumpCutConfigRequest] = None
+    caption_style: CaptionStyleRequest | None = None
+    layout_config: LayoutConfigRequest | None = None
+    intro_config: IntroConfigRequest | None = None
+    music_config: MusicConfigRequest | None = None
+    jump_cut_config: JumpCutConfigRequest | None = None
 
 
 class GenerateVariantsRequest(BaseModel):
@@ -136,9 +136,9 @@ class GenerateVariantsRequest(BaseModel):
 
 class ApiResponse(BaseModel):
     success: bool
-    data: Optional[dict] = None
-    error: Optional[str] = None
-    message: Optional[str] = None
+    data: dict | None = None
+    error: str | None = None
+    message: str | None = None
 
 
 class ImportUrlRequest(BaseModel):
@@ -146,7 +146,7 @@ class ImportUrlRequest(BaseModel):
     quality: str = "best"  # best, 1080, 720, 480
     auto_ingest: bool = True
     auto_analyze: bool = True
-    dictionary_name: Optional[str] = None  # Named dictionary (e.g. "etostark")
+    dictionary_name: str | None = None  # Named dictionary (e.g. "etostark")
 
 
 # Endpoints
@@ -159,7 +159,7 @@ async def create_project(
     # Validate source path
     if not os.path.exists(request.source_path):
         raise HTTPException(status_code=400, detail="Source file not found")
-    
+
     # Create project
     project = Project(
         name=request.name,
@@ -168,11 +168,11 @@ async def create_project(
         profile_id=request.profile_id,
         status="created",
     )
-    
+
     db.add(project)
     await db.commit()
     await db.refresh(project)
-    
+
     return {"success": True, "data": project.to_dict()}
 
 
@@ -184,18 +184,18 @@ async def import_from_url(
 ) -> dict:
     """Import a video from YouTube or Twitch URL."""
     from forge_engine.services.youtube_dl import YouTubeDLService
-    
+
     yt_service = YouTubeDLService.get_instance()
-    
+
     # Validate URL
     if not yt_service.is_valid_url(request.url):
         raise HTTPException(status_code=400, detail="URL non valide (YouTube ou Twitch requis)")
-    
+
     # Get video info first
     info = await yt_service.get_video_info(request.url)
     if not info:
         raise HTTPException(status_code=400, detail="Impossible de récupérer les informations de la vidéo")
-    
+
     # Create project with placeholder
     project = Project(
         name=info.title,
@@ -210,68 +210,68 @@ async def import_from_url(
             "viewCount": info.view_count,
         }
     )
-    
+
     db.add(project)
     await db.commit()
     await db.refresh(project)
-    
+
     # Create download job
     job_manager = JobManager.get_instance()
-    
+
     async def download_handler(job, **kwargs):
         """Handle video download."""
         from forge_engine.api.v1.endpoints.websockets import broadcast_project_update
         from forge_engine.core.config import settings
         from forge_engine.core.database import async_session_maker
-        
+
         project_id = kwargs.get("project_id")
         url = kwargs.get("url")
         quality = kwargs.get("quality", "best")
         auto_ingest = kwargs.get("auto_ingest", True)
         auto_analyze = kwargs.get("auto_analyze", True)
         dictionary_name = kwargs.get("dictionary_name")
-        
+
         async with async_session_maker() as session:
             result = await session.execute(select(Project).where(Project.id == project_id))
             proj = result.scalar_one_or_none()
-            
+
             if not proj:
                 raise ValueError(f"Project not found: {project_id}")
-            
+
             yt = YouTubeDLService.get_instance()
-            
+
             def progress_cb(pct, msg):
                 job_manager.update_progress(job, pct * 0.9, "download", msg)
-            
+
             # Download to project directory
             project_dir = settings.LIBRARY_PATH / "projects" / project_id
             project_dir.mkdir(parents=True, exist_ok=True)
             source_dir = project_dir / "source"
             source_dir.mkdir(parents=True, exist_ok=True)
-            
+
             downloaded_path = await yt.download_video(url, source_dir, quality, progress_cb)
-            
+
             if not downloaded_path:
                 proj.status = "error"
                 proj.error_message = "Échec du téléchargement"
                 await session.commit()
                 raise ValueError("Download failed")
-            
+
             # Update project
             proj.source_path = str(downloaded_path)
             proj.source_filename = downloaded_path.name
             proj.status = "created"
             await session.commit()
-            
+
             broadcast_project_update({
                 "id": proj.id,
                 "status": "created",
                 "name": proj.name,
                 "sourcePath": str(downloaded_path),
             })
-            
+
             job_manager.update_progress(job, 100, "complete", "Téléchargement terminé")
-            
+
             # Auto-chain to ingest if enabled
             if auto_ingest:
                 ingest_service = IngestService()
@@ -282,9 +282,9 @@ async def import_from_url(
                     auto_analyze=auto_analyze,
                     dictionary_name=dictionary_name,
                 )
-            
+
             return {"downloaded_path": str(downloaded_path)}
-    
+
     # Create job
     job = await job_manager.create_job(
         job_type=JobType.DOWNLOAD,
@@ -296,7 +296,7 @@ async def import_from_url(
         auto_analyze=request.auto_analyze,
         dictionary_name=request.dictionary_name,
     )
-    
+
     return {
         "success": True,
         "data": {
@@ -311,16 +311,16 @@ async def import_from_url(
 async def get_url_info(request: ImportUrlRequest) -> dict:
     """Get video info from URL without downloading."""
     from forge_engine.services.youtube_dl import YouTubeDLService
-    
+
     yt_service = YouTubeDLService.get_instance()
-    
+
     if not yt_service.is_valid_url(request.url):
         raise HTTPException(status_code=400, detail="URL non valide")
-    
+
     info = await yt_service.get_video_info(request.url)
     if not info:
         raise HTTPException(status_code=400, detail="Impossible de récupérer les informations")
-    
+
     return {"success": True, "data": info.to_dict()}
 
 
@@ -328,35 +328,35 @@ async def get_url_info(request: ImportUrlRequest) -> dict:
 async def list_projects(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    search: Optional[str] = None,
-    status: Optional[str] = None,
+    search: str | None = None,
+    status: str | None = None,
     db: AsyncSession = Depends(get_db)
 ) -> dict:
     """List all projects with segment counts and average scores."""
     query = select(Project)
-    
+
     if search:
         query = query.where(Project.name.ilike(f"%{search}%"))
     if status:
         query = query.where(Project.status == status)
-    
+
     # Count total
     count_query = select(func.count()).select_from(Project)
     if search:
         count_query = count_query.where(Project.name.ilike(f"%{search}%"))
     if status:
         count_query = count_query.where(Project.status == status)
-    
+
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
-    
+
     # Paginate
     query = query.order_by(Project.updated_at.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
-    
+
     result = await db.execute(query)
     projects = result.scalars().all()
-    
+
     # Batch-fetch segment stats for all projects in one query (avoids N+1)
     project_ids = [p.id for p in projects]
     stats_map: dict[str, dict] = {}
@@ -384,7 +384,7 @@ async def list_projects(
         item["segmentsCount"] = stats["count"] if stats else 0
         item["averageScore"] = round(stats["avg_score"], 1) if stats and stats["avg_score"] else 0
         enriched_items.append(item)
-    
+
     return {
         "success": True,
         "data": {
@@ -405,10 +405,10 @@ async def get_project(
     """Get a project by ID."""
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
-    
+
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     return {"success": True, "data": project.to_dict()}
 
 
@@ -419,30 +419,31 @@ async def delete_project(
 ) -> dict:
     """Delete a project and all its associated data."""
     import shutil
+
     from forge_engine.core.config import settings
-    
+
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
-    
+
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     project_name = project.name
-    
+
     # Delete associated segments
     await db.execute(
         Segment.__table__.delete().where(Segment.project_id == project_id)
     )
-    
+
     # Delete associated artifacts
     await db.execute(
         Artifact.__table__.delete().where(Artifact.project_id == project_id)
     )
-    
+
     # Delete the project record
     await db.delete(project)
     await db.commit()
-    
+
     # Delete project folder from disk
     project_dir = settings.LIBRARY_PATH / "projects" / project_id
     if project_dir.exists():
@@ -451,9 +452,9 @@ async def delete_project(
             logger.info(f"Deleted project folder: {project_dir}")
         except Exception as e:
             logger.warning(f"Could not delete project folder: {e}")
-    
+
     logger.info(f"Deleted project: {project_name} ({project_id})")
-    
+
     return {"success": True, "message": f"Projet '{project_name}' supprimé"}
 
 
@@ -466,14 +467,14 @@ async def ingest_project(
     """Start ingestion for a project."""
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
-    
+
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     # Create ingest job
     job_manager = JobManager.get_instance()
     ingest_service = IngestService()
-    
+
     job = await job_manager.create_job(
         job_type=JobType.INGEST,
         handler=ingest_service.run_ingest,
@@ -484,11 +485,11 @@ async def ingest_project(
         normalize_audio=request.normalize_audio,
         auto_analyze=request.auto_analyze,  # Pass to service for chaining
     )
-    
+
     # Update project status
     project.status = "ingesting"
     await db.commit()
-    
+
     return {"success": True, "data": {"jobId": job.id}}
 
 
@@ -501,17 +502,17 @@ async def analyze_project(
     """Start analysis for a project."""
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
-    
+
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     if project.status not in ("ingested", "analyzed", "ready"):
         raise HTTPException(status_code=400, detail="Project must be ingested first")
-    
+
     # Create analysis job
     job_manager = JobManager.get_instance()
     analysis_service = AnalysisService()
-    
+
     job = await job_manager.create_job(
         job_type=JobType.ANALYZE,
         handler=analysis_service.run_analysis,
@@ -526,11 +527,11 @@ async def analyze_project(
         custom_dictionary=request.custom_dictionary,
         dictionary_name=request.dictionary_name,
     )
-    
+
     # Update project status
     project.status = "analyzing"
     await db.commit()
-    
+
     return {"success": True, "data": {"jobId": job.id}}
 
 
@@ -540,19 +541,20 @@ async def get_timeline(
     db: AsyncSession = Depends(get_db)
 ) -> dict:
     """Get timeline data for a project."""
-    from forge_engine.core.config import settings
     import json
-    
+
+    from forge_engine.core.config import settings
+
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
-    
+
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     # Load timeline from analysis cache
     project_dir = settings.LIBRARY_PATH / "projects" / project_id
     timeline_path = project_dir / "analysis" / "timeline.json"
-    
+
     if not timeline_path.exists():
         return {
             "success": True,
@@ -563,20 +565,20 @@ async def get_timeline(
                 "segments": [],
             }
         }
-    
-    with open(timeline_path, "r") as f:
+
+    with open(timeline_path) as f:
         timeline_data = json.load(f)
-    
+
     # Inject layout data if available
     layout_path = project_dir / "analysis" / "layout.json"
     if layout_path.exists():
         try:
-            with open(layout_path, "r") as f:
+            with open(layout_path) as f:
                 layout_data = json.load(f)
                 timeline_data["faceDetections"] = layout_data.get("face_detections", [])
         except Exception:
             pass
-    
+
     return {"success": True, "data": timeline_data}
 
 
@@ -587,16 +589,16 @@ async def list_segments(
     page_size: int = Query(20, ge=1, le=500),
     sort_by: str = Query("score", regex="^(score|startTime|duration)$"),
     sort_order: str = Query("desc", regex="^(asc|desc)$"),
-    min_score: Optional[float] = Query(None, ge=0, le=100),
-    min_duration: Optional[float] = Query(None, ge=0),
-    max_duration: Optional[float] = Query(None, ge=0),
-    search: Optional[str] = Query(None, min_length=1, max_length=200),
-    tags: Optional[str] = Query(None),  # Comma-separated tags
+    min_score: float | None = Query(None, ge=0, le=100),
+    min_duration: float | None = Query(None, ge=0),
+    max_duration: float | None = Query(None, ge=0),
+    search: str | None = Query(None, min_length=1, max_length=200),
+    tags: str | None = Query(None),  # Comma-separated tags
     db: AsyncSession = Depends(get_db)
 ) -> dict:
     """List segments for a project with advanced filtering and search."""
     query = select(Segment).where(Segment.project_id == project_id)
-    
+
     # Apply filters
     if min_score is not None:
         query = query.where(Segment.score_total >= min_score)
@@ -604,16 +606,16 @@ async def list_segments(
         query = query.where(Segment.duration >= min_duration)
     if max_duration is not None:
         query = query.where(Segment.duration <= max_duration)
-    
+
     # Full-text search on transcript
     if search:
         search_term = f"%{search.lower()}%"
         query = query.where(
-            Segment.transcript.ilike(search_term) | 
+            Segment.transcript.ilike(search_term) |
             Segment.topic_label.ilike(search_term) |
             Segment.hook_text.ilike(search_term)
         )
-    
+
     # Tag filtering (check if any of the requested tags are in score_tags JSON array)
     if tags:
         tag_list = [t.strip().lower() for t in tags.split(",") if t.strip()]
@@ -628,19 +630,19 @@ async def list_segments(
                 )
             if tag_conditions:
                 query = query.where(or_(*tag_conditions))
-    
+
     # Sorting
     sort_column = {
         "score": Segment.score_total,
         "startTime": Segment.start_time,
         "duration": Segment.duration,
     }[sort_by]
-    
+
     if sort_order == "desc":
         query = query.order_by(sort_column.desc())
     else:
         query = query.order_by(sort_column.asc())
-    
+
     # Count with same filters
     count_query = select(func.count()).select_from(Segment).where(Segment.project_id == project_id)
     if min_score is not None:
@@ -652,20 +654,20 @@ async def list_segments(
     if search:
         search_term = f"%{search.lower()}%"
         count_query = count_query.where(
-            Segment.transcript.ilike(search_term) | 
+            Segment.transcript.ilike(search_term) |
             Segment.topic_label.ilike(search_term) |
             Segment.hook_text.ilike(search_term)
         )
-    
+
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
-    
+
     # Paginate
     query = query.offset((page - 1) * page_size).limit(page_size)
-    
+
     result = await db.execute(query)
     segments = result.scalars().all()
-    
+
     return {
         "success": True,
         "data": {
@@ -688,7 +690,7 @@ async def get_segment_tags(
         select(Segment.score_tags).where(Segment.project_id == project_id)
     )
     all_tags_lists = result.scalars().all()
-    
+
     # Flatten and deduplicate tags
     unique_tags = set()
     for tags_list in all_tags_lists:
@@ -696,10 +698,10 @@ async def get_segment_tags(
             for tag in tags_list:
                 if tag:
                     unique_tags.add(tag.lower())
-    
+
     # Sort alphabetically
-    sorted_tags = sorted(list(unique_tags))
-    
+    sorted_tags = sorted(unique_tags)
+
     return {
         "success": True,
         "data": {
@@ -720,7 +722,7 @@ async def get_segment_stats(
         select(Segment).where(Segment.project_id == project_id)
     )
     segments = result.scalars().all()
-    
+
     if not segments:
         return {
             "success": True,
@@ -738,10 +740,10 @@ async def get_segment_stats(
                 "highScore": 0,
             }
         }
-    
+
     scores = [s.score_total or 0 for s in segments]
     durations = [s.duration or 0 for s in segments]
-    
+
     # Score distribution: 0-20, 20-40, 40-60, 60-80, 80-100
     score_buckets = [0, 0, 0, 0, 0]
     for score in scores:
@@ -755,7 +757,7 @@ async def get_segment_stats(
             score_buckets[3] += 1
         else:
             score_buckets[4] += 1
-    
+
     # Duration distribution: 0-30s, 30-60s, 60-120s, 120-300s, 300s+
     duration_buckets = [0, 0, 0, 0, 0]
     for dur in durations:
@@ -769,7 +771,7 @@ async def get_segment_stats(
             duration_buckets[3] += 1
         else:
             duration_buckets[4] += 1
-    
+
     return {
         "success": True,
         "data": {
@@ -795,7 +797,7 @@ async def get_segment_suggestions(
     db: AsyncSession = Depends(get_db)
 ) -> dict:
     """Get smart suggestions for best segments to export.
-    
+
     Algorithm:
     1. Top score segments (highest viral potential)
     2. Monetizable segments (60s+ duration)
@@ -808,73 +810,73 @@ async def get_segment_suggestions(
         .order_by(Segment.score_total.desc())
     )
     all_segments = result.scalars().all()
-    
+
     if not all_segments:
         return {"success": True, "data": {"suggestions": [], "reasons": {}}}
-    
+
     suggestions = []
     reasons = {}
     used_tags = set()
-    
+
     # Priority 1: Top score segments
     for seg in all_segments:
         if len(suggestions) >= count:
             break
-            
+
         score = seg.score_total or 0
         duration = seg.duration or 0
         tags = seg.score_tags or []
-        
+
         # Check for diversity - avoid segments with same primary tags
         primary_tag = tags[0].lower() if tags else None
         if primary_tag and primary_tag in used_tags:
             continue
-        
+
         # Prefer monetizable (60s+) and high score (60+)
         if score >= 60 and duration >= 60:
             suggestions.append(seg.to_dict())
             reasons[seg.id] = "Haute viralité + Monétisable"
             if primary_tag:
                 used_tags.add(primary_tag)
-    
+
     # Priority 2: High score but short
     for seg in all_segments:
         if len(suggestions) >= count:
             break
         if seg.id in [s['id'] for s in suggestions]:
             continue
-            
+
         score = seg.score_total or 0
         duration = seg.duration or 0
-        
+
         if score >= 70:
             suggestions.append(seg.to_dict())
             reasons[seg.id] = f"Score exceptionnel ({int(score)})"
-    
+
     # Priority 3: Monetizable with decent score
     for seg in all_segments:
         if len(suggestions) >= count:
             break
         if seg.id in [s['id'] for s in suggestions]:
             continue
-            
+
         score = seg.score_total or 0
         duration = seg.duration or 0
-        
+
         if duration >= 60 and score >= 50:
             suggestions.append(seg.to_dict())
             reasons[seg.id] = "Monétisable"
-    
+
     # Fill remaining with top scores
     for seg in all_segments:
         if len(suggestions) >= count:
             break
         if seg.id in [s['id'] for s in suggestions]:
             continue
-        
+
         suggestions.append(seg.to_dict())
         reasons[seg.id] = "Top score"
-    
+
     return {
         "success": True,
         "data": {
@@ -897,17 +899,17 @@ async def get_segment(
         .where(Segment.project_id == project_id)
     )
     segment = result.scalar_one_or_none()
-    
+
     if not segment:
         raise HTTPException(status_code=404, detail="Segment not found")
-    
+
     return {"success": True, "data": segment.to_dict()}
 
 
 class UpdateTranscriptRequest(BaseModel):
     """Request to update segment transcript."""
-    words: Optional[List[dict]] = None  # [{word, start, end, confidence?}]
-    text: Optional[str] = None
+    words: list[dict] | None = None  # [{word, start, end, confidence?}]
+    text: str | None = None
 
 
 @router.put("/{project_id}/segments/{segment_id}/transcript")
@@ -924,14 +926,14 @@ async def update_transcript(
         .where(Segment.project_id == project_id)
     )
     segment = result.scalar_one_or_none()
-    
+
     if not segment:
         raise HTTPException(status_code=404, detail="Segment not found")
-    
+
     # Update transcript text
     if request.text is not None:
         segment.transcript = request.text
-    
+
     # Update word timings if provided - store in transcript_segments
     if request.words is not None:
         # Build transcript_segments format expected by captions engine
@@ -945,10 +947,10 @@ async def update_transcript(
         # Also update transcript text from words if not provided
         if request.text is None:
             segment.transcript = " ".join(w.get("word", "") for w in request.words)
-    
+
     await db.commit()
     await db.refresh(segment)
-    
+
     return {
         "success": True,
         "data": segment.to_dict(),
@@ -958,7 +960,7 @@ async def update_transcript(
 
 class AnalyzeJumpCutsRequest(BaseModel):
     sensitivity: str = "normal"  # "light", "normal", "aggressive"
-    min_silence_ms: Optional[int] = None
+    min_silence_ms: int | None = None
 
 
 @router.post("/{project_id}/segments/{segment_id}/analyze-jump-cuts")
@@ -969,15 +971,15 @@ async def analyze_jump_cuts(
     db: AsyncSession = Depends(get_db)
 ) -> dict:
     """Analyze a segment for potential jump cuts (preview before export)."""
-    from forge_engine.services.jump_cuts import JumpCutEngine, JumpCutConfig
-    
+    from forge_engine.services.jump_cuts import JumpCutConfig, JumpCutEngine
+
     # Get project
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
-    
+
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     # Get segment
     result = await db.execute(
         select(Segment)
@@ -985,20 +987,20 @@ async def analyze_jump_cuts(
         .where(Segment.project_id == project_id)
     )
     segment = result.scalar_one_or_none()
-    
+
     if not segment:
         raise HTTPException(status_code=404, detail="Segment not found")
-    
+
     # Build config
     config = JumpCutConfig.from_dict({
         "enabled": True,
         "sensitivity": request.sensitivity,
         "min_silence_ms": request.min_silence_ms,
     })
-    
+
     # Run analysis
     jump_cut_engine = JumpCutEngine.get_instance()
-    
+
     try:
         analysis = await jump_cut_engine.analyze_segment(
             audio_path=project.source_path,
@@ -1006,7 +1008,7 @@ async def analyze_jump_cuts(
             duration=segment.duration,
             config=config,
         )
-        
+
         return {
             "success": True,
             "data": {
@@ -1040,14 +1042,14 @@ async def generate_variants(
         .where(Segment.project_id == project_id)
     )
     segment = result.scalar_one_or_none()
-    
+
     if not segment:
         raise HTTPException(status_code=404, detail="Segment not found")
-    
+
     # Create variants job
     job_manager = JobManager.get_instance()
     export_service = ExportService()
-    
+
     job = await job_manager.create_job(
         job_type=JobType.GENERATE_VARIANTS,
         handler=export_service.generate_variants,
@@ -1056,7 +1058,7 @@ async def generate_variants(
         variants=request.variants,
         render_proxy=request.render_proxy,
     )
-    
+
     return {"success": True, "data": {"jobId": job.id}}
 
 
@@ -1069,31 +1071,31 @@ async def export_segment(
     """Export a segment."""
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
-    
+
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     result = await db.execute(
         select(Segment)
         .where(Segment.id == request.segment_id)
         .where(Segment.project_id == project_id)
     )
     segment = result.scalar_one_or_none()
-    
+
     if not segment:
         raise HTTPException(status_code=404, detail="Segment not found")
-    
+
     # Create export job
     job_manager = JobManager.get_instance()
     export_service = ExportService()
-    
+
     # Debug log
     logger.info(f"[API] Export request - caption_style: {request.caption_style}")
     logger.info(f"[API] Export request - layout_config: {request.layout_config}")
     logger.info(f"[API] Export request - intro_config: {request.intro_config}")
     logger.info(f"[API] Export request - music_config: {request.music_config}")
     logger.info(f"[API] Export request - jump_cut_config: {request.jump_cut_config}")
-    
+
     job = await job_manager.create_job(
         job_type=JobType.EXPORT,
         handler=export_service.run_export,
@@ -1114,21 +1116,21 @@ async def export_segment(
         music_config=request.music_config.model_dump() if request.music_config else None,
         jump_cut_config=request.jump_cut_config.model_dump() if request.jump_cut_config else None,
     )
-    
+
     return {"success": True, "data": {"jobId": job.id}}
 
 
 class MultiExportRequest(BaseModel):
     """Request body for multi-variant export."""
     segment_id: str
-    styles: Optional[List[str]] = None  # Default: ["viral", "clean", "impact"]
+    styles: list[str] | None = None  # Default: ["viral", "clean", "impact"]
     platform: str = "tiktok"
     include_captions: bool = True
     burn_subtitles: bool = True
     use_nvenc: bool = True
-    layout_config: Optional[LayoutConfigRequest] = None
-    intro_config: Optional[IntroConfigRequest] = None
-    music_config: Optional[MusicConfigRequest] = None
+    layout_config: LayoutConfigRequest | None = None
+    intro_config: IntroConfigRequest | None = None
+    music_config: MusicConfigRequest | None = None
 
 
 @router.post("/{project_id}/export-variants")
@@ -1140,26 +1142,26 @@ async def export_all_variants(
     """Export a segment with all 3 style variants (VIRAL, CLEAN, IMPACT)."""
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
-    
+
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     result = await db.execute(
         select(Segment)
         .where(Segment.id == request.segment_id)
         .where(Segment.project_id == project_id)
     )
     segment = result.scalar_one_or_none()
-    
+
     if not segment:
         raise HTTPException(status_code=404, detail="Segment not found")
-    
+
     # Create multi-export job
     job_manager = JobManager.get_instance()
     export_service = ExportService()
-    
+
     logger.info(f"[API] Multi-export request for segment {request.segment_id} with styles: {request.styles or ['viral', 'clean', 'impact']}")
-    
+
     job = await job_manager.create_job(
         job_type=JobType.EXPORT,
         handler=export_service.generate_all_variants,
@@ -1174,7 +1176,7 @@ async def export_all_variants(
         intro_config=request.intro_config.model_dump() if request.intro_config else None,
         music_config=request.music_config.model_dump() if request.music_config else None,
     )
-    
+
     return {"success": True, "data": {"jobId": job.id, "variants": request.styles or ["viral", "clean", "impact"]}}
 
 
@@ -1199,23 +1201,23 @@ async def batch_export_all_clips(
 ) -> dict:
     """
     WORLD CLASS BATCH EXPORT - Export all high-scoring clips in one click.
-    
+
     This is the simplified workflow for viral content creation:
     1. Analyzes all segments with score >= min_score
     2. Exports top max_clips with viral_pro style
     3. Generates covers and metadata automatically
-    
+
     Returns job ID to track progress via WebSocket.
     """
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
-    
+
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     if project.status not in ("analyzed", "ready"):
         raise HTTPException(status_code=400, detail="Project must be analyzed first")
-    
+
     # Count available segments
     count_result = await db.execute(
         select(func.count())
@@ -1224,7 +1226,7 @@ async def batch_export_all_clips(
         .where(Segment.score_total >= request.min_score)
     )
     available_count = count_result.scalar() or 0
-    
+
     if available_count == 0:
         return {
             "success": True,
@@ -1233,13 +1235,13 @@ async def batch_export_all_clips(
                 "availableCount": 0
             }
         }
-    
+
     # Create batch export job
     job_manager = JobManager.get_instance()
     export_service = ExportService()
-    
+
     logger.info(f"[API] Batch export for project {project_id}: {available_count} segments available, exporting top {request.max_clips} with style '{request.style}'")
-    
+
     job = await job_manager.create_job(
         job_type=JobType.EXPORT,
         handler=export_service.batch_export_all,
@@ -1254,7 +1256,7 @@ async def batch_export_all_clips(
         include_metadata=request.include_metadata,
         use_nvenc=request.use_nvenc,
     )
-    
+
     return {
         "success": True,
         "data": {
@@ -1276,48 +1278,50 @@ async def get_project_thumbnail(
     db: AsyncSession = Depends(get_db)
 ):
     """Generate a thumbnail from project video at specified time."""
-    from fastapi.responses import FileResponse, Response
-    from pathlib import Path
-    from forge_engine.core.config import settings
-    import subprocess
     import hashlib
-    
+    import subprocess
+    from pathlib import Path
+
+    from fastapi.responses import FileResponse
+
+    from forge_engine.core.config import settings
+
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
-    
+
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    
+
     # Check if project has a stored thumbnail
     if project.thumbnail_path and Path(project.thumbnail_path).exists():
         return FileResponse(
             project.thumbnail_path,
             media_type="image/jpeg"
         )
-    
+
     # Try to find proxy or source video
     project_dir = settings.LIBRARY_PATH / "projects" / project_id
     proxy_path = project_dir / "proxy" / "proxy.mp4"
     source_path = Path(project.source_path) if project.source_path else None
-    
+
     video_path = None
     if proxy_path.exists():
         video_path = proxy_path
     elif source_path and source_path.exists():
         video_path = source_path
-    
+
     if not video_path:
         # Return placeholder
         raise HTTPException(status_code=404, detail="No video found for thumbnail")
-    
+
     # Generate thumbnail using FFmpeg
     cache_dir = project_dir / "cache" / "thumbnails"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Cache key based on time and size
     cache_key = hashlib.md5(f"{time}_{width}_{height}".encode()).hexdigest()[:8]
     thumb_path = cache_dir / f"thumb_{cache_key}.jpg"
-    
+
     if not thumb_path.exists():
         try:
             cmd = [
@@ -1333,10 +1337,10 @@ async def get_project_thumbnail(
         except Exception as e:
             logger.error(f"Failed to generate thumbnail: {e}")
             raise HTTPException(status_code=500, detail="Failed to generate thumbnail")
-    
+
     if thumb_path.exists():
         return FileResponse(thumb_path, media_type="image/jpeg")
-    
+
     raise HTTPException(status_code=500, detail="Thumbnail generation failed")
 
 
@@ -1352,7 +1356,7 @@ async def list_artifacts(
         .order_by(Artifact.created_at.desc())
     )
     artifacts = result.scalars().all()
-    
+
     return {"success": True, "data": [a.to_dict() for a in artifacts]}
 
 
@@ -1363,8 +1367,8 @@ async def get_artifact_qc(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Run QC check on a specific export artifact."""
-    from forge_engine.services.qc import QCService
     from forge_engine.core.config import settings
+    from forge_engine.services.qc import QCService
 
     result = await db.execute(
         select(Artifact)
@@ -1392,24 +1396,25 @@ async def serve_artifact_file(
     db: AsyncSession = Depends(get_db)
 ):
     """Serve an artifact file (video, cover, etc.)."""
+    from pathlib import Path
+
     from fastapi import HTTPException
     from fastapi.responses import FileResponse
-    from pathlib import Path
-    
+
     result = await db.execute(
         select(Artifact)
         .where(Artifact.id == artifact_id)
         .where(Artifact.project_id == project_id)
     )
     artifact = result.scalar_one_or_none()
-    
+
     if not artifact:
         raise HTTPException(status_code=404, detail="Artifact not found")
-    
+
     file_path = Path(artifact.path)
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
-    
+
     # Determine media type based on artifact type
     media_types = {
         "video": "video/mp4",
@@ -1418,7 +1423,7 @@ async def serve_artifact_file(
         "audio": "audio/wav",
     }
     media_type = media_types.get(artifact.type, "application/octet-stream")
-    
+
     return FileResponse(
         file_path,
         media_type=media_type,

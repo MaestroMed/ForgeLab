@@ -11,9 +11,8 @@ Supports:
 
 import asyncio
 import logging
-import subprocess
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -26,20 +25,20 @@ class GPUInfo:
     total_vram_gb: float
     free_vram_gb: float
     used_vram_gb: float
-    temperature: Optional[int]
-    power_draw: Optional[float]
-    utilization: Optional[int]
-    
+    temperature: int | None
+    power_draw: float | None
+    utilization: int | None
+
     @property
     def vram_usage_percent(self) -> float:
         return (self.used_vram_gb / self.total_vram_gb * 100) if self.total_vram_gb > 0 else 0
-    
+
     @property
     def is_available(self) -> bool:
         """Check if GPU has enough free VRAM for Whisper."""
         # Need at least 4GB free for Whisper large-v3
         return self.free_vram_gb >= 4.0
-    
+
     @property
     def recommended_batch_size(self) -> int:
         """Get recommended Whisper batch size based on VRAM."""
@@ -66,40 +65,40 @@ class GPUAllocation:
 
 class GPUManager:
     """Manages GPU resources for multi-GPU systems.
-    
+
     Features:
     - Automatic GPU detection
     - VRAM tracking
     - Load balancing across GPUs
     - Device reservation for tasks
     """
-    
+
     _instance: Optional["GPUManager"] = None
-    
+
     def __init__(self):
-        self._gpus: List[GPUInfo] = []
-        self._allocations: Dict[str, GPUAllocation] = {}
+        self._gpus: list[GPUInfo] = []
+        self._allocations: dict[str, GPUAllocation] = {}
         self._lock = asyncio.Lock()
         self._initialized = False
-    
+
     @classmethod
     def get_instance(cls) -> "GPUManager":
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
-    
+
     async def initialize(self) -> bool:
         """Initialize GPU detection."""
         if self._initialized:
             return True
-        
+
         async with self._lock:
             if self._initialized:
                 return True
-            
+
             self._gpus = await self._detect_gpus()
             self._initialized = True
-            
+
             if self._gpus:
                 logger.info(
                     "GPU Manager initialized: %d GPU(s) detected",
@@ -112,13 +111,13 @@ class GPUManager:
                     )
             else:
                 logger.warning("No GPUs detected, will use CPU")
-            
+
             return bool(self._gpus)
-    
-    async def _detect_gpus(self) -> List[GPUInfo]:
+
+    async def _detect_gpus(self) -> list[GPUInfo]:
         """Detect available NVIDIA GPUs using nvidia-smi."""
         gpus = []
-        
+
         try:
             # Query nvidia-smi for GPU info
             result = await asyncio.create_subprocess_exec(
@@ -129,15 +128,15 @@ class GPUManager:
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await result.communicate()
-            
+
             if result.returncode != 0:
                 logger.warning("nvidia-smi failed: %s", stderr.decode())
                 return []
-            
+
             for line in stdout.decode().strip().split("\n"):
                 if not line.strip():
                     continue
-                
+
                 parts = [p.strip() for p in line.split(",")]
                 if len(parts) >= 5:
                     try:
@@ -153,89 +152,89 @@ class GPUManager:
                         ))
                     except (ValueError, IndexError) as e:
                         logger.warning("Failed to parse GPU info: %s", e)
-        
+
         except FileNotFoundError:
             logger.warning("nvidia-smi not found, no NVIDIA GPU support")
         except Exception as e:
             logger.exception("GPU detection failed: %s", e)
-        
+
         return gpus
-    
-    async def refresh_gpu_status(self) -> List[GPUInfo]:
+
+    async def refresh_gpu_status(self) -> list[GPUInfo]:
         """Refresh GPU status (VRAM, temperature, etc.)."""
         self._gpus = await self._detect_gpus()
         return self._gpus
-    
+
     @property
     def gpu_count(self) -> int:
         """Number of detected GPUs."""
         return len(self._gpus)
-    
+
     @property
-    def gpus(self) -> List[GPUInfo]:
+    def gpus(self) -> list[GPUInfo]:
         """List of detected GPUs."""
         return self._gpus.copy()
-    
+
     @property
     def has_cuda(self) -> bool:
         """Check if any CUDA GPU is available."""
         return len(self._gpus) > 0
-    
+
     @property
     def total_vram_gb(self) -> float:
         """Total VRAM across all GPUs."""
         return sum(gpu.total_vram_gb for gpu in self._gpus)
-    
+
     @property
     def free_vram_gb(self) -> float:
         """Free VRAM across all GPUs."""
         return sum(gpu.free_vram_gb for gpu in self._gpus)
-    
-    def get_best_gpu(self, min_free_vram_gb: float = 4.0) -> Optional[GPUInfo]:
+
+    def get_best_gpu(self, min_free_vram_gb: float = 4.0) -> GPUInfo | None:
         """Get the best available GPU for a task.
-        
+
         Returns the GPU with the most free VRAM that meets the minimum requirement.
         """
         available = [
             gpu for gpu in self._gpus
             if gpu.free_vram_gb >= min_free_vram_gb
         ]
-        
+
         if not available:
             return None
-        
+
         # Sort by free VRAM (most free first)
         return max(available, key=lambda g: g.free_vram_gb)
-    
-    def get_gpu(self, index: int) -> Optional[GPUInfo]:
+
+    def get_gpu(self, index: int) -> GPUInfo | None:
         """Get GPU by index."""
         for gpu in self._gpus:
             if gpu.index == index:
                 return gpu
         return None
-    
+
     async def allocate_gpu(
         self,
         task_id: str,
         task_type: str,
         min_vram_gb: float = 4.0,
-        preferred_gpu: Optional[int] = None
-    ) -> Optional[int]:
+        preferred_gpu: int | None = None
+    ) -> int | None:
         """Allocate a GPU for a task.
-        
+
         Args:
             task_id: Unique task identifier
             task_type: Type of task ("whisper", "ffmpeg", etc.)
             min_vram_gb: Minimum required free VRAM
             preferred_gpu: Preferred GPU index (if available)
-            
+
         Returns:
             GPU index if allocated, None if no GPU available
         """
         async with self._lock:
             # Refresh GPU status
             await self.refresh_gpu_status()
-            
+
             # Try preferred GPU first
             if preferred_gpu is not None:
                 gpu = self.get_gpu(preferred_gpu)
@@ -251,7 +250,7 @@ class GPUManager:
                         preferred_gpu, gpu.name, task_id
                     )
                     return preferred_gpu
-            
+
             # Get best available GPU
             best = self.get_best_gpu(min_vram_gb)
             if best:
@@ -266,13 +265,13 @@ class GPUManager:
                     best.index, best.name, task_id
                 )
                 return best.index
-            
+
             logger.warning(
                 "No GPU available for task %s (need %.1f GB free)",
                 task_id, min_vram_gb
             )
             return None
-    
+
     async def release_gpu(self, task_id: str):
         """Release GPU allocation for a task."""
         async with self._lock:
@@ -282,30 +281,30 @@ class GPUManager:
                     "Released GPU %d from task %s",
                     allocation.gpu_index, task_id
                 )
-    
+
     def get_optimal_batch_size(self, gpu_index: int = 0) -> int:
         """Get optimal Whisper batch size for a GPU."""
         gpu = self.get_gpu(gpu_index)
         if gpu:
             return gpu.recommended_batch_size
         return 16  # Default
-    
+
     def get_cuda_device_string(self, gpu_index: int = 0) -> str:
         """Get CUDA device string for PyTorch/ctranslate2."""
         if self.has_cuda:
             return f"cuda:{gpu_index}"
         return "cpu"
-    
+
     def get_whisper_device_config(
         self,
         gpu_index: int = 0
-    ) -> Dict[str, any]:
+    ) -> dict[str, any]:
         """Get Whisper configuration for a specific GPU.
-        
+
         Returns optimized settings based on GPU capabilities.
         """
         gpu = self.get_gpu(gpu_index)
-        
+
         if not gpu:
             return {
                 "device": "cpu",
@@ -313,7 +312,7 @@ class GPUManager:
                 "batch_size": 1,
                 "num_workers": 1
             }
-        
+
         # Determine compute type based on GPU generation
         # RTX 30xx/40xx/50xx support efficient int8
         name_lower = gpu.name.lower()
@@ -321,10 +320,10 @@ class GPUManager:
             compute_type = "int8_float16"  # Best for modern GPUs
         else:
             compute_type = "float16"
-        
+
         # Determine batch size based on VRAM
         batch_size = gpu.recommended_batch_size
-        
+
         # Determine workers based on VRAM
         if gpu.total_vram_gb >= 24:
             num_workers = 4
@@ -332,18 +331,18 @@ class GPUManager:
             num_workers = 2
         else:
             num_workers = 1
-        
+
         return {
             "device": f"cuda:{gpu_index}",
             "compute_type": compute_type,
             "batch_size": batch_size,
             "num_workers": num_workers
         }
-    
-    async def get_status(self) -> Dict:
+
+    async def get_status(self) -> dict:
         """Get current GPU manager status."""
         await self.refresh_gpu_status()
-        
+
         return {
             "gpu_count": self.gpu_count,
             "has_cuda": self.has_cuda,

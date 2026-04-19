@@ -1,26 +1,26 @@
 """Social Media Publishing Service for TikTok, YouTube, Instagram."""
 
-import asyncio
 import logging
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 
-class Platform(str, Enum):
+class Platform(StrEnum):
     """Supported social media platforms."""
     TIKTOK = "tiktok"
     YOUTUBE = "youtube"
     INSTAGRAM = "instagram"
 
 
-class PublishStatus(str, Enum):
+class PublishStatus(StrEnum):
     """Publishing status."""
     PENDING = "pending"
     UPLOADING = "uploading"
@@ -35,10 +35,10 @@ class PlatformCredentials:
     """OAuth credentials for a platform."""
     platform: Platform
     access_token: str
-    refresh_token: Optional[str] = None
-    expires_at: Optional[datetime] = None
-    user_id: Optional[str] = None
-    username: Optional[str] = None
+    refresh_token: str | None = None
+    expires_at: datetime | None = None
+    user_id: str | None = None
+    username: str | None = None
 
 
 @dataclass
@@ -47,10 +47,10 @@ class PublishRequest:
     video_path: str
     title: str
     description: str
-    hashtags: List[str]
+    hashtags: list[str]
     platform: Platform
-    thumbnail_path: Optional[str] = None
-    schedule_time: Optional[datetime] = None
+    thumbnail_path: str | None = None
+    schedule_time: datetime | None = None
     privacy: str = "public"  # public, private, unlisted (YouTube)
 
 
@@ -60,52 +60,52 @@ class PublishResult:
     success: bool
     platform: Platform
     status: PublishStatus
-    video_id: Optional[str] = None
-    video_url: Optional[str] = None
-    error: Optional[str] = None
-    published_at: Optional[datetime] = None
+    video_id: str | None = None
+    video_url: str | None = None
+    error: str | None = None
+    published_at: datetime | None = None
 
 
 class SocialPublishService:
     """
     Service for publishing clips to social media platforms.
-    
+
     Supports:
     - TikTok (via TikTok for Developers API)
     - YouTube (via YouTube Data API v3)
     - Instagram (via Instagram Basic Display API / Graph API)
     """
-    
+
     # API endpoints
     TIKTOK_API = "https://open.tiktokapis.com/v2"
     YOUTUBE_API = "https://www.googleapis.com/youtube/v3"
     INSTAGRAM_API = "https://graph.instagram.com"
-    
+
     _instance: Optional["SocialPublishService"] = None
-    
+
     def __init__(self):
-        self.credentials: Dict[Platform, PlatformCredentials] = {}
+        self.credentials: dict[Platform, PlatformCredentials] = {}
         self._client = httpx.AsyncClient(timeout=60.0)
-    
+
     @classmethod
     def get_instance(cls) -> "SocialPublishService":
         """Get singleton instance."""
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
-    
+
     def is_authenticated(self, platform: Platform) -> bool:
         """Check if authenticated with a platform."""
         cred = self.credentials.get(platform)
         if not cred:
             return False
-        
+
         # Check expiration
         if cred.expires_at and datetime.now() > cred.expires_at:
             return False
-        
+
         return True
-    
+
     async def authenticate(
         self,
         platform: Platform,
@@ -113,16 +113,16 @@ class SocialPublishService:
     ) -> bool:
         """
         Authenticate with a platform.
-        
+
         Args:
             platform: Target platform
             credentials: OAuth credentials
-        
+
         Returns:
             True if authentication successful
         """
         self.credentials[platform] = credentials
-        
+
         # Validate credentials by making a test API call
         try:
             if platform == Platform.YOUTUBE:
@@ -138,7 +138,7 @@ class SocialPublishService:
                         credentials.user_id = data["items"][0]["id"]
                         credentials.username = data["items"][0]["snippet"]["title"]
                         return True
-            
+
             elif platform == Platform.TIKTOK:
                 # Test TikTok auth
                 response = await self._client.get(
@@ -152,7 +152,7 @@ class SocialPublishService:
                         credentials.user_id = user.get("open_id")
                         credentials.username = user.get("display_name")
                         return True
-            
+
             elif platform == Platform.INSTAGRAM:
                 # Test Instagram auth
                 response = await self._client.get(
@@ -167,24 +167,24 @@ class SocialPublishService:
                     credentials.user_id = data.get("id")
                     credentials.username = data.get("username")
                     return True
-        
+
         except Exception as e:
             logger.error(f"Authentication failed for {platform}: {e}")
-        
+
         return False
-    
+
     async def publish(
         self,
         request: PublishRequest,
-        progress_callback: Optional[Callable[[float, str], None]] = None
+        progress_callback: Callable[[float, str], None] | None = None
     ) -> PublishResult:
         """
         Publish a video to a social media platform.
-        
+
         Args:
             request: Publish request with video and metadata
             progress_callback: Progress callback (percent, message)
-        
+
         Returns:
             PublishResult with status and video URL
         """
@@ -195,19 +195,19 @@ class SocialPublishService:
                 status=PublishStatus.FAILED,
                 error="Not authenticated with platform"
             )
-        
+
         credentials = self.credentials[request.platform]
-        
+
         try:
             if request.platform == Platform.YOUTUBE:
                 return await self._publish_youtube(request, credentials, progress_callback)
-            
+
             elif request.platform == Platform.TIKTOK:
                 return await self._publish_tiktok(request, credentials, progress_callback)
-            
+
             elif request.platform == Platform.INSTAGRAM:
                 return await self._publish_instagram(request, credentials, progress_callback)
-            
+
             else:
                 return PublishResult(
                     success=False,
@@ -215,7 +215,7 @@ class SocialPublishService:
                     status=PublishStatus.FAILED,
                     error=f"Unsupported platform: {request.platform}"
                 )
-        
+
         except Exception as e:
             logger.error(f"Publish failed: {e}")
             return PublishResult(
@@ -224,22 +224,22 @@ class SocialPublishService:
                 status=PublishStatus.FAILED,
                 error=str(e)
             )
-    
+
     async def _publish_youtube(
         self,
         request: PublishRequest,
         credentials: PlatformCredentials,
-        progress_callback: Optional[Callable[[float, str], None]] = None
+        progress_callback: Callable[[float, str], None] | None = None
     ) -> PublishResult:
         """Publish to YouTube using YouTube Data API."""
         if progress_callback:
             progress_callback(5, "Préparation de l'upload YouTube...")
-        
+
         # Build description with hashtags
         description = request.description
         if request.hashtags:
             description += "\n\n" + " ".join(request.hashtags)
-        
+
         # Video metadata
         metadata = {
             "snippet": {
@@ -253,14 +253,14 @@ class SocialPublishService:
                 "selfDeclaredMadeForKids": False
             }
         }
-        
+
         if progress_callback:
             progress_callback(10, "Upload de la vidéo...")
-        
+
         # Upload video (resumable upload)
         # Note: This is a simplified version. Production would use resumable uploads.
         video_path = Path(request.video_path)
-        
+
         if not video_path.exists():
             return PublishResult(
                 success=False,
@@ -268,7 +268,7 @@ class SocialPublishService:
                 status=PublishStatus.FAILED,
                 error="Video file not found"
             )
-        
+
         # Start upload
         headers = {
             "Authorization": f"Bearer {credentials.access_token}",
@@ -276,14 +276,14 @@ class SocialPublishService:
             "X-Upload-Content-Type": "video/mp4",
             "X-Upload-Content-Length": str(video_path.stat().st_size)
         }
-        
+
         init_response = await self._client.post(
             f"{self.YOUTUBE_API}/videos",
             params={"uploadType": "resumable", "part": "snippet,status"},
             headers=headers,
             json=metadata
         )
-        
+
         if init_response.status_code not in (200, 308):
             return PublishResult(
                 success=False,
@@ -291,7 +291,7 @@ class SocialPublishService:
                 status=PublishStatus.FAILED,
                 error=f"Upload init failed: {init_response.text[:200]}"
             )
-        
+
         upload_url = init_response.headers.get("Location")
         if not upload_url:
             return PublishResult(
@@ -300,27 +300,27 @@ class SocialPublishService:
                 status=PublishStatus.FAILED,
                 error="No upload URL returned"
             )
-        
+
         if progress_callback:
             progress_callback(30, "Transfert de la vidéo...")
-        
+
         # Upload video content
         with open(video_path, "rb") as f:
             video_data = f.read()
-        
+
         upload_response = await self._client.put(
             upload_url,
             content=video_data,
             headers={"Content-Type": "video/mp4"}
         )
-        
+
         if progress_callback:
             progress_callback(90, "Finalisation...")
-        
+
         if upload_response.status_code == 200:
             data = upload_response.json()
             video_id = data.get("id")
-            
+
             return PublishResult(
                 success=True,
                 platform=Platform.YOUTUBE,
@@ -329,75 +329,75 @@ class SocialPublishService:
                 video_url=f"https://youtube.com/shorts/{video_id}",
                 published_at=datetime.now()
             )
-        
+
         return PublishResult(
             success=False,
             platform=Platform.YOUTUBE,
             status=PublishStatus.FAILED,
             error=f"Upload failed: {upload_response.text[:200]}"
         )
-    
+
     async def _publish_tiktok(
         self,
         request: PublishRequest,
         credentials: PlatformCredentials,
-        progress_callback: Optional[Callable[[float, str], None]] = None
+        progress_callback: Callable[[float, str], None] | None = None
     ) -> PublishResult:
         """Publish to TikTok using TikTok API."""
         if progress_callback:
             progress_callback(5, "Préparation de l'upload TikTok...")
-        
+
         # TikTok requires a specific upload flow
         # 1. Initialize upload
         # 2. Upload video
         # 3. Create post
-        
+
         # Note: TikTok API has limitations and requires app review
         # This is a placeholder implementation
-        
+
         return PublishResult(
             success=False,
             platform=Platform.TIKTOK,
             status=PublishStatus.FAILED,
             error="TikTok API integration requires app review. Use manual upload for now."
         )
-    
+
     async def _publish_instagram(
         self,
         request: PublishRequest,
         credentials: PlatformCredentials,
-        progress_callback: Optional[Callable[[float, str], None]] = None
+        progress_callback: Callable[[float, str], None] | None = None
     ) -> PublishResult:
         """Publish to Instagram using Graph API."""
         if progress_callback:
             progress_callback(5, "Préparation de l'upload Instagram...")
-        
+
         # Instagram Reels require hosted video URL
         # This requires:
         # 1. Upload video to a public URL
         # 2. Create media container
         # 3. Publish container
-        
+
         # Note: Requires Instagram Business/Creator account + Facebook App
-        
+
         return PublishResult(
             success=False,
             platform=Platform.INSTAGRAM,
             status=PublishStatus.FAILED,
             error="Instagram API requires Business account and Facebook App setup."
         )
-    
+
     async def get_publishing_status(
         self,
         platform: Platform,
         video_id: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Get publishing status for a video."""
         if not self.is_authenticated(platform):
             return None
-        
+
         credentials = self.credentials[platform]
-        
+
         if platform == Platform.YOUTUBE:
             response = await self._client.get(
                 f"{self.YOUTUBE_API}/videos",
@@ -407,14 +407,14 @@ class SocialPublishService:
                 },
                 headers={"Authorization": f"Bearer {credentials.access_token}"}
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
                 if data.get("items"):
                     return data["items"][0]
-        
+
         return None
-    
+
     async def close(self):
         """Close HTTP client."""
         await self._client.aclose()
