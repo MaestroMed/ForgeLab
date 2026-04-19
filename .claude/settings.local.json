@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(python3)",
+      "Bash(ls src/components/project/Segment*.tsx src/components/project/SegmentScore*.tsx)",
+      "Bash(pnpm add:*)",
+      "Bash(python3 -c \"import sys,json; [print\\(json.loads\\(l\\).get\\('message',{}\\).get\\('content',''\\)[:500] if isinstance\\(json.loads\\(l\\).get\\('message',{}\\).get\\('content',''\\), str\\) else ''\\) for l in sys.stdin if l.strip\\(\\)]\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:d[k] for k in ['scripts','engines'] if k in d}, indent=2\\)\\)\")"
+    ]
+  }
+}
