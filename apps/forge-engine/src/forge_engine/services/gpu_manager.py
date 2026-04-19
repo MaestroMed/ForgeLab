@@ -282,6 +282,29 @@ class GPUManager:
                     allocation.gpu_index, task_id
                 )
 
+    def release_vram(self) -> None:
+        """Release unused VRAM after heavy operations."""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                logger.info("Released VRAM")
+        except Exception as e:
+            logger.debug("VRAM release skipped: %s", e)
+
+    def get_vram_usage(self) -> dict:
+        """Get current VRAM usage in MB."""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                allocated = torch.cuda.memory_allocated() / 1024 / 1024
+                reserved = torch.cuda.memory_reserved() / 1024 / 1024
+                return {"allocated_mb": round(allocated), "reserved_mb": round(reserved)}
+        except Exception:
+            pass
+        return {"allocated_mb": 0, "reserved_mb": 0}
+
     def get_optimal_batch_size(self, gpu_index: int = 0) -> int:
         """Get optimal Whisper batch size for a GPU."""
         gpu = self.get_gpu(gpu_index)

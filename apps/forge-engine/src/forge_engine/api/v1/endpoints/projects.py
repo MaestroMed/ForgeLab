@@ -148,6 +148,7 @@ class ImportUrlRequest(BaseModel):
     auto_ingest: bool = True
     auto_analyze: bool = True
     dictionary_name: str | None = None  # Named dictionary (e.g. "etostark")
+    custom_name: str | None = None  # Optional project name override (defaults to video title)
 
 
 # Endpoints
@@ -197,9 +198,10 @@ async def import_from_url(
     if not info:
         raise HTTPException(status_code=400, detail="Impossible de récupérer les informations de la vidéo")
 
-    # Create project with placeholder
+    # Create project with placeholder — honour custom_name override when provided
+    project_name = (request.custom_name or "").strip() or info.title
     project = Project(
-        name=info.title,
+        name=project_name,
         source_path="",  # Will be updated after download
         source_filename=f"{info.title}.mp4",
         status="downloading",
@@ -457,6 +459,82 @@ async def delete_project(
     logger.info(f"Deleted project: {project_name} ({project_id})")
 
     return {"success": True, "message": f"Projet '{project_name}' supprimé"}
+
+
+@router.post("/{project_id}/auto-rename")
+async def suggest_project_rename(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Suggest a better project name based on top-scoring segment topics/tags.
+
+    This is a read-only suggestion — the client can present it to the user
+    as a rename prompt. Nothing is written to the database.
+    """
+    from collections import Counter
+    from datetime import datetime
+
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Get top 3 segments by score
+    result = await db.execute(
+        select(Segment)
+        .where(Segment.project_id == project_id)
+        .order_by(Segment.score_total.desc())
+        .limit(3)
+    )
+    segments = result.scalars().all()
+
+    if not segments:
+        return {"current_name": project.name, "suggestion": None, "confidence": "none"}
+
+    # Prefer topic labels when present (structured output from virality scorer);
+    # fall back to score_tags if no labels are set.
+    topic_counter: Counter[str] = Counter()
+    for seg in segments:
+        if seg.topic_label:
+            topic_counter[seg.topic_label.strip().lower()] += 1
+
+    tag_counter: Counter[str] = Counter()
+    for seg in segments:
+        tags = seg.score_tags if isinstance(seg.score_tags, list) else []
+        for t in tags:
+            if isinstance(t, str) and t.strip():
+                tag_counter[t.strip().lower()] += 1
+
+    # Prefer topic labels over raw tags
+    top_topics = [t for t, _ in topic_counter.most_common(2)]
+    top_tags = [t for t, _ in tag_counter.most_common(2)]
+
+    date_str = project.created_at.strftime("%d %b") if project.created_at else ""
+    suggestion: str | None = None
+    confidence = "low"
+
+    if top_topics:
+        suggestion = f"{' • '.join(top_topics).title()} — {date_str}".strip(" —")
+        confidence = "high"
+    elif top_tags:
+        suggestion = f"{' '.join(top_tags).title()} — {date_str}".strip(" —")
+        confidence = "medium"
+    else:
+        # Fallback: use top segment's transcript first 5 words
+        top = segments[0]
+        if top.transcript:
+            words = top.transcript.strip().split()[:5]
+            if words:
+                suggestion = " ".join(words)
+                confidence = "low"
+
+    if not suggestion:
+        return {"current_name": project.name, "suggestion": None, "confidence": "none"}
+
+    return {
+        "current_name": project.name,
+        "suggestion": suggestion[:100],
+        "confidence": confidence,
+    }
 
 
 @router.post("/{project_id}/ingest")

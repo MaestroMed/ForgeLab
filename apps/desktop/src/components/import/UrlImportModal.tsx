@@ -49,6 +49,10 @@ export function UrlImportModal({ isOpen, onClose, onImportComplete }: UrlImportM
   const [importing, setImporting] = useState(false);
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Project name: auto-filled from video title until the user edits it manually
+  const [projectName, setProjectName] = useState('');
+  const [nameEdited, setNameEdited] = useState(false);
   
   // Load available dictionaries
   useEffect(() => {
@@ -89,7 +93,10 @@ export function UrlImportModal({ isOpen, onClose, onImportComplete }: UrlImportM
     try {
       const response = await api.getUrlInfo(inputUrl);
       if (response.success && response.data) {
-        setVideoInfo(response.data as VideoInfo);
+        const info = response.data as VideoInfo;
+        setVideoInfo(info);
+        // Auto-fill project name with video title — only if the user hasn't typed their own name
+        setProjectName((prev) => (nameEdited ? prev : info.title || prev));
       } else {
         setError(response.error || 'URL non reconnue');
         setVideoInfo(null);
@@ -100,7 +107,7 @@ export function UrlImportModal({ isOpen, onClose, onImportComplete }: UrlImportM
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [nameEdited]);
   
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -118,12 +125,19 @@ export function UrlImportModal({ isOpen, onClose, onImportComplete }: UrlImportM
     setImporting(true);
     
     try {
+      // Only send a custom_name if the user edited it away from the auto-filled video title
+      const overrideName =
+        nameEdited && projectName.trim() && projectName.trim() !== (videoInfo.title || '').trim()
+          ? projectName.trim()
+          : undefined;
+
       const response = await api.importFromUrl(
-        url, 
-        quality, 
-        autoIngest, 
+        url,
+        quality,
+        autoIngest,
         autoAnalyze,
-        selectedDictionary || undefined
+        selectedDictionary || undefined,
+        overrideName,
       );
       
       if (response.success && response.data) {
@@ -305,6 +319,28 @@ export function UrlImportModal({ isOpen, onClose, onImportComplete }: UrlImportM
             {/* Options */}
             {videoInfo && (
               <div className="space-y-4">
+                {/* Project name — auto-filled from title, editable */}
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
+                    Nom personnalisé
+                    {!nameEdited && (
+                      <span className="ml-2 text-xs font-normal text-[var(--text-muted)]">
+                        (rempli automatiquement depuis le titre)
+                      </span>
+                    )}
+                  </label>
+                  <input
+                    type="text"
+                    value={projectName}
+                    onChange={(e) => {
+                      setProjectName(e.target.value);
+                      setNameEdited(true);
+                    }}
+                    placeholder={videoInfo.title || 'Nom du projet'}
+                    className="w-full px-4 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                  />
+                </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   {/* Quality */}
                   <div>

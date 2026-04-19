@@ -6,6 +6,7 @@ import { Card, CardContent } from '@/components/ui/Card';
 import { Progress } from '@/components/ui/Progress';
 import { api } from '@/lib/api';
 import { ENGINE_BASE_URL } from '@/lib/config';
+import { formatEta } from '@/lib/utils';
 import { useJobsStore, useToastStore } from '@/store';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -74,10 +75,14 @@ export default function AnalyzePanel({ project, onJobStart, onComplete }: Analyz
       }
     } catch (error) {
       console.error('Analysis failed:', error);
+      const detail =
+        error instanceof Error
+          ? error.message
+          : "Impossible de contacter le moteur. Vérifiez qu'il est en ligne.";
       addToast({
         type: 'error',
-        title: 'Erreur d\'analyse',
-        message: error instanceof Error ? error.message : 'Impossible de démarrer l\'analyse',
+        title: "Démarrage de l'analyse échoué",
+        message: `L'analyse (Whisper ${options.whisperModel}) n'a pas pu démarrer. ${detail}`,
       });
     }
   };
@@ -129,6 +134,11 @@ export default function AnalyzePanel({ project, onJobStart, onComplete }: Analyz
                   </div>
                   <span className="ml-auto text-lg font-bold text-[var(--text-primary)]">
                     {activeJob.progress.toFixed(0)}%
+                    {formatEta(activeJob.etaSeconds) && (
+                      <span className="ml-2 text-sm font-normal text-[var(--text-muted)]">
+                        · {formatEta(activeJob.etaSeconds)}
+                      </span>
+                    )}
                   </span>
                 </div>
                 <Progress value={activeJob.progress} />

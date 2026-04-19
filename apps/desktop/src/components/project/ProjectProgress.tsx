@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Download, HardDrive, Brain, Loader2 } from 'lucide-react';
 import { useJobsStore } from '@/store';
 import { useShallow } from 'zustand/react/shallow';
+import { formatEta } from '@/lib/utils';
 
 interface ProjectProgressProps {
   projectId: string;
@@ -37,28 +38,28 @@ export default function ProjectProgress({ projectId, projectStatus }: ProjectPro
   );
 
   // Calculate global progress from all jobs
-  const { globalProgress, currentPhase, isActive } = useMemo(() => {
+  const { globalProgress, currentPhase, isActive, etaSeconds } = useMemo(() => {
     // Find active or most recent job
     const activeJob = projectJobs.find((j) => j.status === 'running' || j.status === 'pending');
-    
+
     if (!activeJob) {
       // No active job - determine from project status
       if (['analyzed', 'ready'].includes(projectStatus)) {
-        return { globalProgress: 100, currentPhase: null, phaseProgress: 100, isActive: false };
+        return { globalProgress: 100, currentPhase: null, phaseProgress: 100, isActive: false, etaSeconds: null };
       }
       if (projectStatus === 'ingested') {
-        return { globalProgress: 30, currentPhase: null, phaseProgress: 100, isActive: false };
+        return { globalProgress: 30, currentPhase: null, phaseProgress: 100, isActive: false, etaSeconds: null };
       }
       if (projectStatus === 'error') {
-        return { globalProgress: 0, currentPhase: null, phaseProgress: 0, isActive: false };
+        return { globalProgress: 0, currentPhase: null, phaseProgress: 0, isActive: false, etaSeconds: null };
       }
-      return { globalProgress: 0, currentPhase: null, phaseProgress: 0, isActive: false };
+      return { globalProgress: 0, currentPhase: null, phaseProgress: 0, isActive: false, etaSeconds: null };
     }
 
     // Map job type to phase
     const jobType = activeJob.type;
     let phase: keyof typeof PHASE_WEIGHTS = 'download';
-    
+
     if (jobType === 'download') phase = 'download';
     else if (jobType === 'ingest') phase = 'ingest';
     else if (jobType === 'analyze') phase = 'analyze';
@@ -66,7 +67,7 @@ export default function ProjectProgress({ projectId, projectStatus }: ProjectPro
 
     const phaseWeight = PHASE_WEIGHTS[phase];
     const jobProgress = activeJob.progress || 0;
-    
+
     // Calculate global progress
     const phaseRange = phaseWeight.end - phaseWeight.start;
     const globalProg = phaseWeight.start + (jobProgress / 100) * phaseRange;
@@ -76,6 +77,7 @@ export default function ProjectProgress({ projectId, projectStatus }: ProjectPro
       currentPhase: phase,
       phaseProgress: jobProgress,
       isActive: activeJob.status === 'running',
+      etaSeconds: activeJob.etaSeconds ?? null,
     };
   }, [projectJobs, projectStatus]);
 
@@ -105,6 +107,9 @@ export default function ProjectProgress({ projectId, projectStatus }: ProjectPro
         </span>
         <span className="text-xs text-white/70 ml-auto tabular-nums">
           {Math.round(globalProgress)}%
+          {formatEta(etaSeconds) && (
+            <span className="ml-1 text-white/50">· {formatEta(etaSeconds)}</span>
+          )}
         </span>
       </div>
 

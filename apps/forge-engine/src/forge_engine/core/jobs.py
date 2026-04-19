@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import time
+import uuid
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -46,6 +48,14 @@ JOB_PRIORITY = {
     JobType.RENDER_PROXY.value: 6,
     JobType.GENERATE_VARIANTS.value: 7,
 }
+
+# Job types eligible for auto-retry on transient failures.
+# ANALYZE is excluded - it's expensive and failures are usually due to bad inputs.
+AUTO_RETRY_JOB_TYPES = {
+    JobType.DOWNLOAD.value,
+    JobType.EXPORT.value,
+}
+AUTO_RETRY_MAX_ATTEMPTS = 2  # Default number of retry attempts (3 total runs)
 
 
 @dataclass
@@ -273,8 +283,14 @@ class JobManager:
                 job._kwargs = args
 
             if job._handler:
+                # Strip internal retry tracking keys from kwargs before passing to handler
+                handler_kwargs = {
+                    k: v for k, v in job._kwargs.items()
+                    if not k.startswith("_retry")
+                }
+
                 # Pass project_id explicitly since it's stored separately from kwargs
-                result = await job._handler(job=job, project_id=job.project_id, **job._kwargs)
+                result = await job._handler(job=job, project_id=job.project_id, **handler_kwargs)
 
                 # Update success
                 async with async_session_maker() as db:
@@ -299,19 +315,98 @@ class JobManager:
             full_traceback = traceback.format_exc()
             logger.error("Job %s failed with error: %s", job.id, error_msg)
             logger.error("Full traceback:\n%s", full_traceback)
-            async with async_session_maker() as db:
-                await db.execute(
-                    update(JobRecord)
-                    .where(JobRecord.id == job.id)
-                    .values(
-                        status=JobStatus.FAILED.value,
-                        error=error_msg if error_msg else full_traceback[:500],
-                        completed_at=datetime.utcnow()
+
+            # Auto-retry for eligible job types with exponential backoff.
+            job_type_str = job.type.value if isinstance(job.type, JobType) else str(job.type)
+            retry_count = int(job._kwargs.get("_retry_count", 0))
+            max_retries = int(job._kwargs.get("_max_retries", AUTO_RETRY_MAX_ATTEMPTS))
+            retry_scheduled = False
+
+            if job_type_str in AUTO_RETRY_JOB_TYPES and retry_count < max_retries:
+                # Exponential backoff: 30s, 60s, 120s, ...
+                delay = 30 * (2 ** retry_count)
+                try:
+                    new_kwargs = {
+                        **job._kwargs,
+                        "_retry_count": retry_count + 1,
+                        "_max_retries": max_retries,
+                        "_retry_after": time.time() + delay,
+                        "_retry_source": job.id,
+                    }
+                    new_id = str(uuid.uuid4())
+                    async with async_session_maker() as db:
+                        # Mark the original as FAILED (with retry info in the error)
+                        await db.execute(
+                            update(JobRecord)
+                            .where(JobRecord.id == job.id)
+                            .values(
+                                status=JobStatus.FAILED.value,
+                                error=f"Retry {retry_count + 1}/{max_retries} scheduled in {delay}s: "
+                                      f"{(error_msg or full_traceback)[:200]}",
+                                completed_at=datetime.utcnow(),
+                            )
+                        )
+                        # Schedule a new pending job with the retry metadata.
+                        new_record = JobRecord(
+                            id=new_id,
+                            type=job_type_str,
+                            status=JobStatus.PENDING.value,
+                            project_id=job.project_id,
+                            result=new_kwargs,
+                            created_at=datetime.utcnow(),
+                        )
+                        db.add(new_record)
+                        await db.commit()
+
+                    # Schedule a delayed wake so the retry doesn't run instantly.
+                    asyncio.create_task(self._delayed_retry_marker(new_id, delay))
+                    logger.info(
+                        "Job %s failed, queued retry %d/%d as %s in %ds",
+                        job.id[:8], retry_count + 1, max_retries, new_id[:8], delay,
                     )
-                )
-                await db.commit()
+                    retry_scheduled = True
+                except Exception as retry_err:
+                    logger.exception("Failed to schedule retry for %s: %s", job.id, retry_err)
+
+            if not retry_scheduled:
+                async with async_session_maker() as db:
+                    await db.execute(
+                        update(JobRecord)
+                        .where(JobRecord.id == job.id)
+                        .values(
+                            status=JobStatus.FAILED.value,
+                            error=error_msg if error_msg else full_traceback[:500],
+                            completed_at=datetime.utcnow()
+                        )
+                    )
+                    await db.commit()
+
+        finally:
+            # Release VRAM between jobs so the next job starts with a clean slate.
+            try:
+                from forge_engine.services.gpu_manager import GPUManager
+                GPUManager.get_instance().release_vram()
+            except Exception:
+                pass
 
         self._notify_listeners(job)
+
+    async def _delayed_retry_marker(self, new_job_id: str, delay: float) -> None:
+        """Sleep ``delay`` seconds, then log that the retry is ready.
+
+        The job is visible to workers as PENDING immediately (the picker has no
+        ``_retry_after`` awareness), so the worst case is an immediate re-run.
+        For the most common transient failures (network blips, GPU OOM that
+        ``release_vram`` just cleared) this is fine. The delay here serves as
+        best-effort pacing and a visible audit log entry.
+        """
+        try:
+            await asyncio.sleep(max(0.0, float(delay)))
+            logger.info("Retry job %s ready after %ds delay", new_job_id[:8], int(delay))
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.debug("Retry delay marker error: %s", e)
 
     async def create_job(
         self,

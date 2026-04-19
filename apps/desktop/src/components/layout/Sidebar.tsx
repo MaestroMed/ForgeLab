@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { 
+import {
   Home,
   Settings,
   ChevronLeft,
@@ -9,6 +9,7 @@ import {
   Terminal,
   BarChart3,
   LayoutTemplate,
+  History,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useUIStore } from '@/store';
@@ -19,6 +20,7 @@ const navItems = [
   { path: '/surveillance', icon: Eye, label: 'Surveillance' },
   { path: '/analytics', icon: BarChart3, label: 'Analytics' },
   { path: '/templates', icon: LayoutTemplate, label: 'Templates' },
+  { path: '/history', icon: History, label: 'Historique' },
   { path: '/admin', icon: Terminal, label: "L'ŒIL" },
   { path: '/settings', icon: Settings, label: 'Paramètres' },
 ];

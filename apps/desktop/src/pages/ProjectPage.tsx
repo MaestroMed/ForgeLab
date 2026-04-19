@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { useJobsStore, useToastStore, useUIStore, useProjectsStore } from '@/store';
 import { useShallow } from 'zustand/react/shallow';
 import { useProject, QUERY_KEYS } from '@/lib/queries';
+import { api } from '@/lib/api';
 import IngestPanel from '@/components/project/IngestPanel';
 import AnalyzePanel from '@/components/project/AnalyzePanel';
 import ForgePanel from '@/components/project/ForgePanel';
@@ -37,6 +38,7 @@ export default function ProjectPage() {
   const { addToast } = useToastStore();
   const { addJob } = useJobsStore();
   const previousJobStatusRef = useRef<Record<string, string>>({});
+  const [renameSuggestionShown, setRenameSuggestionShown] = useState(false);
 
   // React Query — single source of truth for project data
   const { data: projectResponse, isLoading, isError } = useProject(id);
@@ -87,6 +89,35 @@ export default function ProjectPage() {
       refreshProject();
     }
   }, [storeProject?.status]);
+
+  // When an analyze job completes, fetch a smarter project-name suggestion
+  // and show it as a non-blocking toast. Only trigger once per project view.
+  useEffect(() => {
+    if (!project?.id || renameSuggestionShown) return;
+    const analyzeJob = projectJobs.find(
+      (j) => j.type === 'analyze' && j.status === 'completed'
+    );
+    if (!analyzeJob) return;
+
+    setRenameSuggestionShown(true);
+    api
+      .suggestProjectRename(project.id)
+      .then((res: any) => {
+        const suggestion = res?.data?.suggestion ?? res?.suggestion;
+        const currentName = res?.data?.current_name ?? res?.current_name;
+        if (suggestion && suggestion !== currentName) {
+          addToast({
+            type: 'info',
+            title: 'Suggestion de renommage',
+            message: `"${suggestion}" — cliquez Paramètres > Renommer pour appliquer.`,
+            duration: 8000,
+          });
+        }
+      })
+      .catch(() => {
+        /* non-blocking */
+      });
+  }, [projectJobs, project?.id, renameSuggestionShown, addToast]);
 
   // Panel availability logic
   const getPanelStatus = (panelId: string): 'locked' | 'available' | 'active' | 'complete' => {

@@ -338,7 +338,12 @@ export default function ForgePanel({ project }: ForgePanelProps) {
       }
     } catch (error) {
       console.error('Batch export failed:', error);
-      setBatchExportProgress({ current: 0, total: 0, status: 'Erreur lors de l\'export' });
+      const detail = error instanceof Error ? error.message : 'Erreur inconnue.';
+      setBatchExportProgress({
+        current: 0,
+        total: 0,
+        status: `Export batch échoué : ${detail}`,
+      });
     } finally {
       setBatchExportLoading(false);
     }
@@ -488,6 +493,7 @@ export default function ForgePanel({ project }: ForgePanelProps) {
           availableTags={availableTags}
           onSearchChange={setSearch}
           onTagsChange={setSelectedTags}
+          projectId={project.id}
         />
 
         {/* WORLD CLASS: Batch Export Modal */}

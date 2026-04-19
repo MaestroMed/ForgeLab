@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
 import { Zap, X, Minimize2, Maximize2, GripHorizontal } from 'lucide-react';
 import { useJobsStore, useFloatingWidgetStore, useUIStore } from '@/store';
+import { formatEta } from '@/lib/utils';
 
 const JOB_TYPE_ICONS: Record<string, string> = {
   ingest: '📥',
@@ -195,9 +196,14 @@ export default function FloatingProcessWidget() {
                           </div>
                           <span className="text-xs font-bold text-[var(--accent-color)] tabular-nums">
                             {job.progress.toFixed(0)}%
+                            {formatEta(job.etaSeconds) && (
+                              <span className="ml-1 text-[10px] font-normal text-[var(--text-muted)]">
+                                · {formatEta(job.etaSeconds)}
+                              </span>
+                            )}
                           </span>
                         </div>
-                        
+
                         <div className="h-1.5 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">
                           <motion.div
                             className="h-full bg-gradient-to-r from-emerald-500 to-cyan-500"
@@ -206,7 +212,7 @@ export default function FloatingProcessWidget() {
                             transition={{ duration: 0.3 }}
                           />
                         </div>
-                        
+
                         {job.message && (
                           <p className="text-[10px] text-[var(--text-muted)] mt-1 truncate">
                             {job.message}
@@ -238,6 +244,11 @@ export default function FloatingProcessWidget() {
                 </span>
                 <span className="text-[10px] font-bold text-[var(--accent-color)]">
                   {runningJobs[0].progress.toFixed(0)}%
+                  {formatEta(runningJobs[0].etaSeconds) && (
+                    <span className="ml-1 font-normal text-[var(--text-muted)]">
+                      · {formatEta(runningJobs[0].etaSeconds)}
+                    </span>
+                  )}
                 </span>
               </div>
               <div className="h-1 bg-[var(--bg-tertiary)] rounded-full overflow-hidden">

@@ -188,6 +188,34 @@ async def publish_artifact(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid schedule_time format")
 
+    # If a future publish time was provided, enqueue into the scheduler instead
+    # of publishing immediately.
+    if schedule is not None:
+        from forge_engine.services.publish_scheduler import PublishScheduler
+
+        scheduler = PublishScheduler.get_instance()
+        schedule_id = scheduler.schedule(
+            artifact_id=request.artifact_id,
+            project_id=request.project_id,
+            platform=request.platform,
+            title=request.title,
+            description=request.description,
+            hashtags=request.hashtags,
+            publish_at=schedule,
+            visibility=request.visibility,
+        )
+        return {
+            "success": True,
+            "status": "scheduled",
+            "platform": request.platform,
+            "schedule_id": schedule_id,
+            "scheduled_for": schedule.isoformat(),
+            "video_url": None,
+            "video_id": None,
+            "error": None,
+            "published_at": None,
+        }
+
     pub_request = PublishRequest(
         video_path=artifact.path,
         title=request.title,
@@ -208,6 +236,25 @@ async def publish_artifact(
         "error": result.error,
         "published_at": result.published_at.isoformat() if result.published_at else None,
     }
+
+
+@router.get("/schedule")
+async def list_scheduled_publishes():
+    """List pending scheduled publishes."""
+    from forge_engine.services.publish_scheduler import PublishScheduler
+    scheduler = PublishScheduler.get_instance()
+    return {"scheduled": scheduler.list_pending()}
+
+
+@router.delete("/schedule/{schedule_id}")
+async def cancel_scheduled_publish(schedule_id: str):
+    """Cancel a pending scheduled publish."""
+    from forge_engine.services.publish_scheduler import PublishScheduler
+    scheduler = PublishScheduler.get_instance()
+    success = scheduler.cancel(schedule_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Schedule entry not found")
+    return {"cancelled": True}
 
 
 @router.get("/platforms/{platform}/requirements")

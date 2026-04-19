@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useQueryClient } from '@tanstack/react-query';
-import { Download, Play, Pause, FolderOpen, CheckCircle, X, Volume2, VolumeX, RefreshCw, Sparkles, Eye, Send } from 'lucide-react';
+import { Download, Play, Pause, FolderOpen, CheckCircle, X, Volume2, VolumeX, RefreshCw, Sparkles, Eye, Send, AlertTriangle, RotateCw } from 'lucide-react';
 import { ENGINE_BASE_URL } from '@/lib/config';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
@@ -10,7 +10,7 @@ import { Card, CardContent } from '@/components/ui/Card';
 import { Progress } from '@/components/ui/Progress';
 import { SkeletonRow } from '@/components/ui/Skeleton';
 import { useArtifacts, QUERY_KEYS } from '@/lib/queries';
-import { formatFileSize, formatDate } from '@/lib/utils';
+import { formatFileSize, formatDate, formatEta } from '@/lib/utils';
 import { useJobsStore, useToastStore } from '@/store';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -109,10 +109,15 @@ export default function ExportPanel({ project }: ExportPanelProps) {
   // Show error toast when artifacts fail to load
   useEffect(() => {
     if (artifactsError) {
+      const err = artifactsError as unknown;
+      const detail =
+        err instanceof Error
+          ? err.message
+          : 'Vérifiez que le moteur est en ligne.';
       addToast({
         type: 'error',
-        title: 'Erreur de chargement',
-        message: 'Impossible de charger les exports.',
+        title: 'Exports indisponibles',
+        message: `Impossible de charger la liste des exports du projet. ${detail}`,
       });
     }
   }, [artifactsError, addToast]);
@@ -125,6 +130,33 @@ export default function ExportPanel({ project }: ExportPanelProps) {
   );
 
   const activeJob = exportJobs.find((j) => j.status === 'running');
+  const failedJobs = exportJobs.filter((j) => j.status === 'failed');
+  const [retryingJobIds, setRetryingJobIds] = useState<Set<string>>(new Set());
+
+  const handleRetryJob = async (jobId: string) => {
+    if (retryingJobIds.has(jobId)) return;
+    setRetryingJobIds((prev) => new Set(prev).add(jobId));
+    try {
+      await api.retryJob(jobId);
+      addToast({
+        type: 'success',
+        title: 'Export relancé',
+        message: 'Le job a été remis en file d\'attente.',
+      });
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Échec du retry',
+        message: err?.message || 'Impossible de relancer le job.',
+      });
+    } finally {
+      setRetryingJobIds((prev) => {
+        const next = new Set(prev);
+        next.delete(jobId);
+        return next;
+      });
+    }
+  };
 
   // Watch for job completion via WebSocket — invalidate artifacts cache
   useEffect(() => {
@@ -179,11 +211,60 @@ export default function ExportPanel({ project }: ExportPanelProps) {
                   </div>
                   <span className="ml-auto text-lg font-bold text-[var(--text-primary)]">
                     {activeJob.progress.toFixed(0)}%
+                    {formatEta(activeJob.etaSeconds) && (
+                      <span className="ml-2 text-sm font-normal text-[var(--text-muted)]">
+                        · {formatEta(activeJob.etaSeconds)}
+                      </span>
+                    )}
                   </span>
                 </div>
                 <Progress value={activeJob.progress} />
               </CardContent>
             </Card>
+          </motion.div>
+        )}
+
+        {/* Failed export jobs - show retry button */}
+        {failedJobs.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="mb-8 space-y-3"
+          >
+            {failedJobs.map((job) => {
+              const retrying = retryingJobIds.has(job.id);
+              return (
+                <Card key={job.id} className="border-red-500/30 bg-red-500/5">
+                  <CardContent className="p-4">
+                    <div className="flex items-start gap-4">
+                      <div className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center flex-shrink-0">
+                        <AlertTriangle className="w-5 h-5 text-red-400" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-semibold text-[var(--text-primary)]">
+                          Export échoué
+                        </h3>
+                        <p className="text-sm text-red-300/80 mt-1 truncate" title={job.error || ''}>
+                          {job.error || 'Erreur inconnue'}
+                        </p>
+                      </div>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => handleRetryJob(job.id)}
+                        disabled={retrying}
+                        title="Relancer ce job avec les mêmes paramètres"
+                      >
+                        <RotateCw
+                          className={`w-4 h-4 mr-1 ${retrying ? 'animate-spin' : ''}`}
+                        />
+                        {retrying ? 'Relance...' : 'Réessayer'}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
           </motion.div>
         )}
 
@@ -441,7 +522,12 @@ function ContentPanel({
       }
     } catch (e) {
       console.error('Content generation failed:', e);
-      addToast({ type: 'error', title: 'Erreur', message: 'Impossible de générer le contenu.' });
+      const detail = e instanceof Error ? e.message : 'Erreur inconnue.';
+      addToast({
+        type: 'error',
+        title: 'Génération du contenu échouée',
+        message: `Impossible de générer le titre, la description et les hashtags pour ce clip. ${detail}`,
+      });
     } finally {
       setLoading(false);
     }

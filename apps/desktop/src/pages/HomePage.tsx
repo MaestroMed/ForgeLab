@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useHotkeys } from 'react-hotkeys-hook';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ENGINE_BASE_URL } from '@/lib/config';
 import { Plus, Search, FolderOpen, Film, Layers, TrendingUp, Calendar, Link2, MoreVertical, Play, Trash2, FolderOpen as FolderIcon } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
@@ -91,6 +91,20 @@ export default function HomePage() {
   // React Query: fetch projects
   const { data: projectsData, isLoading: loading, isError: projectsError } = useProjects(search || undefined);
   const projects: Project[] = (projectsData?.data?.items || []) as Project[];
+
+  // Dashboard stats (graceful fallback to local data when fields missing)
+  const { data: stats } = useQuery({
+    queryKey: ['dashboard-stats'],
+    queryFn: async () => {
+      try {
+        const res: any = await api.getAnalyticsOverview();
+        return res?.data ?? res;
+      } catch {
+        return null;
+      }
+    },
+    staleTime: 60_000,
+  });
 
   // Show error toast when projects fail to load
   useEffect(() => {
@@ -243,6 +257,39 @@ export default function HomePage() {
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-8">
+        {/* Dashboard stats */}
+        {!loading && projects.length > 0 && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+            <StatCard
+              label="Projets"
+              value={stats?.total_projects ?? projects.length}
+            />
+            <StatCard
+              label="Clips ce mois"
+              value={stats?.clips_this_month ?? 0}
+            />
+            <StatCard
+              label="Score moyen"
+              value={`${Number(
+                (stats?.avg_score ??
+                  projects.reduce((acc, p) => acc + (p.averageScore ?? 0), 0) /
+                    Math.max(1, projects.filter((p) => (p.averageScore ?? 0) > 0).length)) ||
+                  0,
+              ).toFixed(0)}%`}
+            />
+            <StatCard
+              label="Top score"
+              value={
+                (stats?.top_score ??
+                  Math.round(
+                    projects.reduce((m, p) => Math.max(m, p.averageScore ?? 0), 0),
+                  )) ||
+                '—'
+              }
+            />
+          </div>
+        )}
+
         {loading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {[...Array(8)].map((_, i) => (
@@ -501,6 +548,15 @@ function ProjectCard({
         </div>
       </Card>
     </motion.div>
+  );
+}
+
+function StatCard({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-lg p-3">
+      <p className="text-xs text-[var(--text-muted)]">{label}</p>
+      <p className="text-xl font-bold">{value}</p>
+    </div>
   );
 }
 

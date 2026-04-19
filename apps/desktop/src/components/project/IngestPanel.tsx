@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Progress } from '@/components/ui/Progress';
 import { api } from '@/lib/api';
-import { formatDuration } from '@/lib/utils';
+import { formatDuration, formatEta } from '@/lib/utils';
 import { useJobsStore, useToastStore } from '@/store';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -57,10 +57,14 @@ export default function IngestPanel({ project, onJobStart, onComplete }: IngestP
       }
     } catch (error) {
       console.error('Ingest failed:', error);
+      const detail =
+        error instanceof Error
+          ? error.message
+          : "Impossible de contacter le moteur. Vérifiez qu'il est en ligne.";
       addToast({
         type: 'error',
-        title: 'Erreur d\'ingestion',
-        message: error instanceof Error ? error.message : 'Impossible de démarrer l\'ingestion',
+        title: "Démarrage de l'ingestion échoué",
+        message: `Le projet « ${project.sourceFilename} » n'a pas pu être ingéré. ${detail}`,
       });
     }
   };
@@ -112,6 +116,11 @@ export default function IngestPanel({ project, onJobStart, onComplete }: IngestP
                   </div>
                   <span className="ml-auto text-lg font-bold text-[var(--text-primary)]">
                     {activeJob.progress.toFixed(0)}%
+                    {formatEta(activeJob.etaSeconds) && (
+                      <span className="ml-2 text-sm font-normal text-[var(--text-muted)]">
+                        · {formatEta(activeJob.etaSeconds)}
+                      </span>
+                    )}
                   </span>
                 </div>
                 <Progress value={activeJob.progress} />

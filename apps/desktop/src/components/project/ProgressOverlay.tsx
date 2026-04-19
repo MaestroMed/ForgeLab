@@ -4,6 +4,7 @@ import { X, Loader2 } from 'lucide-react';
 import { useJobsStore } from '@/store';
 import { useShallow } from 'zustand/react/shallow';
 import { api } from '@/lib/api';
+import { formatEta } from '@/lib/utils';
 
 interface ProgressOverlayProps {
   projectId: string;
@@ -152,7 +153,9 @@ export default function ProgressOverlay({ projectId }: ProgressOverlayProps) {
           {/* ETA estimation */}
           {progress > 5 && progress < 95 && (
             <div className="text-xs text-gray-500 mb-6">
-              Estimation basée sur la progression...
+              {formatEta(activeJob.etaSeconds)
+                ? `Temps restant estimé : ${formatEta(activeJob.etaSeconds)}`
+                : 'Estimation basée sur la progression...'}
             </div>
           )}
 

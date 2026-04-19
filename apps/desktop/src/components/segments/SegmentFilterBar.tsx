@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Filter,
@@ -46,7 +46,12 @@ interface SegmentFilterBarProps {
   availableTags?: string[];
   onSearchChange?: (search: string) => void;
   onTagsChange?: (tags: string[]) => void;
+  /** When provided, filter state is persisted in localStorage per project. */
+  projectId?: string;
 }
+
+/** localStorage key for per-project filter persistence. */
+const filterKey = (projectId: string) => `forge-filter-${projectId}`;
 
 const LIMIT_PRESETS = [
   { label: 'Top 10', value: 10 },
@@ -64,21 +69,79 @@ export function SegmentFilterBar({
   availableTags = [],
   onSearchChange,
   onTagsChange,
+  projectId,
 }: SegmentFilterBarProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [searchInput, setSearchInput] = useState(filters.search || '');
   const [selectedTags, setSelectedTags] = useState<string[]>(filters.tags || []);
-  
+  // Guard: we apply saved filters once per projectId, before binding persistence.
+  const hasLoadedForProject = useRef<string | null>(null);
+
   // Debounce search input
   const debouncedSearch = useDebounce(searchInput, 300);
-  
+
+  // Load persisted filters when we enter a project (or the projectId changes).
+  useEffect(() => {
+    if (!projectId) return;
+    if (hasLoadedForProject.current === projectId) return;
+    hasLoadedForProject.current = projectId;
+    try {
+      const saved = localStorage.getItem(filterKey(projectId));
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as Partial<FilterState & { tags?: string[]; search?: string }>;
+      // Rebuild a FilterState from persisted fields, falling back to current.
+      const next: FilterState = {
+        minScore: typeof parsed.minScore === 'number' ? parsed.minScore : filters.minScore,
+        minDuration: typeof parsed.minDuration === 'number' ? parsed.minDuration : filters.minDuration,
+        maxDuration: typeof parsed.maxDuration === 'number' ? parsed.maxDuration : filters.maxDuration,
+        limit: parsed.limit === null || typeof parsed.limit === 'number' ? parsed.limit : filters.limit,
+        search: typeof parsed.search === 'string' ? parsed.search : filters.search,
+        tags: Array.isArray(parsed.tags) ? parsed.tags : filters.tags,
+      };
+      setSearchInput(next.search || '');
+      setSelectedTags(next.tags || []);
+      onFiltersChange(next);
+    } catch {
+      // Malformed entry — ignore, next save will overwrite.
+    }
+    // We intentionally run this only when projectId changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  // Persist the current filter state whenever it changes (after initial load).
+  useEffect(() => {
+    if (!projectId) return;
+    if (hasLoadedForProject.current !== projectId) return;
+    try {
+      const payload = {
+        minScore: filters.minScore,
+        minDuration: filters.minDuration,
+        maxDuration: filters.maxDuration,
+        limit: filters.limit,
+        search: debouncedSearch,
+        tags: selectedTags,
+      };
+      localStorage.setItem(filterKey(projectId), JSON.stringify(payload));
+    } catch {
+      // Quota exceeded or disabled — silent.
+    }
+  }, [
+    projectId,
+    filters.minScore,
+    filters.minDuration,
+    filters.maxDuration,
+    filters.limit,
+    debouncedSearch,
+    selectedTags,
+  ]);
+
   // Notify parent when debounced search changes
   useEffect(() => {
     if (onSearchChange) {
       onSearchChange(debouncedSearch);
     }
   }, [debouncedSearch, onSearchChange]);
-  
+
   // Notify parent when tags change
   useEffect(() => {
     if (onTagsChange) {

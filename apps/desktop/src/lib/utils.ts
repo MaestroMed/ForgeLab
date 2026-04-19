@@ -61,6 +61,19 @@ export async function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Human-readable ETA. Returns '' when no estimate is available yet
+ * (warm-up phase, stalled job, or completed). Examples: "~12s", "~3m", "~1h20".
+ */
+export function formatEta(seconds: number | null | undefined): string {
+  if (!seconds || seconds <= 0) return '';
+  if (seconds < 60) return `~${seconds}s`;
+  if (seconds < 3600) return `~${Math.round(seconds / 60)}m`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.round((seconds % 3600) / 60);
+  return `~${h}h${m}`;
+}
+
 
 
 

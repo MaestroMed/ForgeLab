@@ -7,6 +7,32 @@ import type { Job } from './jobs';
 import { useToastStore } from './toast';
 import { useProjectsStore } from './projects';
 import type { Project } from './projects';
+import { api } from '@/lib/api';
+
+// Track segments we've already kicked content-gen for, so a re-broadcast of the
+// same completed export doesn't fire the request twice in a session.
+const autoContentGenSeen = new Set<string>();
+
+async function kickContentGenForExportedSegment(projectId: string, segmentId: string) {
+  const key = `${projectId}:${segmentId}`;
+  if (autoContentGenSeen.has(key)) return;
+  autoContentGenSeen.add(key);
+  try {
+    const segRes = await api.getSegment(projectId, segmentId);
+    const seg: any = (segRes as any)?.data ?? segRes;
+    const transcript: string =
+      (typeof seg?.transcript === 'string' && seg.transcript) ||
+      seg?.transcript?.text ||
+      '';
+    const tags: string[] = seg?.score?.tags ?? seg?.tags ?? [];
+    if (transcript) {
+      await api.generateSegmentContent(transcript, tags, 'tiktok');
+      // Result is cached on the backend via LLM cache — we don't need the response here.
+    }
+  } catch {
+    // Fire-and-forget — failures are fine, user can trigger manually.
+  }
+}
 
 // WebSocket store
 interface WebSocketState {
@@ -95,6 +121,18 @@ export const useWebSocketStore = create<WebSocketState>((set, _get) => {
         // Now also trigger on pending -> completed (for fast jobs)
         const wasNotComplete = !prevJob || prevJob.status === 'running' || prevJob.status === 'pending';
         if (wasNotComplete && job.status === 'completed') {
+          // When an export finishes, auto-kick content generation so titles,
+          // hashtags and description are ready in the LLM cache before the user
+          // asks. Fire-and-forget; backend caches the result.
+          if (job.type === 'export') {
+            const result = (job as any).result as Record<string, unknown> | undefined;
+            const segmentId = (result?.segment_id ?? result?.segmentId) as string | undefined;
+            const projectId = (job as any).projectId ?? (job as any).project_id;
+            if (segmentId && projectId) {
+              void kickContentGenForExportedSegment(projectId as string, segmentId);
+            }
+          }
+
           // Desktop notification — specialized body for analyze jobs
           if ('Notification' in window && Notification.permission === 'granted') {
             try {

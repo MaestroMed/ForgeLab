@@ -79,13 +79,20 @@ export default function SocialPublishModal({
         visibility,
       });
       const payload = res?.data ?? res;
+      const wasScheduled = payload?.status === 'scheduled';
       setResult({
         success: payload?.success ?? false,
         url: payload?.video_url ?? undefined,
         error: payload?.error ?? undefined,
       });
       if (payload?.success) {
-        addToast({ type: 'success', title: 'Publié !', message: `Clip envoyé sur ${info.label}.` });
+        addToast({
+          type: 'success',
+          title: wasScheduled ? 'Programmé !' : 'Publié !',
+          message: wasScheduled
+            ? `Clip programmé pour ${info.label}.`
+            : `Clip envoyé sur ${info.label}.`,
+        });
       }
     } catch (e: any) {
       setResult({ success: false, error: e?.message ?? 'Échec de la publication' });

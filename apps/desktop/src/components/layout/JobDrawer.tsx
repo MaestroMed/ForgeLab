@@ -6,6 +6,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
 import { Progress } from '@/components/ui/Progress';
+import { formatEta } from '@/lib/utils';
 
 interface JobDetails {
   id: string;
@@ -266,6 +267,11 @@ export default function JobDrawer() {
                           </div>
                           <span className="text-sm font-bold text-[var(--text-primary)] tabular-nums">
                             {job.progress.toFixed(0)}%
+                            {job.status === 'running' && formatEta(job.etaSeconds) && (
+                              <span className="ml-1.5 text-xs font-normal text-[var(--text-muted)]">
+                                · {formatEta(job.etaSeconds)}
+                              </span>
+                            )}
                           </span>
                           {expandedJobId === job.id ? (
                             <ChevronUp className="w-4 h-4 text-[var(--text-muted)]" />

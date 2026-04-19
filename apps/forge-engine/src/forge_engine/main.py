@@ -41,6 +41,71 @@ async def cleanup_orphan_ffmpeg():
             logger.debug("No orphan FFmpeg to clean: %s", e)
 
 
+async def cleanup_old_previews():
+    """Delete preview files older than 24h from TEMP_PATH/previews."""
+    import time
+    try:
+        preview_dir = settings.TEMP_PATH / "previews"
+        if not preview_dir.exists():
+            return
+        now = time.time()
+        deleted = 0
+        for f in preview_dir.glob("*.mp4"):
+            try:
+                if now - f.stat().st_mtime > 86400:  # 24h
+                    f.unlink()
+                    deleted += 1
+            except Exception:
+                pass
+        if deleted > 0:
+            logger.info("Cleaned up %d old preview files", deleted)
+    except Exception as e:
+        logger.debug("Preview cleanup failed: %s", e)
+
+
+async def cleanup_old_hook_cache():
+    """Delete LLM hook cache entries older than 7 days from TEMP_PATH/hook_llm_cache."""
+    import time
+    try:
+        cache_dir = settings.TEMP_PATH / "hook_llm_cache"
+        if not cache_dir.exists():
+            return
+        now = time.time()
+        deleted = 0
+        # Clean any cached file regardless of extension — the cache service picks
+        # names, so just match everything that's a regular file.
+        for f in cache_dir.glob("*"):
+            if not f.is_file():
+                continue
+            try:
+                if now - f.stat().st_mtime > 7 * 86400:  # 7 days
+                    f.unlink()
+                    deleted += 1
+            except Exception:
+                pass
+        if deleted > 0:
+            logger.info("Cleaned up %d old hook LLM cache entries", deleted)
+    except Exception as e:
+        logger.debug("Hook LLM cache cleanup failed: %s", e)
+
+
+async def prewarm_llm():
+    """Prewarm the LLM by loading the model with a dummy request.
+
+    First-request latency is dominated by Ollama loading the model into VRAM;
+    fire a trivial generation at startup so the model is hot when the user
+    actually needs it.
+    """
+    try:
+        from forge_engine.services.llm_local import LocalLLMService
+        llm = LocalLLMService.get_instance()
+        if await llm.check_availability():
+            await llm.generate("Say OK.", max_tokens=10, temperature=0.0)
+            logger.info("LLM prewarmed with model %s", llm._current_model)
+    except Exception as e:
+        logger.debug("LLM prewarm skipped: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan manager."""
@@ -147,6 +212,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     asyncio.create_task(job_manager.start())
     logger.info("Job manager started")
 
+    # Background housekeeping — never block startup on these.
+    # Preview files: 24h TTL. Hook LLM cache: 7 days. Ollama prewarm: fire-and-forget.
+    asyncio.create_task(cleanup_old_previews())
+    asyncio.create_task(cleanup_old_hook_cache())
+    asyncio.create_task(prewarm_llm())
+
     # Check FFmpeg
     from forge_engine.services.ffmpeg import FFmpegService
     ffmpeg = FFmpegService()
@@ -167,14 +238,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     auto_pipeline = AutoPipelineService.get_instance()
     logger.info("Auto Pipeline loaded (start via API when ready)")
 
-    from forge_engine.services.publish_scheduler import PublishSchedulerService
+    from forge_engine.services.publish_scheduler import (
+        PublishScheduler,
+        PublishSchedulerService,
+    )
     scheduler = PublishSchedulerService.get_instance()
     logger.info("Publish Scheduler loaded (start via API when ready)")
+
+    # Start the user-scheduled publish queue (fires one-off jobs at their time)
+    publish_queue = PublishScheduler.get_instance()
+    await publish_queue.start()
 
     yield
 
     # Cleanup
     logger.info("Shutting down FORGE Engine...")
+    await publish_queue.stop()
     await scheduler.stop()
     await auto_pipeline.stop()
     await monitor.stop()

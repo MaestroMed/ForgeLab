@@ -354,6 +354,12 @@ class ApiClient {
     });
   }
 
+  async retryJob(jobId: string) {
+    return this.request<ApiResponse<ApiJob>>(`/jobs/${jobId}/retry`, {
+      method: 'POST',
+    });
+  }
+
   // Templates
   async listTemplates() {
     return this.request<ApiResponse<any[]>>('/templates');
@@ -387,11 +393,12 @@ class ApiClient {
   }
 
   async importFromUrl(
-    url: string, 
-    quality = 'best', 
-    autoIngest = true, 
+    url: string,
+    quality = 'best',
+    autoIngest = true,
     autoAnalyze = true,
-    dictionaryName?: string
+    dictionaryName?: string,
+    customName?: string,
   ) {
     return this.request<ApiResponse<{ project: any; jobId: string; videoInfo: any }>>('/projects/import-url', {
       method: 'POST',
@@ -401,8 +408,19 @@ class ApiClient {
         auto_ingest: autoIngest,
         auto_analyze: autoAnalyze,
         dictionary_name: dictionaryName,
+        custom_name: customName,
       }),
     });
+  }
+
+  /**
+   * Ask the backend to suggest a better project name from top segment topics/tags.
+   */
+  async suggestProjectRename(projectId: string) {
+    return this.request<ApiResponse<{ current_name: string; suggestion: string | null; confidence: string }>>(
+      `/projects/${projectId}/auto-rename`,
+      { method: 'POST' }
+    );
   }
 
   // System
