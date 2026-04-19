@@ -351,6 +351,28 @@ class JobManager:
                 created_at=record.created_at
             )
 
+    async def enqueue(
+        self,
+        job_id: str,
+        job_type: "JobType",
+        project_id: str | None,
+        kwargs: dict,
+    ) -> str:
+        """Enqueue a job from the public API v2 with a caller-supplied job_id."""
+        async with async_session_maker() as db:
+            record = JobRecord(
+                id=job_id,
+                type=job_type.value,
+                status=JobStatus.PENDING.value,
+                project_id=project_id,
+                result=kwargs,
+                created_at=datetime.utcnow(),
+            )
+            db.add(record)
+            await db.commit()
+        logger.info("Enqueued API v2 job %s (%s)", job_id, job_type.value)
+        return job_id
+
     async def get_job(self, job_id: str) -> Job | None:
         """Fetch job from DB."""
         async with async_session_maker() as db:

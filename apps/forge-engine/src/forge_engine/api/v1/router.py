@@ -55,6 +55,17 @@ api_router.include_router(social.router, prefix="/social", tags=["Social Publish
 api_router.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
 api_router.include_router(reviews.router, prefix="/clips", tags=["Clip Review & Queue"])
 
+from forge_engine.api.v1.endpoints.auth import router as auth_router
+api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
+
+from forge_engine.api.v1.endpoints.upload import router as upload_router
+api_router.include_router(upload_router, prefix="/upload", tags=["upload"])
+
+from forge_engine.api.v1.endpoints.cloud import router as cloud_router
+from forge_engine.api.v1.endpoints.whitelabel import router as whitelabel_router
+api_router.include_router(cloud_router, prefix="/cloud", tags=["cloud"])
+api_router.include_router(whitelabel_router, prefix="/enterprise", tags=["enterprise"])
+
 
 
 

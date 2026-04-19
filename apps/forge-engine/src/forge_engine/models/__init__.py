@@ -9,6 +9,7 @@ from forge_engine.models.review import ClipQueue, ClipReview
 from forge_engine.models.segment import Segment
 from forge_engine.models.template import CaptionStyle, Template
 from forge_engine.models.training_data import SegmentFeedback
+from forge_engine.models.user import User
 
 __all__ = [
     "Project",
@@ -23,6 +24,7 @@ __all__ = [
     "ClipReview",
     "ClipQueue",
     "SegmentFeedback",
+    "User",
 ]
 
 

@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from forge_engine.api.v1.router import api_router
+from forge_engine.api.v2.router import v2_router
 from forge_engine.core.config import settings
 from forge_engine.core.database import close_db, init_db
 from forge_engine.core.jobs import JobManager
@@ -224,6 +225,9 @@ def create_app() -> FastAPI:
 
     # Include API router
     app.include_router(api_router, prefix="/v1")
+
+    # Include public API v2 (webhooks, external integrations)
+    app.include_router(v2_router)
 
     # Mount static files for library (video serving)
     library_path = settings.LIBRARY_PATH

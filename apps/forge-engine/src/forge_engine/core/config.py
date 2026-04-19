@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     APP_NAME: str = "FORGE Engine"
     DEBUG: bool = False  # Set FORGE_DEBUG=true in .env for dev mode
+    JWT_SECRET: str = "FORGE_JWT_CHANGE_IN_PRODUCTION"
+    SAAS_MODE: bool = False  # Enable JWT auth requirement
 
     # Server
     HOST: str = "127.0.0.1"
@@ -100,6 +102,14 @@ class Settings(BaseSettings):
             "description": "Twitter/X (max 140s, 512MB)",
         },
     }
+
+    # Cloud GPU (optional)
+    CLOUD_GPU_PROVIDER: str = "local"             # local | runpod | modal | lambda_labs
+    CLOUD_GPU_OVERFLOW: bool = False             # Use cloud when local queue > 2 jobs
+    CLOUD_RUNPOD_API_KEY: str = ""
+    CLOUD_RUNPOD_ENDPOINT_ID: str = ""
+    CLOUD_MODAL_TOKEN_ID: str = ""
+    CLOUD_MODAL_TOKEN_SECRET: str = ""
 
     # Local LLM (Ollama)
     LLM_ENABLED: bool = True
