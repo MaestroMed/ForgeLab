@@ -169,6 +169,93 @@ async def get_trends(
     return trends
 
 
+@router.get("/summary")
+async def get_analytics_summary(platform: str = "tiktok", limit: int = 5):
+    """Get analytics summary: top clips, averages, and performance trends."""
+    from forge_engine.services.virality_predictor import ViralityPredictor
+    predictor = ViralityPredictor.get_instance()
+
+    records = [
+        r for r in predictor._performance_data
+        if r.get("platform") == platform and r.get("views", 0) > 0
+    ]
+
+    if not records:
+        return {
+            "platform": platform,
+            "total_clips": 0,
+            "total_views": 0,
+            "avg_views": 0,
+            "avg_completion_rate": 0,
+            "avg_engagement": 0,
+            "top_clips": [],
+            "accuracy": None,
+        }
+
+    # Sort by views descending
+    records_sorted = sorted(records, key=lambda r: r.get("views", 0), reverse=True)
+    top = records_sorted[:limit]
+
+    total_views = sum(r.get("views", 0) for r in records)
+    avg_views = total_views // len(records)
+    avg_completion = sum(r.get("completion_rate", 0) for r in records) / len(records)
+
+    # Prediction accuracy: mean absolute error between predicted and actual score
+    accuracy = None
+    scored = [r for r in records if "actual_score" in r and "predicted_score" in r]
+    if scored:
+        mae = sum(abs(r["actual_score"] - r["predicted_score"]) for r in scored) / len(scored)
+        accuracy = round(100 - min(100, mae), 1)  # Accuracy as percentage
+
+    return {
+        "platform": platform,
+        "total_clips": len(records),
+        "total_views": total_views,
+        "avg_views": avg_views,
+        "avg_completion_rate": round(avg_completion, 3),
+        "top_clips": [
+            {
+                "segment_id": r.get("segment_id"),
+                "views": r.get("views", 0),
+                "likes": r.get("likes", 0),
+                "predicted_score": round(r.get("predicted_score", 0), 1),
+                "actual_score": round(r.get("actual_score", 0), 1),
+                "timestamp": r.get("timestamp"),
+            }
+            for r in top
+        ],
+        "prediction_accuracy_pct": accuracy,
+    }
+
+
+@router.get("/trends/performance")
+async def get_performance_trends(platform: str = "tiktok", weeks: int = 8):
+    """Get weekly performance trends for charting."""
+    import time
+    from forge_engine.services.virality_predictor import ViralityPredictor
+    predictor = ViralityPredictor.get_instance()
+
+    now = time.time()
+    week_seconds = 7 * 24 * 3600
+
+    buckets: dict[int, dict] = {}
+    for w in range(weeks):
+        buckets[w] = {"week": w, "views": 0, "clips": 0, "avg_score": 0.0}
+
+    for r in predictor._performance_data:
+        if r.get("platform") != platform:
+            continue
+        age = now - r.get("timestamp", now)
+        week_idx = int(age // week_seconds)
+        if week_idx < weeks:
+            buckets[week_idx]["views"] += r.get("views", 0)
+            buckets[week_idx]["clips"] += 1
+
+    # Reverse so week 0 = oldest
+    trend_list = list(reversed([buckets[w] for w in range(weeks)]))
+    return {"platform": platform, "weeks": weeks, "data": trend_list}
+
+
 @router.get("/export")
 async def export_analytics(
     project_id: str | None = None,

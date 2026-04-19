@@ -130,3 +130,57 @@ async def translate_batch(request: TranslateBatchRequest):
         "source_lang": request.source_lang,
         "target_lang": request.target_lang
     }
+
+
+class MultiTranslateRequest(BaseModel):
+    """Request to translate to multiple languages at once."""
+    words: list[dict]
+    source_lang: str = "fr"
+    target_langs: list[str] = ["en", "es", "pt"]
+
+
+@router.post("/multi")
+async def translate_multi(request: MultiTranslateRequest):
+    """Translate subtitles to multiple languages in parallel."""
+    from forge_engine.services.translation import TranslationService
+    service = TranslationService.get_instance()
+
+    if not request.target_langs:
+        raise HTTPException(status_code=400, detail="At least one target language required")
+
+    # Cap at 5 languages to avoid abuse
+    target_langs = request.target_langs[:5]
+
+    results = await service.translate_to_languages(
+        words=request.words,
+        source_lang=request.source_lang,
+        target_langs=target_langs,
+    )
+
+    return {
+        "results": {
+            lang: {
+                "words": [
+                    {"word": seg.translated_text, "start": seg.start_time, "end": seg.end_time}
+                    for seg in result.segments
+                ] if result else [],
+                "success": result is not None,
+            }
+            for lang, result in results.items()
+        },
+        "source_lang": request.source_lang,
+        "languages_processed": len(results),
+    }
+
+
+@router.get("/supported")
+async def get_supported_languages():
+    """Get list of supported translation language pairs."""
+    from forge_engine.services.translation import TranslationService
+    service = TranslationService.get_instance()
+    pairs = service.get_supported_pairs()
+    # Deduplicate targets by source
+    by_source: dict[str, list[str]] = {}
+    for p in pairs:
+        by_source.setdefault(p["source"], []).append(p["target"])
+    return {"pairs": pairs, "by_source": by_source, "backend": "argos" if len(pairs) > 10 else "stub"}

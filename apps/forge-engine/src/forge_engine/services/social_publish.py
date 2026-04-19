@@ -1,5 +1,6 @@
 """Social Media Publishing Service for TikTok, YouTube, Instagram."""
 
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -9,6 +10,15 @@ from pathlib import Path
 from typing import Any, Optional
 
 import httpx
+
+from forge_engine.core.config import settings
+
+_CRED_KEY = b"FORGE_SOCIAL_CREDS_V1"
+
+
+def _obfuscate(data: bytes) -> bytes:
+    key = _CRED_KEY * (len(data) // len(_CRED_KEY) + 1)
+    return bytes(a ^ b for a, b in zip(data, key))
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +96,7 @@ class SocialPublishService:
     def __init__(self):
         self.credentials: dict[Platform, PlatformCredentials] = {}
         self._client = httpx.AsyncClient(timeout=60.0)
+        self.load_credentials()
 
     @classmethod
     def get_instance(cls) -> "SocialPublishService":
@@ -93,6 +104,68 @@ class SocialPublishService:
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
+
+    def save_credentials(self) -> None:
+        """Persist credentials to disk (obfuscated)."""
+        data = {}
+        for platform, cred in self.credentials.items():
+            data[platform.value] = {
+                "access_token": cred.access_token,
+                "refresh_token": cred.refresh_token,
+                "user_id": cred.user_id,
+                "username": cred.username,
+                "expires_at": cred.expires_at.isoformat() if cred.expires_at else None,
+            }
+        raw = json.dumps(data).encode()
+        cred_path = settings.LIBRARY_PATH / ".social_credentials.json"
+        cred_path.write_bytes(_obfuscate(raw))
+        logger.info("Credentials saved for %d platforms", len(data))
+
+    def load_credentials(self) -> None:
+        """Load credentials from disk."""
+        cred_path = settings.LIBRARY_PATH / ".social_credentials.json"
+        if not cred_path.exists():
+            return
+        try:
+            raw = _obfuscate(cred_path.read_bytes())
+            data = json.loads(raw.decode())
+            for platform_str, cred_data in data.items():
+                try:
+                    platform = Platform(platform_str)
+                    expires = None
+                    if cred_data.get("expires_at"):
+                        expires = datetime.fromisoformat(cred_data["expires_at"])
+                    self.credentials[platform] = PlatformCredentials(
+                        platform=platform,
+                        access_token=cred_data["access_token"],
+                        refresh_token=cred_data.get("refresh_token"),
+                        user_id=cred_data.get("user_id"),
+                        username=cred_data.get("username"),
+                        expires_at=expires,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to restore %s credentials: %s", platform_str, e)
+            logger.info("Loaded credentials for %d platforms", len(self.credentials))
+        except Exception as e:
+            logger.warning("Failed to load credentials: %s", e)
+
+    def get_connected_platforms(self) -> list[dict]:
+        """Return list of connected platform accounts."""
+        result = []
+        for platform, cred in self.credentials.items():
+            result.append({
+                "platform": platform.value,
+                "username": cred.username,
+                "user_id": cred.user_id,
+                "authenticated": self.is_authenticated(platform),
+            })
+        return result
+
+    async def disconnect(self, platform: Platform) -> None:
+        """Disconnect a platform account."""
+        if platform in self.credentials:
+            del self.credentials[platform]
+            self.save_credentials()
 
     def is_authenticated(self, platform: Platform) -> bool:
         """Check if authenticated with a platform."""
@@ -137,6 +210,7 @@ class SocialPublishService:
                     if data.get("items"):
                         credentials.user_id = data["items"][0]["id"]
                         credentials.username = data["items"][0]["snippet"]["title"]
+                        self.save_credentials()
                         return True
 
             elif platform == Platform.TIKTOK:
@@ -151,6 +225,7 @@ class SocialPublishService:
                         user = data["data"]["user"]
                         credentials.user_id = user.get("open_id")
                         credentials.username = user.get("display_name")
+                        self.save_credentials()
                         return True
 
             elif platform == Platform.INSTAGRAM:
@@ -166,6 +241,7 @@ class SocialPublishService:
                     data = response.json()
                     credentials.user_id = data.get("id")
                     credentials.username = data.get("username")
+                    self.save_credentials()
                     return True
 
         except Exception as e:

@@ -1,5 +1,8 @@
 """Template endpoints."""
 
+import hashlib
+import json
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -142,6 +145,152 @@ async def delete_template(
     await db.commit()
 
     return {"success": True, "data": {"deleted": True}}
+
+
+@router.get("/{template_id}/export")
+async def export_template(
+    template_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Export a template as a portable signed JSON bundle."""
+    template = await db.get(Template, template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    bundle = {
+        "forge_template_version": "1.0",
+        "exported_at": time.time(),
+        "template": {
+            "name": template.name,
+            "description": template.description,
+            "caption_style": template.caption_style,
+            "layout": template.layout,
+            "hook_card_style": template.hook_card_style,
+            "brand_kit": template.brand_kit,
+        },
+    }
+    # Sign: SHA256 of the template dict (tamper detection)
+    raw = json.dumps(bundle["template"], sort_keys=True).encode()
+    bundle["signature"] = hashlib.sha256(raw).hexdigest()
+
+    return bundle
+
+
+@router.post("/import")
+async def import_template(
+    bundle: dict,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Import a template from a JSON bundle. Verifies signature before import."""
+    if bundle.get("forge_template_version") != "1.0":
+        raise HTTPException(status_code=400, detail="Invalid or unsupported bundle format")
+
+    tpl_data = bundle.get("template")
+    if not tpl_data:
+        raise HTTPException(status_code=400, detail="Missing template data")
+
+    # Verify signature
+    expected_sig = bundle.get("signature", "")
+    raw = json.dumps(tpl_data, sort_keys=True).encode()
+    actual_sig = hashlib.sha256(raw).hexdigest()
+    if expected_sig != actual_sig:
+        raise HTTPException(status_code=400, detail="Template signature mismatch — bundle may be corrupted")
+
+    template = Template(
+        name=tpl_data.get("name", "Imported Template"),
+        description=tpl_data.get("description"),
+        caption_style=tpl_data.get("caption_style", {}),
+        layout=tpl_data.get("layout", {}),
+        hook_card_style=tpl_data.get("hook_card_style"),
+        brand_kit=tpl_data.get("brand_kit"),
+        is_default=False,
+    )
+    db.add(template)
+    await db.commit()
+    await db.refresh(template)
+
+    return {"id": str(template.id), "name": template.name, "imported": True}
+
+
+@router.get("/marketplace/list")
+async def list_marketplace_templates() -> dict:
+    """Return built-in starter templates for the marketplace."""
+    starter_templates = [
+        {
+            "id": "starter_minimal",
+            "name": "Minimal Pro",
+            "description": "Sous-titres blancs clean, layout 80/20",
+            "preview_emoji": "\u2b1c",
+            "caption_style": {
+                "font": "Inter", "fontSize": 52, "color": "#FFFFFF",
+                "strokeColor": "#000000", "strokeWidth": 3,
+                "position": "bottom", "style": "world_class",
+            },
+            "layout": {"facecam_height_pct": 0.2, "content_height_pct": 0.8},
+        },
+        {
+            "id": "starter_fire",
+            "name": "Fire Gaming",
+            "description": "Sous-titres orange n\u00e9on, \u00e9nergie gaming",
+            "preview_emoji": "\U0001f525",
+            "caption_style": {
+                "font": "Montserrat", "fontSize": 56, "color": "#FF6B00",
+                "strokeColor": "#000000", "strokeWidth": 4,
+                "position": "bottom", "style": "world_class",
+            },
+            "layout": {"facecam_height_pct": 0.25, "content_height_pct": 0.75},
+        },
+        {
+            "id": "starter_esport",
+            "name": "Esport HUD",
+            "description": "Cyan/blanc, style interface de jeu",
+            "preview_emoji": "\U0001f3ae",
+            "caption_style": {
+                "font": "SpaceGrotesk", "fontSize": 48, "color": "#00D4FF",
+                "strokeColor": "#000033", "strokeWidth": 3,
+                "position": "bottom", "style": "world_class",
+            },
+            "layout": {"facecam_height_pct": 0.3, "content_height_pct": 0.7},
+        },
+        {
+            "id": "starter_gold",
+            "name": "Gold Luxury",
+            "description": "Dor\u00e9 prestige, contenu premium",
+            "preview_emoji": "\u2728",
+            "caption_style": {
+                "font": "Montserrat", "fontSize": 52, "color": "#FFD700",
+                "strokeColor": "#1A1000", "strokeWidth": 3,
+                "position": "bottom", "style": "world_class",
+            },
+            "layout": {"facecam_height_pct": 0.22, "content_height_pct": 0.78},
+        },
+    ]
+    return {"templates": starter_templates, "count": len(starter_templates)}
+
+
+@router.post("/marketplace/{template_id}/install")
+async def install_marketplace_template(
+    template_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Install a marketplace starter template into the user's library."""
+    # Get from the static list
+    marketplace = await list_marketplace_templates()
+    tpl_data = next((t for t in marketplace["templates"] if t["id"] == template_id), None)
+    if not tpl_data:
+        raise HTTPException(status_code=404, detail="Marketplace template not found")
+
+    template = Template(
+        name=tpl_data["name"],
+        description=tpl_data.get("description"),
+        caption_style=tpl_data.get("caption_style", {}),
+        layout=tpl_data.get("layout", {}),
+        is_default=False,
+    )
+    db.add(template)
+    await db.commit()
+    await db.refresh(template)
+    return {"id": str(template.id), "name": template.name, "installed": True}
 
 
 

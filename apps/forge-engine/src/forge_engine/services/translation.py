@@ -333,6 +333,108 @@ class TranslationService:
 
         return None
 
+    async def translate_words(
+        self,
+        words: list[dict],
+        source_lang: str,
+        target_lang: str,
+    ) -> "TranslationResult":
+        """Translate a list of word-level subtitle entries."""
+        full_text = " ".join(w.get("word", w.get("text", "")) for w in words)
+        translated_text = await self.translate_text(full_text, source_lang, target_lang)
+        if translated_text is None:
+            translated_text = full_text
+
+        # Reconstruct word list with translated text distributed proportionally
+        translated_words = []
+        t_words = translated_text.split()
+        for i, word in enumerate(words):
+            t_word = t_words[i] if i < len(t_words) else ""
+            translated_words.append({
+                **word,
+                "word": t_word,
+                "original": word.get("word", word.get("text", "")),
+            })
+
+        return TranslationResult(
+            segments=[
+                TranslatedSegment(
+                    original_text=full_text,
+                    translated_text=translated_text,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                    start_time=words[0].get("start", 0.0) if words else 0.0,
+                    end_time=words[-1].get("end", 0.0) if words else 0.0,
+                )
+            ],
+            source_lang=source_lang,
+            target_lang=target_lang,
+            total_segments=1,
+            success_rate=1.0,
+            backend_used="argos" if HAS_ARGOS else "stub",
+        )
+
+    async def translate_to_languages(
+        self,
+        words: list[dict],
+        source_lang: str,
+        target_langs: list[str],
+        max_concurrent: int = 3,
+    ) -> "dict[str, TranslationResult]":
+        """
+        Translate subtitles to multiple languages in parallel.
+
+        Args:
+            words: List of word dicts with text, start, end
+            source_lang: Source language code
+            target_langs: List of target language codes
+            max_concurrent: Max concurrent translations
+
+        Returns:
+            Dict mapping lang_code -> TranslationResult
+        """
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def translate_one(lang: str) -> "tuple[str, TranslationResult | None]":
+            async with semaphore:
+                try:
+                    result = await self.translate_words(
+                        words=words,
+                        source_lang=source_lang,
+                        target_lang=lang,
+                    )
+                    return lang, result
+                except Exception as e:
+                    logger.warning("Translation to %s failed: %s", lang, e)
+                    return lang, None
+
+        tasks = [translate_one(lang) for lang in target_langs]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+        return {lang: result for lang, result in results if result is not None}
+
+    def get_supported_pairs(self) -> list[dict[str, str]]:
+        """Return list of supported translation pairs."""
+        pairs = []
+        if HAS_ARGOS:
+            try:
+                installed = translate.get_installed_languages()
+                codes = [lang.code for lang in installed]
+                for src in codes:
+                    for tgt in codes:
+                        if src != tgt:
+                            pairs.append({"source": src, "target": tgt})
+            except Exception:
+                pass
+
+        if not pairs:
+            # Fallback: known popular pairs
+            for src in ["fr", "en"]:
+                for tgt in ["en", "es", "pt", "de", "ar", "it", "fr"]:
+                    if src != tgt:
+                        pairs.append({"source": src, "target": tgt})
+
+        return pairs
+
 
 # Convenience functions
 def get_translation_service() -> TranslationService:

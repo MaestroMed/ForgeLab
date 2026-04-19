@@ -1,6 +1,7 @@
 /** API client for FORGE Engine backend */
 
 const API_BASE = '/v1/clips';
+const VIRALITY_BASE = '/v1/virality';
 
 export interface QueuedClip {
   id: string;
@@ -82,4 +83,19 @@ export async function submitReview(params: {
 
 export function getClipVideoUrl(clipId: string): string {
   return `/clips/${clipId}/video`;
+}
+
+export async function getSimilarStats(
+  predictedScore: number,
+  platform = 'tiktok',
+): Promise<{ avg_views: number; count: number } | null> {
+  try {
+    const res = await fetch(
+      `${VIRALITY_BASE}/similar-stats?predicted_score=${predictedScore}&platform=${platform}`,
+    );
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
 }

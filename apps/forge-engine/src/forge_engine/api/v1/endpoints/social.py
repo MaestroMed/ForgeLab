@@ -1,9 +1,13 @@
 """Social Publishing API endpoints."""
 
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from datetime import datetime
 
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from forge_engine.core.database import get_db
 from forge_engine.services.social_publish import SocialPublishService
 
 router = APIRouter()
@@ -92,20 +96,14 @@ async def connect_account(request: ConnectAccountRequest):
 @router.delete("/accounts/{platform}")
 async def disconnect_account(platform: str):
     """Disconnect a social account."""
+    from forge_engine.services.social_publish import Platform
+    try:
+        p = Platform(platform)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unknown platform: {platform}")
     service = SocialPublishService.get_instance()
-
-    success = await service.disconnect_account(platform)
-
-    if not success:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No account connected for platform: {platform}"
-        )
-
-    return {
-        "success": True,
-        "message": f"Disconnected from {platform}"
-    }
+    await service.disconnect(p)
+    return {"status": "disconnected", "platform": platform}
 
 
 @router.post("/publish")
@@ -147,6 +145,69 @@ async def get_publish_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
 
     return PublishStatusResponse(**status)
+
+
+class PublishArtifactRequest(BaseModel):
+    """Publish an artifact to social media."""
+    artifact_id: str
+    project_id: str
+    platform: str
+    title: str
+    description: str = ""
+    hashtags: list[str] = []
+    schedule_time: str | None = None  # ISO datetime
+    visibility: str = "public"
+
+
+@router.post("/publish/artifact")
+async def publish_artifact(
+    request: PublishArtifactRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Publish an artifact (exported clip) to a social media platform."""
+    from forge_engine.models.artifact import Artifact
+    from forge_engine.services.social_publish import Platform, PublishRequest
+
+    artifact = await db.get(Artifact, request.artifact_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    try:
+        platform = Platform(request.platform)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unknown platform: {request.platform}")
+
+    service = SocialPublishService.get_instance()
+    if not service.is_authenticated(platform):
+        raise HTTPException(status_code=401, detail=f"Not connected to {request.platform}")
+
+    schedule = None
+    if request.schedule_time:
+        try:
+            schedule = datetime.fromisoformat(request.schedule_time)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid schedule_time format")
+
+    pub_request = PublishRequest(
+        video_path=artifact.path,
+        title=request.title,
+        description=request.description,
+        hashtags=request.hashtags,
+        platform=platform,
+        schedule_time=schedule,
+        privacy=request.visibility,
+    )
+
+    result = await service.publish(pub_request)
+    return {
+        "success": result.success,
+        "platform": result.platform.value,
+        "status": result.status.value,
+        "video_url": result.video_url,
+        "video_id": result.video_id,
+        "error": result.error,
+        "published_at": result.published_at.isoformat() if result.published_at else None,
+    }
 
 
 @router.get("/platforms/{platform}/requirements")
