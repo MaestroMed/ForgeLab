@@ -113,3 +113,41 @@ async def analyze_potential(
         "suggestions": result.get("suggestions", []),
         "quick_analysis": True
     }
+
+
+class PerformanceRecordRequest(BaseModel):
+    segment_id: str
+    predicted_score: float
+    platform: str = "tiktok"
+    views: int
+    likes: int = 0
+    completion_rate: float = 0.0
+
+
+@router.post("/performance")
+async def record_performance(request: PerformanceRecordRequest):
+    """Record real-world performance of a published clip."""
+    from forge_engine.services.virality_predictor import ViralityPredictor
+    predictor = ViralityPredictor.get_instance()
+    await predictor.record_performance(
+        segment_id=request.segment_id,
+        predicted_score=request.predicted_score,
+        platform=request.platform,
+        views=request.views,
+        likes=request.likes,
+        completion_rate=request.completion_rate,
+    )
+    return {"status": "recorded", "total_records": len(predictor._performance_data)}
+
+
+@router.get("/similar-stats")
+async def get_similar_stats(
+    predicted_score: float,
+    platform: str = "tiktok",
+    tolerance: float = 15.0,
+):
+    """Get stats from clips with similar predicted scores."""
+    from forge_engine.services.virality_predictor import ViralityPredictor
+    predictor = ViralityPredictor.get_instance()
+    stats = predictor.get_similar_clips_stats(predicted_score, platform, tolerance)
+    return stats

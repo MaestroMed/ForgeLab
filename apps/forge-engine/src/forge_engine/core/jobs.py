@@ -111,8 +111,9 @@ class JobManager:
         self._handlers: dict[str, Callable] = {}
         self._running = False
         self._workers: list[asyncio.Task] = []
-        self._max_workers = 1  # Single worker to avoid SQLite race conditions
-        self._pick_lock = asyncio.Lock()  # Mutex for job picking
+        from forge_engine.core.config import settings as _settings
+        self._max_workers = max(1, min(4, _settings.BATCH_MAX_WORKERS))  # 1-4 parallel workers
+        self._pick_lock = asyncio.Lock()  # asyncio.Lock handles SQLite race conditions safely across workers
         self._listeners: dict[str, list[Callable[[Job], None]]] = {}
         self._main_loop: asyncio.AbstractEventLoop | None = None
         self._last_progress: dict[str, tuple] = {}  # job_id -> (progress, timestamp)

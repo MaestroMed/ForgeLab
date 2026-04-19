@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useQueryClient } from '@tanstack/react-query';
-import { Download, Play, Pause, FolderOpen, CheckCircle, X, Volume2, VolumeX, RefreshCw } from 'lucide-react';
+import { Download, Play, Pause, FolderOpen, CheckCircle, X, Volume2, VolumeX, RefreshCw, Sparkles, Eye } from 'lucide-react';
 import { ENGINE_BASE_URL } from '@/lib/config';
+import { api } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Progress } from '@/components/ui/Progress';
@@ -241,6 +242,155 @@ export default function ExportPanel({ project }: ExportPanelProps) {
   );
 }
 
+interface ContentData {
+  titles: string[];
+  description: string;
+  hashtags: string[];
+  hook_suggestion: string | null;
+}
+
+function ContentPanel({
+  artifact: _artifact,
+  projectId: _projectId,
+}: {
+  artifact: Artifact;
+  projectId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [content, setContent] = useState<ContentData | null>(null);
+  const [editedTitle, setEditedTitle] = useState('');
+  const [editedDesc, setEditedDesc] = useState('');
+  const [editedHashtags, setEditedHashtags] = useState('');
+  const { addToast } = useToastStore();
+
+  const generate = async () => {
+    setLoading(true);
+    try {
+      const res = await api.generateSegmentContent('', [], 'tiktok');
+      if (res?.data) {
+        setContent(res.data);
+        setEditedTitle(res.data.titles[0] ?? '');
+        setEditedDesc(res.data.description);
+        setEditedHashtags(res.data.hashtags.join(' '));
+      }
+    } catch {
+      addToast({ type: 'error', title: 'Erreur', message: 'Impossible de générer le contenu.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    addToast({ type: 'success', title: 'Copié !', message: `${label} copié dans le presse-papier.` });
+  };
+
+  return (
+    <div className="mt-3 border-t border-white/5 pt-3">
+      <button
+        className="flex items-center gap-2 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); if (!open && !content) generate(); }}
+      >
+        <Sparkles className="w-3.5 h-3.5" />
+        <span>Contenu de publication</span>
+        <span className="ml-1 text-[var(--text-muted)]">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className="mt-3 space-y-3" onClick={(e) => e.stopPropagation()}>
+          {loading ? (
+            <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+              <div className="w-3 h-3 border border-viral-medium border-t-transparent rounded-full animate-spin" />
+              <span>Génération en cours...</span>
+            </div>
+          ) : content ? (
+            <>
+              {/* Title */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider">Titre</span>
+                  <button
+                    className="text-[10px] text-blue-400 hover:text-blue-300"
+                    onClick={() => copyToClipboard(editedTitle, 'Titre')}
+                  >
+                    Copier
+                  </button>
+                </div>
+                <input
+                  className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-[var(--text-primary)] focus:outline-none focus:border-blue-500/50"
+                  value={editedTitle}
+                  onChange={(e) => setEditedTitle(e.target.value)}
+                />
+                {content.titles.length > 1 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {content.titles.slice(1).map((t, i) => (
+                      <button
+                        key={i}
+                        className="text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)] bg-white/5 rounded px-1.5 py-0.5 truncate max-w-[160px]"
+                        onClick={() => setEditedTitle(t)}
+                        title={t}
+                      >
+                        Alt {i + 2}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Description */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider">Description</span>
+                  <button
+                    className="text-[10px] text-blue-400 hover:text-blue-300"
+                    onClick={() => copyToClipboard(editedDesc, 'Description')}
+                  >
+                    Copier
+                  </button>
+                </div>
+                <textarea
+                  className="w-full bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-[var(--text-primary)] focus:outline-none focus:border-blue-500/50 resize-none"
+                  rows={3}
+                  value={editedDesc}
+                  onChange={(e) => setEditedDesc(e.target.value)}
+                />
+              </div>
+
+              {/* Hashtags */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider">Hashtags (20)</span>
+                  <button
+                    className="text-[10px] text-blue-400 hover:text-blue-300"
+                    onClick={() => copyToClipboard(editedHashtags, 'Hashtags')}
+                  >
+                    Copier tout
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {editedHashtags.split(' ').filter(Boolean).map((h, i) => (
+                    <span key={i} className="text-[10px] bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-full px-2 py-0.5">
+                      {h}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                className="text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                onClick={generate}
+              >
+                ↺ Régénérer
+              </button>
+            </>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ExportCard({
   artifacts,
   onOpen,
@@ -353,9 +503,30 @@ function ExportCard({
                 <Play className="w-4 h-4 mr-1" />
                 Lecture
               </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  // For preview, we'd need the segmentId — use video.segmentId
+                  try {
+                    const res = await api.generateSegmentPreview(projectId, video.segmentId);
+                    if (res?.data?.preview_path && window.forge) {
+                      await window.forge.showItem(res.data.preview_path);
+                    }
+                  } catch {
+                    // silently ignore
+                  }
+                }}
+                title="Générer un aperçu rapide 360p"
+              >
+                <Eye className="w-4 h-4 mr-1" />
+                Aperçu
+              </Button>
             </div>
           </div>
         </div>
+        <ContentPanel artifact={video} projectId={projectId} />
       </CardContent>
     </Card>
   );

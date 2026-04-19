@@ -136,6 +136,26 @@ async def generate_hashtags(request: HashtagRequest):
     }
 
 
+class SegmentContentRequest(BaseModel):
+    """Request to generate content for a segment."""
+    transcript: str
+    tags: list[str] = []
+    platform: str = "tiktok"
+    channel_name: str | None = None
+
+
+@router.post("/segment")
+async def generate_segment_content(request: SegmentContentRequest):
+    """Generate full publishable content for a clip segment."""
+    service = ContentGenerationService.get_instance()
+    result = await service.generate_for_segment_full(
+        segment={"transcript": request.transcript, "score": {"tags": request.tags}},
+        platform=request.platform,
+        channel_name=request.channel_name,
+    )
+    return result
+
+
 @router.post("/full")
 async def generate_full_content(request: FullContentRequest):
     """Generate title, description, and hashtags at once."""

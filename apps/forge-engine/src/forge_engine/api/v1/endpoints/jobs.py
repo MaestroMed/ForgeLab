@@ -71,9 +71,18 @@ async def get_jobs_stats() -> dict:
         "success": True,
         "data": {
             "stats": stats,
-            "workers": job_manager._max_workers,
+            "max_workers": job_manager._max_workers,
         }
     }
+
+
+@router.post("/workers/config")
+async def configure_workers(count: int = 2):
+    """Configure the number of parallel job workers (1-4). Takes effect on next job."""
+    manager = JobManager.get_instance()
+    count = max(1, min(4, count))
+    manager._max_workers = count
+    return {"max_workers": count, "status": "configured"}
 
 
 

@@ -1,10 +1,13 @@
 """Virality Predictor - ML model to predict clip viral potential."""
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
+
+from forge_engine.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +110,9 @@ class ViralityPredictor:
         self._model = None
         self._scaler = None
         self._is_trained = False
+        self._performance_data: list[dict] = []
+        self._performance_file = settings.TEMP_PATH / "virality_performance.json"
+        self._load_performance_data()
 
     @classmethod
     def get_instance(cls) -> "ViralityPredictor":
@@ -315,6 +321,133 @@ class ViralityPredictor:
         scores["instagram"] = min(100, base_score * instagram_modifier)
 
         return scores
+
+    def _load_performance_data(self) -> None:
+        """Load historical performance data from disk."""
+        try:
+            if self._performance_file.exists():
+                with open(self._performance_file) as f:
+                    self._performance_data = json.load(f)
+                logger.info("Loaded %d performance records", len(self._performance_data))
+        except Exception as e:
+            logger.warning("Failed to load performance data: %s", e)
+            self._performance_data = []
+
+    async def record_performance(
+        self,
+        segment_id: str,
+        predicted_score: float,
+        platform: str,
+        views: int,
+        likes: int = 0,
+        completion_rate: float = 0.0,
+        features: "ViralityFeatures | None" = None,
+    ) -> None:
+        """Record real performance data for a published clip."""
+        record = {
+            "segment_id": segment_id,
+            "predicted_score": predicted_score,
+            "platform": platform,
+            "views": views,
+            "likes": likes,
+            "completion_rate": completion_rate,
+            "actual_score": self._compute_actual_score(views, likes, completion_rate, platform),
+            "timestamp": __import__("time").time(),
+            "features": features.to_array() if features else None,
+        }
+        self._performance_data.append(record)
+
+        # Persist
+        try:
+            self._performance_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._performance_file, "w") as f:
+                json.dump(self._performance_data, f)
+        except Exception as e:
+            logger.warning("Failed to save performance data: %s", e)
+
+        # Auto-retrain if enough new data (every 20 new records)
+        if HAS_ML and len(self._performance_data) >= 20 and len(self._performance_data) % 20 == 0:
+            await self.retrain()
+
+    def _compute_actual_score(
+        self, views: int, likes: int, completion_rate: float, platform: str
+    ) -> float:
+        """Compute a normalized actual virality score from real metrics."""
+        config = self.PLATFORM_MULTIPLIERS.get(platform, self.PLATFORM_MULTIPLIERS["tiktok"])
+        base = config["base_views"]
+        viral = config["viral_multiplier"]
+
+        # Normalize views: log scale capped at 100
+        import math
+        views_score = min(100, math.log10(max(1, views)) / math.log10(base * viral) * 100)
+
+        # Likes ratio (0-100)
+        like_ratio = (likes / max(1, views)) * 100 if views > 0 else 0
+        likes_score = min(100, like_ratio * 20)
+
+        # Completion rate is 0-1
+        completion_score = completion_rate * 100
+
+        return views_score * 0.5 + likes_score * 0.3 + completion_score * 0.2
+
+    async def retrain(self) -> bool:
+        """Retrain the model on accumulated performance data."""
+        if not HAS_ML or len(self._performance_data) < 10:
+            return False
+
+        import asyncio
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._retrain_sync)
+
+    def _retrain_sync(self) -> bool:
+        """Synchronous retraining."""
+        try:
+            records = [r for r in self._performance_data if r.get("features") is not None]
+            if len(records) < 10:
+                return False
+
+            X = np.array([r["features"] for r in records])
+            y = np.array([r["actual_score"] for r in records])
+
+            if self._scaler is None:
+                from sklearn.preprocessing import StandardScaler
+                self._scaler = StandardScaler()
+            X_scaled = self._scaler.fit_transform(X)
+
+            if self._model is None:
+                from sklearn.ensemble import GradientBoostingRegressor
+                self._model = GradientBoostingRegressor(n_estimators=100, max_depth=4, random_state=42)
+            self._model.fit(X_scaled, y)
+            self._is_trained = True
+
+            logger.info("Virality model retrained on %d samples", len(records))
+            return True
+        except Exception as e:
+            logger.error("Retraining failed: %s", e)
+            return False
+
+    def get_similar_clips_stats(
+        self, predicted_score: float, platform: str, tolerance: float = 15.0
+    ) -> dict:
+        """Get stats from similar clips (for 'clips similaires ont généré X vues' UI)."""
+        similar = [
+            r for r in self._performance_data
+            if r.get("platform") == platform
+            and abs(r.get("predicted_score", 0) - predicted_score) <= tolerance
+            and r.get("views", 0) > 0
+        ]
+        if not similar:
+            return {"count": 0, "avg_views": 0, "avg_likes": 0, "avg_completion": 0}
+
+        avg_views = int(sum(r["views"] for r in similar) / len(similar))
+        avg_likes = int(sum(r.get("likes", 0) for r in similar) / len(similar))
+        avg_completion = sum(r.get("completion_rate", 0) for r in similar) / len(similar)
+        return {
+            "count": len(similar),
+            "avg_views": avg_views,
+            "avg_likes": avg_likes,
+            "avg_completion": round(avg_completion, 2),
+        }
 
     async def extract_features(
         self,

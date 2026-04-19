@@ -53,6 +53,7 @@ class Settings(BaseSettings):
 
     # Job queue
     MAX_CONCURRENT_JOBS: int = 2
+    BATCH_MAX_WORKERS: int = 2  # Parallel job workers (1-4)
     JOB_TIMEOUT: int = 3600  # 1 hour
 
     # Parallel downloads (quick win for 1Gbps connection)

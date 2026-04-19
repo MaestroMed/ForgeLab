@@ -1028,6 +1028,79 @@ async def analyze_jump_cuts(
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
+@router.post("/{project_id}/segments/{segment_id}/preview")
+async def generate_segment_preview(
+    project_id: str,
+    segment_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a low-res 360p preview of a segment with pipeline applied (fast ~5-10s)."""
+    import asyncio
+    import hashlib
+    import time
+
+    from forge_engine.core.config import settings
+    from forge_engine.services.ffmpeg import FFmpegService
+
+    # Load project and segment
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    segment = await db.get(Segment, segment_id)
+    if not segment or segment.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Segment not found")
+
+    # Cache key based on segment + settings hash
+    cache_key = hashlib.md5(f"{segment_id}-preview-360p".encode()).hexdigest()[:12]
+    preview_dir = settings.TEMP_PATH / "previews"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    preview_path = preview_dir / f"{cache_key}.mp4"
+
+    # Return cached if recent (< 1 hour)
+    if preview_path.exists() and time.time() - preview_path.stat().st_mtime < 3600:
+        return {
+            "preview_path": str(preview_path),
+            "cached": True,
+            "width": 360,
+            "height": 640,
+        }
+
+    # Generate 360p preview
+    ffmpeg = FFmpegService.get_instance()
+    cmd = [
+        ffmpeg.ffmpeg_path,
+        "-y",
+        "-ss", str(segment.start_time),
+        "-i", project.source_path,
+        "-t", str(min(segment.duration, 60)),  # Cap at 60s for preview
+        "-vf", "scale=360:640:force_original_aspect_ratio=decrease,pad=360:640:(ow-iw)/2:(oh-ih)/2",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "32",
+        "-c:a", "aac",
+        "-b:a", "64k",
+        "-movflags", "+faststart",
+        str(preview_path),
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await asyncio.wait_for(proc.communicate(), timeout=30)
+
+    if not preview_path.exists():
+        raise HTTPException(status_code=500, detail="Preview generation failed")
+
+    return {
+        "preview_path": str(preview_path),
+        "cached": False,
+        "width": 360,
+        "height": 640,
+        "duration": float(min(segment.duration, 60)),
+    }
+
+
 @router.post("/{project_id}/segments/{segment_id}/variants")
 async def generate_variants(
     project_id: str,

@@ -27,21 +27,21 @@ class ContentGenerationService:
         "tiktok": {
             "max_title_length": 100,
             "max_description_length": 150,
-            "hashtag_count": 5,
+            "hashtag_count": 20,
             "emoji_heavy": True,
             "trending_hashtags": ["#fyp", "#foryou", "#viral", "#pourtoi", "#foryoupage"]
         },
         "youtube": {
             "max_title_length": 60,
             "max_description_length": 200,
-            "hashtag_count": 3,
+            "hashtag_count": 20,
             "emoji_heavy": False,
             "trending_hashtags": ["#shorts", "#gaming", "#viral"]
         },
         "instagram": {
             "max_title_length": 100,
             "max_description_length": 300,
-            "hashtag_count": 10,
+            "hashtag_count": 20,
             "emoji_heavy": True,
             "trending_hashtags": ["#reels", "#viral", "#explore", "#trending"]
         }
@@ -329,7 +329,7 @@ class ContentGenerationService:
                 seen.add(h.lower())
                 unique_hashtags.append(h)
 
-        return unique_hashtags[:config["hashtag_count"] + 5]
+        return unique_hashtags[:20]
 
     def _add_emojis_to_titles(
         self,
@@ -415,6 +415,145 @@ class ContentGenerationService:
             }
 
         return variants
+
+    @staticmethod
+    def detect_language(text: str) -> str:
+        """Detect language from transcript text (simple heuristic)."""
+        fr_indicators = ["je", "le", "la", "les", "un", "une", "des", "du", "est", "sont", "avec", "dans", "pour"]
+        words = text.lower().split()[:50]
+        fr_count = sum(1 for w in words if w in fr_indicators)
+        return "fr" if fr_count >= 3 else "en"
+
+    def is_available(self) -> bool:
+        """Check if LLM-based generation is available (cached)."""
+        if self._llm_available is not None:
+            return self._llm_available
+        return False
+
+    async def generate_titles(
+        self,
+        transcript: str,
+        context: str | None = None,
+        style: str | None = None,
+        count: int = 5,
+        platform: str = "tiktok",
+    ) -> list[str]:
+        """Generate viral titles for a clip."""
+        language = self.detect_language(transcript)
+        result = await self.generate_content(
+            transcript=transcript,
+            segment_tags=[context] if context else [],
+            platform=platform,
+        )
+        titles = result.titles[:count]
+        # Pad with platform-specific fallbacks if needed
+        fallbacks_fr = [
+            "Vous n'allez pas croire ce qui se passe... 🔥",
+            "Le moment où tout a basculé 💀",
+            "Il a vraiment fait ça ?! 😱",
+            "Attendez la fin... ⚡",
+            "LÉGENDAIRE 🏆",
+        ]
+        fallbacks_en = [
+            "You won't believe what happened... 🔥",
+            "The moment everything changed 💀",
+            "Did he really do that?! 😱",
+            "Wait for it... ⚡",
+            "LEGENDARY 🏆",
+        ]
+        fallbacks = fallbacks_fr if language == "fr" else fallbacks_en
+        while len(titles) < count:
+            titles.append(fallbacks[len(titles) % len(fallbacks)])
+        return titles[:count]
+
+    async def generate_description(
+        self,
+        transcript: str,
+        title: str | None = None,
+        platform: str = "tiktok",
+        max_length: int = 300,
+    ) -> str:
+        """Generate a platform-optimized description."""
+        result = await self.generate_content(
+            transcript=transcript,
+            segment_tags=[],
+            platform=platform,
+        )
+        desc = result.description[:max_length]
+        return desc or transcript[:max_length]
+
+    async def generate_hashtags(
+        self,
+        transcript: str,
+        title: str | None = None,
+        platform: str = "tiktok",
+        count: int = 20,
+    ) -> list[str]:
+        """Generate hashtags, up to 20, for a clip."""
+        language = self.detect_language(transcript)
+        result = await self.generate_content(
+            transcript=transcript,
+            segment_tags=[],
+            platform=platform,
+        )
+        hashtags = list(result.hashtags)
+
+        # Ensure we have enough hashtags with viral defaults
+        viral_fr = [
+            "#viral", "#fyp", "#pourtoi", "#foryou", "#trending",
+            "#clip", "#gaming", "#streamer", "#reaction", "#drole",
+            "#incroyable", "#fou", "#france", "#humour", "#omg",
+            "#highlight", "#bestof", "#gaming", "#content", "#vibes",
+        ]
+        viral_en = [
+            "#viral", "#fyp", "#foryou", "#trending", "#clip",
+            "#gaming", "#streamer", "#reaction", "#funny", "#omg",
+            "#insane", "#clips", "#highlight", "#twitch", "#youtube",
+            "#content", "#vibes", "#bestof", "#gaming", "#epic",
+        ]
+        fallbacks = viral_fr if language == "fr" else viral_en
+        seen = {h.lower() for h in hashtags}
+        for h in fallbacks:
+            if h.lower() not in seen and len(hashtags) < count:
+                hashtags.append(h)
+                seen.add(h.lower())
+
+        return hashtags[:count]
+
+    async def generate_for_segment_full(
+        self,
+        segment: dict[str, Any],
+        platform: str = "tiktok",
+        channel_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate complete publishable content (title, description, 20 hashtags)."""
+        transcript = segment.get("transcript", "")
+        score = segment.get("score", {})
+        tags = score.get("tags", [])
+        language = self.detect_language(transcript)
+
+        result = await self.generate_content(
+            transcript=transcript,
+            segment_tags=tags,
+            platform=platform,
+            channel_name=channel_name,
+        )
+
+        hashtags = await self.generate_hashtags(
+            transcript=transcript,
+            platform=platform,
+            count=20,
+        )
+
+        return {
+            "titles": result.titles,
+            "description": result.description,
+            "hashtags": hashtags,
+            "hook_suggestion": result.hook_suggestion,
+            "emoji_suggestions": result.emoji_suggestions,
+            "language": language,
+            "platform": platform,
+        }
 
     async def generate_for_segment(
         self,

@@ -16,11 +16,16 @@ Usage:
     variations = await engine.generate_cold_opens(segment, transcript_segments)
 """
 
+import hashlib
+import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+
+from forge_engine.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -142,12 +147,22 @@ class ColdOpenEngine:
         if max_variations is None:
             max_variations = self.max_variations
 
-        # Find potential hooks within the segment
-        hooks = self._find_hooks(
-            segment,
-            transcript_segments,
-            min_score=self.min_hook_score
-        )
+        # Try LLM-based hook detection first (semantic quality)
+        try:
+            from forge_engine.services.llm_local import LocalLLMService
+            llm = LocalLLMService.get_instance()
+            if llm.is_available():
+                llm_hooks = await self._find_hooks_llm(segment, transcript_segments, language)
+                if llm_hooks:
+                    hooks = llm_hooks
+                    logger.info("Using LLM-detected hooks (%d found)", len(hooks))
+                else:
+                    hooks = self._find_hooks(segment, transcript_segments, min_score=self.min_hook_score)
+            else:
+                hooks = self._find_hooks(segment, transcript_segments, min_score=self.min_hook_score)
+        except Exception as e:
+            logger.warning("LLM hook detection failed (%s), falling back to regex", e)
+            hooks = self._find_hooks(segment, transcript_segments, min_score=self.min_hook_score)
 
         if not hooks:
             logger.info("No suitable hooks found for cold open")
@@ -213,6 +228,120 @@ class ColdOpenEngine:
         )
 
         return variations
+
+    async def _find_hooks_llm(
+        self,
+        segment: dict,
+        transcript_segments: list,
+        language: str,
+    ) -> list[ColdOpenHook]:
+        """Find hooks using LLM-based semantic analysis with 24h file cache."""
+        try:
+            # Build text transcript from segments within the segment window
+            start_time = segment["start_time"]
+            end_time = segment["end_time"]
+            relevant = [
+                s for s in transcript_segments
+                if s["end"] >= start_time and s["start"] <= end_time
+            ]
+            text_transcript = " ".join(s.get("text", "") for s in relevant).strip()
+            if not text_transcript:
+                return []
+
+            # Check 24h file cache
+            cache_key = hashlib.md5(text_transcript.encode()).hexdigest()
+            cache_dir = settings.TEMP_PATH / "hook_llm_cache"
+            cache_file = cache_dir / f"{cache_key}.json"
+
+            if cache_file.exists():
+                try:
+                    cached = json.loads(cache_file.read_text(encoding="utf-8"))
+                    if time.time() - cached.get("timestamp", 0) < 86400:
+                        hooks = []
+                        for h in cached.get("hooks", []):
+                            duration = h["end_time"] - h["start_time"]
+                            if (
+                                h["start_time"] >= segment["start_time"] + (end_time - start_time) * 0.2
+                                and h["end_time"] <= segment["end_time"] - 2.0
+                                and duration >= 2.0
+                            ):
+                                hooks.append(ColdOpenHook(
+                                    start_time=h["start_time"],
+                                    end_time=h["end_time"],
+                                    text=h["text"],
+                                    score=h["score"],
+                                    reasons=[h.get("reason", "")],
+                                ))
+                        logger.info("LLM hook cache hit (%d hooks)", len(hooks))
+                        return hooks
+                except Exception:
+                    pass  # Cache corrupt – fall through to LLM
+
+            # Call LLM
+            from forge_engine.services.llm_local import LocalLLMService
+            llm = LocalLLMService.get_instance()
+            available = await llm.check_availability()
+            if not available:
+                return []
+
+            transcript_text = text_transcript
+            prompt_user = (
+                "Analyse cette transcription et identifie les 3 moments les plus impactants "
+                "pour un cold open viral.\n\n"
+                "TRANSCRIPTION:\n"
+                f"{transcript_text[:3000]}\n\n"
+                "Réponds UNIQUEMENT avec ce JSON:\n"
+                "{\n"
+                '    "hooks": [\n'
+                "        {\n"
+                '            "text": "<le texte exact du moment>",\n'
+                '            "start_time": <float, temps de début en secondes>,\n'
+                '            "end_time": <float, temps de fin en secondes>,\n'
+                '            "score": <int 0-100, score de viralité>,\n'
+                '            "reason": "<explication courte>"\n'
+                "        }\n"
+                "    ]\n"
+                "}"
+            )
+
+            response = await llm.generate(
+                system="Tu es un expert en création de contenu viral. Réponds UNIQUEMENT en JSON valide.",
+                user=prompt_user,
+            )
+
+            # Parse response
+            data = json.loads(response)
+            raw_hooks = data.get("hooks", [])
+
+            duration_seg = end_time - start_time
+            hooks = []
+            for h in raw_hooks:
+                hook_duration = h["end_time"] - h["start_time"]
+                if (
+                    h["start_time"] >= segment["start_time"] + duration_seg * 0.2
+                    and h["end_time"] <= segment["end_time"] - 2.0
+                    and hook_duration >= 2.0
+                ):
+                    hooks.append(ColdOpenHook(
+                        start_time=h["start_time"],
+                        end_time=h["end_time"],
+                        text=h["text"],
+                        score=h["score"],
+                        reasons=[h.get("reason", "")],
+                    ))
+
+            # Save to cache
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(
+                json.dumps({"timestamp": time.time(), "hooks": raw_hooks}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            return hooks
+
+        except Exception as e:
+            logger.warning("LLM hook detection error: %s", e)
+            return []
 
     def _find_hooks(
         self,

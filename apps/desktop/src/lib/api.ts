@@ -600,6 +600,42 @@ class ApiClient {
     });
   }
 
+  async generateSegmentContent(
+    transcript: string,
+    tags: string[] = [],
+    platform = 'tiktok',
+    channelName?: string,
+  ) {
+    return this.request<ApiResponse<{
+      titles: string[];
+      description: string;
+      hashtags: string[];
+      hook_suggestion: string | null;
+      language: string;
+      platform: string;
+    }>>('/content/segment', {
+      method: 'POST',
+      body: JSON.stringify({
+        transcript,
+        tags,
+        platform,
+        channel_name: channelName,
+      }),
+    });
+  }
+
+  async generateSegmentPreview(projectId: string, segmentId: string) {
+    return this.request<ApiResponse<{
+      preview_path: string;
+      cached: boolean;
+      width: number;
+      height: number;
+      duration: number;
+    }>>(`/projects/${projectId}/segments/${segmentId}/preview`, {
+      method: 'POST',
+    });
+  }
+
   // Translation
   async translateText(text: string, targetLang: string, sourceLang = 'fr') {
     return this.request<{ original: string; translated: string }>('/translation/text', {
