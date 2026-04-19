@@ -30,7 +30,7 @@ jobs:
 >>>>>>> origin/main
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: pnpm/action-setup@v3
         with:
@@ -57,7 +57,7 @@ jobs:
     name: Desktop — ESLint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: pnpm/action-setup@v3
         with:
@@ -80,7 +80,7 @@ jobs:
     name: Web Review — Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: pnpm/action-setup@v3
         with:
@@ -110,7 +110,7 @@ jobs:
     name: Backend — Ruff
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v5
         with:
@@ -149,7 +149,7 @@ jobs:
         working-directory: apps/forge-engine
 >>>>>>> origin/main
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v5
         with:
