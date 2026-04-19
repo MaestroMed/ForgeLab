@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Search, CheckCircle, Mic, Film, UserCircle, Sparkles } from 'lucide-react';
+import { Search, CheckCircle, Mic, Film, UserCircle, Sparkles, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Progress } from '@/components/ui/Progress';
 import { api } from '@/lib/api';
+import { ENGINE_BASE_URL } from '@/lib/config';
 import { useJobsStore, useToastStore } from '@/store';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -41,6 +42,27 @@ export default function AnalyzePanel({ project, onJobStart, onComplete }: Analyz
     scoreSegments: true,
     customDictionary: [] as string[],
   });
+  const [cpuWarning, setCpuWarning] = useState(false);
+
+  // Auto-detect the best Whisper model on mount based on available GPU VRAM
+  useEffect(() => {
+    fetch(`${ENGINE_BASE_URL}/v1/capabilities/whisper-recommendation`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.recommended_model) {
+          setOptions((prev) =>
+            prev.whisperModel === 'large-v3'
+              ? { ...prev, whisperModel: data.recommended_model }
+              : prev
+          );
+        }
+        if (data.cpu_warning) {
+          setCpuWarning(true);
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const isAnalyzed = ['analyzed', 'ready'].includes(project.status);
 
@@ -168,9 +190,20 @@ export default function AnalyzePanel({ project, onJobStart, onComplete }: Analyz
                 <div className="space-y-4">
                   {/* Whisper model */}
                   <div>
-                    <label className="text-sm font-medium text-[var(--text-primary)] block mb-2">
-                      Modèle Whisper
-                    </label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-sm font-medium text-[var(--text-primary)]">
+                        Modèle Whisper
+                      </label>
+                      {cpuWarning && (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20"
+                          title="Aucun GPU NVIDIA détecté — la transcription utilisera le CPU et sera plus lente. 'small' est recommandé."
+                        >
+                          <AlertTriangle className="w-3 h-3" />
+                          CPU only
+                        </span>
+                      )}
+                    </div>
                     <select
                       value={options.whisperModel}
                       onChange={(e) =>

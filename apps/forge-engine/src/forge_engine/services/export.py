@@ -25,6 +25,7 @@ from sqlalchemy import select
 from forge_engine.core.config import settings
 from forge_engine.core.database import async_session_maker
 from forge_engine.core.jobs import Job, JobManager
+from forge_engine.core.time_format import format_srt_time as _format_srt_time
 from forge_engine.models import Artifact, Project, Segment, Template
 from forge_engine.services.captions import CaptionEngine
 from forge_engine.services.cold_open import ColdOpenEngine
@@ -35,20 +36,6 @@ from forge_engine.services.qc import QCService
 from forge_engine.services.render import RenderService
 
 logger = logging.getLogger(__name__)
-
-
-def _format_srt_time(seconds: float) -> str:
-    """Format seconds as SRT timestamp HH:MM:SS,mmm."""
-    if seconds < 0:
-        seconds = 0.0
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    ms = int(round((seconds - int(seconds)) * 1000))
-    if ms >= 1000:
-        ms = 0
-        s += 1
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
 async def _export_translated_subtitles(

@@ -8,6 +8,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from forge_engine.core.time_format import format_srt_time
+
 logger = logging.getLogger(__name__)
 
 
@@ -366,11 +368,7 @@ class CaptionEngine:
 
     def _format_srt_time(self, seconds: float) -> str:
         """Format time for SRT (HH:MM:SS,mmm)."""
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        millis = int((seconds % 1) * 1000)
-        return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+        return format_srt_time(seconds)
 
     def _format_vtt_time(self, seconds: float) -> str:
         """Format time for VTT (HH:MM:SS.mmm)."""

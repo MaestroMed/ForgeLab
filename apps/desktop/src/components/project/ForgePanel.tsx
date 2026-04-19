@@ -131,6 +131,31 @@ export default function ForgePanel({ project }: ForgePanelProps) {
   // Multi-select state
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [hasAutoSelected, setHasAutoSelected] = useState(false);
+
+  // After segments load, auto-select top 5 high-score candidates
+  // Handles both camelCase (score.total, startTime/endTime) and snake_case fallbacks
+  useEffect(() => {
+    if (segments.length > 0 && selectedIds.length === 0 && !hasAutoSelected) {
+      const topCandidates = segments
+        .filter((s: any) => {
+          const score = s.score?.total ?? s.score_total ?? 0;
+          const duration = s.duration ?? ((s.endTime ?? s.end_time ?? 0) - (s.startTime ?? s.start_time ?? 0));
+          return score >= 70 && duration >= 30 && duration <= 60;
+        })
+        .sort((a: any, b: any) => {
+          const sa = a.score?.total ?? a.score_total ?? 0;
+          const sb = b.score?.total ?? b.score_total ?? 0;
+          return sb - sa;
+        })
+        .slice(0, 5);
+      if (topCandidates.length > 0) {
+        setSelectedIds(topCandidates.map((s) => s.id));
+        setMultiSelectMode(true);
+        setHasAutoSelected(true);
+      }
+    }
+  }, [segments, selectedIds.length, hasAutoSelected]);
 
   // Load segments when filters change — use debouncedSearch to avoid API call on every keystroke
   useEffect(() => {
@@ -641,6 +666,11 @@ export default function ForgePanel({ project }: ForgePanelProps) {
 
         {/* Segment List */}
         <div className="flex-1 overflow-y-auto p-2 scrollbar-thin">
+          {hasAutoSelected && selectedIds.length > 0 && (
+            <div className="mb-2 p-2 bg-viral-medium/10 border border-viral-medium/20 rounded text-xs">
+              ⚡ {selectedIds.length} segments auto-sélectionnés (score ≥70, 30-60s)
+            </div>
+          )}
           {loading ? (
             <div className="space-y-2 p-4">
               {[...Array(6)].map((_, i) => <SkeletonRow key={i} />)}

@@ -95,12 +95,26 @@ export const useWebSocketStore = create<WebSocketState>((set, _get) => {
         // Now also trigger on pending -> completed (for fast jobs)
         const wasNotComplete = !prevJob || prevJob.status === 'running' || prevJob.status === 'pending';
         if (wasNotComplete && job.status === 'completed') {
-          // Desktop notification
+          // Desktop notification — specialized body for analyze jobs
           if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('FORGE LAB', {
-              body: `${getJobTypeLabel(job.type)} terminé avec succès`,
-              icon: '/icon.png',
-            });
+            try {
+              if (job.type === 'analyze') {
+                const result = (job as any).result as Record<string, unknown> | undefined;
+                const segmentsCount = (result?.segments_count ?? result?.segmentsCount ?? '?') as string | number;
+                new Notification('FORGE LAB — Analyse terminée', {
+                  body: `${segmentsCount} segments détectés. Prêt pour la forge.`,
+                  icon: '/icon.png',
+                  tag: `analyze-${job.projectId ?? job.id}`,
+                });
+              } else {
+                new Notification('FORGE LAB', {
+                  body: `${getJobTypeLabel(job.type)} terminé avec succès`,
+                  icon: '/icon.png',
+                });
+              }
+            } catch {
+              // Notification API failed (e.g. permission revoked mid-session)
+            }
           }
           // Toast notification
           useToastStore.getState().addToast({

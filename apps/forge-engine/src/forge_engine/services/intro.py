@@ -270,8 +270,8 @@ class IntroEngine:
         # Cleanup concat file
         try:
             concat_file.unlink()
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug("Non-critical: failed to unlink concat file: %s", _e)
 
         if proc.returncode != 0:
             raise RuntimeError("Concat failed")

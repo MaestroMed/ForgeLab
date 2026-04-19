@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { formatDuration } from '@/lib/utils';
+import { api } from '@/lib/api';
+import { useToastStore } from '@/store';
 
 interface Segment {
   id: string;
@@ -72,7 +74,7 @@ function ScoreRow({ label, value, max }: { label: string; value: number; max: nu
 
 export function SegmentScoreCard({
   segment,
-  projectId: _projectId,
+  projectId,
   onNavigateToEditor,
   onPlaySegment,
 }: SegmentScoreCardProps) {
@@ -174,6 +176,38 @@ export function SegmentScoreCard({
           <Layers className="w-4 h-4" />
           Ouvrir l'éditeur 9:16
         </Button>
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={async (e) => {
+            e.stopPropagation();
+            try {
+              await api.exportSegment(projectId, {
+                segmentId: segment.id,
+                platform: 'tiktok',
+                includeCaptions: true,
+                burnSubtitles: true,
+                includeCover: true,
+                includeMetadata: true,
+              });
+              useToastStore.getState().addToast({
+                type: 'success',
+                title: '🎵 TikTok en route',
+                message: "Export lancé avec preset TikTok. Check l'onglet Export.",
+              });
+            } catch {
+              useToastStore.getState().addToast({
+                type: 'error',
+                title: 'Échec',
+                message: "Impossible de lancer l'export.",
+              });
+            }
+          }}
+          className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white"
+          title="Export direct avec preset TikTok (1080x1920, 60s max, sous-titres, cover, metadata)"
+        >
+          ⚡ TikTok rapide
+        </Button>
         <div className="grid grid-cols-2 gap-2">
           <Button
             variant="secondary"
@@ -187,7 +221,29 @@ export function SegmentScoreCard({
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => {/* TODO: export */}}
+            onClick={async (e) => {
+              e.stopPropagation();
+              try {
+                await api.exportSegment(projectId, {
+                  segmentId: segment.id,
+                  platform: 'tiktok',
+                  includeCaptions: true,
+                  burnSubtitles: true,
+                  includeCover: true,
+                });
+                useToastStore.getState().addToast({
+                  type: 'success',
+                  title: 'Export lancé',
+                  message: "Check l'onglet Export pour le suivi.",
+                });
+              } catch (err) {
+                useToastStore.getState().addToast({
+                  type: 'error',
+                  title: 'Échec',
+                  message: "Impossible de lancer l'export.",
+                });
+              }
+            }}
             className="flex items-center justify-center gap-1.5"
           >
             <Download className="w-4 h-4" />

@@ -37,6 +37,56 @@ export default function HomePage() {
   const [search, setSearch] = useState('');
   const [importing, setImporting] = useState(false);
   const [urlModalOpen, setUrlModalOpen] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+
+  // Multi-VOD drag-drop: Electron exposes `file.path` on the File object
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files);
+    const videoFiles = files.filter((f) =>
+      /\.(mp4|mkv|avi|mov|webm|flv|wmv)$/i.test(f.name)
+    );
+    if (videoFiles.length === 0) return;
+
+    addToast({
+      type: 'info',
+      title: 'Import multi-VOD',
+      message: `${videoFiles.length} fichier${videoFiles.length > 1 ? 's' : ''} en file d'attente.`,
+    });
+
+    for (const file of videoFiles) {
+      try {
+        const name = file.name.replace(/\.[^.]+$/, '');
+        // Electron sets `path` on File; browser drag-drop doesn't
+        const path = (file as File & { path?: string }).path;
+        if (!path) continue;
+        const projectRes = await api.createProject(name, path);
+        const project = projectRes?.data;
+        if (project?.id) {
+          const ingestRes = await api.ingestProject(project.id, {
+            createProxy: true,
+            extractAudio: true,
+            normalizeAudio: true,
+            autoAnalyze: true,
+          });
+          if (ingestRes?.data?.jobId) {
+            addJob({
+              id: ingestRes.data.jobId,
+              type: 'ingest',
+              projectId: project.id,
+              status: 'running',
+              progress: 0,
+              stage: 'Démarrage...',
+            });
+          }
+        }
+      } catch (err) {
+        console.error('Failed to import', file.name, err);
+      }
+    }
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
+  };
 
   // React Query: fetch projects
   const { data: projectsData, isLoading: loading, isError: projectsError } = useProjects(search || undefined);
@@ -106,8 +156,13 @@ export default function HomePage() {
       // Invalidate projects cache
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
 
-      // Start ingest
-      const ingestResponse = await api.ingestProject(project.id);
+      // Start ingest with sensible defaults so IngestPanel settings carry through
+      const ingestResponse = await api.ingestProject(project.id, {
+        createProxy: true,
+        extractAudio: true,
+        normalizeAudio: true,
+        autoAnalyze: true,
+      });
 
       if (ingestResponse.data?.jobId) {
         addJob({
@@ -134,7 +189,23 @@ export default function HomePage() {
   };
 
   return (
-    <div className="h-full flex flex-col">
+    <div
+      className="h-full flex flex-col relative"
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (!dragOver) setDragOver(true);
+      }}
+      onDragLeave={(e) => {
+        // Only clear when leaving the window (relatedTarget null) to avoid flicker over children
+        if (!e.relatedTarget) setDragOver(false);
+      }}
+      onDrop={handleDrop}
+    >
+      {dragOver && (
+        <div className="fixed inset-0 bg-viral-medium/10 border-4 border-dashed border-viral-medium z-50 flex items-center justify-center pointer-events-none">
+          <p className="text-2xl font-bold text-[var(--text-primary)]">📥 Lâchez les VODs ici</p>
+        </div>
+      )}
       {/* Header */}
       <header className="px-8 py-6 border-b border-[var(--border-color)] bg-[var(--bg-card)]">
         <div className="flex items-center justify-between">

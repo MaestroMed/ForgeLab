@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -17,6 +18,26 @@ from forge_engine.services.transcription_provider import (
 )
 
 router = APIRouter()
+
+
+def recommend_whisper_model() -> str:
+    """Recommend Whisper model based on available GPU VRAM."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            vram_mb = int(result.stdout.strip().split("\n")[0])
+            if vram_mb >= 10_000:
+                return "large-v3"
+            elif vram_mb >= 6_000:
+                return "medium"
+            elif vram_mb >= 3_000:
+                return "small"
+        return "base"  # CPU fallback
+    except Exception:
+        return "small"
 
 
 class ProviderSettingRequest(BaseModel):
@@ -130,6 +151,30 @@ async def get_capabilities() -> dict:
         "gpu": gpu_info,
         "storage": storage_info,
         "transcription": providers_info,
+    }
+
+
+@router.get("/whisper-recommendation")
+async def get_whisper_recommendation():
+    """Return the recommended Whisper model for this machine."""
+    model = recommend_whisper_model()
+    has_gpu = False
+    vram_mb = 0
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            vram_mb = int(result.stdout.strip().split("\n")[0])
+            has_gpu = True
+    except Exception:
+        pass
+    return {
+        "recommended_model": model,
+        "has_gpu": has_gpu,
+        "vram_mb": vram_mb,
+        "cpu_warning": not has_gpu,
     }
 
 

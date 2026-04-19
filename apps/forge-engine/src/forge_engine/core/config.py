@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     # Local LLM (Ollama)
     LLM_ENABLED: bool = True
     LLM_OLLAMA_URL: str = "http://127.0.0.1:11434"
-    LLM_MODEL: str = "llama3.2"
+    LLM_MODEL: str = "qwen3:14b-q4_K_M"  # Best quality for 12GB+ VRAM; override with FORGE_LLM_MODEL
     LLM_TIMEOUT: int = 120
     LLM_MAX_CONCURRENT: int = 3
 

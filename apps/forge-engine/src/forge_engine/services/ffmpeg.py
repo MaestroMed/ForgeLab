@@ -613,8 +613,8 @@ class FFmpegService:
             if progress_file and progress_file.exists():
                 try:
                     progress_file.unlink()
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug("Non-critical: failed to unlink progress file: %s", _e)
 
         # Wait for process to fully complete
         await proc.wait()

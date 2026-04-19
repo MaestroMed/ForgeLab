@@ -357,8 +357,8 @@ class IntelligentCache:
                 if cache_file.stat().st_mtime < cutoff:
                     cache_file.unlink()
                     count += 1
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("Non-critical: cache cleanup skipped %s: %s", cache_file, _e)
 
         # Clean memory cache
         keys_to_delete = []

@@ -40,8 +40,8 @@ class LocalLLMService:
     """Service for local LLM inference using Ollama."""
 
     # Default Ollama settings (overridden by config)
-    DEFAULT_MODEL = settings.LLM_MODEL if hasattr(settings, 'LLM_MODEL') else "llama3.2"
-    FALLBACK_MODELS = ["llama3.1", "mistral", "phi3"]
+    DEFAULT_MODEL = settings.LLM_MODEL if hasattr(settings, 'LLM_MODEL') else "qwen3:14b-q4_K_M"
+    FALLBACK_MODELS = ["qwen3:14b-q4_K_M", "qwen3:8b", "gemma3:12b", "llama3.2", "llama3.1", "mistral", "phi3"]
     BASE_URL = settings.LLM_OLLAMA_URL if hasattr(settings, 'LLM_OLLAMA_URL') else "http://127.0.0.1:11434"
     TIMEOUT = float(settings.LLM_TIMEOUT if hasattr(settings, 'LLM_TIMEOUT') else 120)
 

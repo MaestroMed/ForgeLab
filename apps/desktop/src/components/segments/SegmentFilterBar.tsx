@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  Filter, 
-  ChevronDown, 
-  ChevronUp, 
+import {
+  Filter,
+  ChevronDown,
+  ChevronUp,
   RotateCcw,
   Zap,
   Clock,
@@ -12,6 +12,7 @@ import {
   X,
   Tag,
 } from 'lucide-react';
+import { useDebounce } from '@/hooks/useDebounce';
 
 interface SegmentStats {
   total: number;
@@ -53,23 +54,6 @@ const LIMIT_PRESETS = [
   { label: 'Top 50', value: 50 },
   { label: 'Tous', value: null },
 ];
-
-// Debounce hook
-function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState<T>(value);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedValue(value);
-    }, delay);
-
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [value, delay]);
-
-  return debouncedValue;
-}
 
 export function SegmentFilterBar({
   stats,

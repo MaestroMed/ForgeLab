@@ -48,6 +48,20 @@ function parseQC(artifact: Artifact): QCResult | null {
   }
 }
 
+/** Parse published_to metadata stored as JSON in artifact.description */
+function parsePublished(
+  artifact: Artifact
+): { platforms: string[]; publishedAt?: string } | null {
+  if (!artifact.description) return null;
+  try {
+    const parsed = JSON.parse(artifact.description);
+    if (parsed?.published_to?.length) {
+      return { platforms: parsed.published_to, publishedAt: parsed.published_at };
+    }
+  } catch {}
+  return null;
+}
+
 /** QC badge: ✅ pass, ⚠ warning, ✗ fail */
 function QCBadge({ qc }: { qc: QCResult }) {
   const config = {
@@ -77,6 +91,9 @@ export default function ExportPanel({ project }: ExportPanelProps) {
   const [selectedVideo, setSelectedVideo] = useState<Artifact | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [publishingArtifact, setPublishingArtifact] = useState<Artifact | null>(null);
+  const [contentByArtifact, setContentByArtifact] = useState<
+    Record<string, { title: string; description: string; hashtags: string[] }>
+  >({});
   const previousJobStatusRef = useRef<Record<string, string>>({});
 
   // React Query: fetch artifacts
@@ -176,13 +193,56 @@ export default function ExportPanel({ project }: ExportPanelProps) {
             <h3 className="font-semibold text-[var(--text-primary)]">
               Exports ({Object.keys(groupedArtifacts).length})
             </h3>
-            <button
-              onClick={() => refetchArtifacts()}
-              className="p-2 rounded-lg hover:bg-white/5 transition-colors text-gray-400 hover:text-gray-200"
-              title="Actualiser"
-            >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            </button>
+            <div className="flex items-center gap-2">
+              {Object.keys(groupedArtifacts).length > 0 && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    addToast({
+                      type: 'info',
+                      title: 'Génération en cours',
+                      message: `Contenu pour ${Object.keys(groupedArtifacts).length} clips...`,
+                    });
+                    const promises = Object.values(groupedArtifacts).map(async (items) => {
+                      const video = items.find((a) => a.type === 'video');
+                      if (!video) return null;
+                      try {
+                        const segRes = await api.getSegment(project.id, video.segmentId);
+                        const seg = (segRes?.data as any) ?? segRes;
+                        const transcript: string =
+                          typeof seg?.transcript === 'string'
+                            ? seg.transcript
+                            : seg?.transcript?.text ?? '';
+                        const tags: string[] = seg?.score?.tags ?? seg?.tags ?? [];
+                        if (!transcript) return null;
+                        return api.generateSegmentContent(transcript, tags, 'tiktok');
+                      } catch {
+                        return null;
+                      }
+                    });
+                    const results = await Promise.all(promises);
+                    const successful = results.filter(Boolean).length;
+                    addToast({
+                      type: 'success',
+                      title: 'Terminé',
+                      message: `${successful}/${results.length} contenus générés.`,
+                    });
+                  }}
+                  title="Générer titres/descriptions/hashtags pour tous les exports"
+                >
+                  <Sparkles className="w-4 h-4 mr-1" />
+                  Générer tout
+                </Button>
+              )}
+              <button
+                onClick={() => refetchArtifacts()}
+                className="p-2 rounded-lg hover:bg-white/5 transition-colors text-gray-400 hover:text-gray-200"
+                title="Actualiser"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
           </div>
 
           {loading ? (
@@ -223,6 +283,12 @@ export default function ExportPanel({ project }: ExportPanelProps) {
                         projectId={project.id}
                         onPreview={(url) => setPreviewUrl(url)}
                         onPublish={(artifact) => setPublishingArtifact(artifact)}
+                        onContentGenerated={(artifactId, content) =>
+                          setContentByArtifact((prev) => ({
+                            ...prev,
+                            [artifactId]: content,
+                          }))
+                        }
                       />
                     </motion.div>
                   );
@@ -270,7 +336,12 @@ export default function ExportPanel({ project }: ExportPanelProps) {
         <SocialPublishModal
           artifactId={publishingArtifact.id}
           projectId={project.id}
-          defaultTitle={publishingArtifact.filename.replace(/\.[^.]+$/, '')}
+          defaultTitle={
+            contentByArtifact[publishingArtifact.id]?.title ??
+            publishingArtifact.filename.replace(/\.[^.]+$/, '')
+          }
+          defaultDescription={contentByArtifact[publishingArtifact.id]?.description ?? ''}
+          defaultHashtags={contentByArtifact[publishingArtifact.id]?.hashtags ?? []}
           onClose={() => setPublishingArtifact(null)}
         />
       )}
@@ -288,9 +359,11 @@ interface ContentData {
 function ContentPanel({
   artifact,
   projectId,
+  onContentGenerated,
 }: {
   artifact: Artifact;
   projectId: string;
+  onContentGenerated?: (content: { title: string; description: string; hashtags: string[] }) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -300,6 +373,18 @@ function ContentPanel({
   const [editedHashtags, setEditedHashtags] = useState('');
   const [similarStats, setSimilarStats] = useState<{ count: number; avg_views: number } | null>(null);
   const { addToast } = useToastStore();
+
+  // Bubble the current edited content up to ExportPanel so SocialPublishModal
+  // can prefill title/description/hashtags when the user clicks Publier.
+  useEffect(() => {
+    if (!onContentGenerated) return;
+    if (!content) return;
+    onContentGenerated({
+      title: editedTitle,
+      description: editedDesc,
+      hashtags: editedHashtags.split(/\s+/).filter(Boolean),
+    });
+  }, [editedTitle, editedDesc, editedHashtags, content, onContentGenerated]);
 
   // Fetch similar-clips stats once the panel is opened
   useEffect(() => {
@@ -486,6 +571,7 @@ function ExportCard({
   projectId,
   onPreview,
   onPublish,
+  onContentGenerated,
 }: {
   artifacts: Artifact[];
   onOpen: (path: string) => void;
@@ -494,6 +580,10 @@ function ExportCard({
   projectId: string;
   onPreview: (url: string) => void;
   onPublish: (artifact: Artifact) => void;
+  onContentGenerated?: (
+    artifactId: string,
+    content: { title: string; description: string; hashtags: string[] }
+  ) => void;
 }) {
   const video = artifacts.find((a) => a.type === 'video');
   const cover = artifacts.find((a) => a.type === 'cover');
@@ -505,6 +595,7 @@ function ExportCard({
   const videoUrl = `${baseUrl}/v1/projects/${projectId}/artifacts/${video.id}/file`;
   const coverUrl = cover ? `${baseUrl}/v1/projects/${projectId}/artifacts/${cover.id}/file` : null;
   const qc = parseQC(video);
+  const published = parsePublished(video);
 
   return (
     <Card
@@ -558,6 +649,23 @@ function ExportCard({
                   <span className="px-2 py-1 rounded-full text-[10px] font-medium bg-green-500/10 text-green-400 border border-green-500/20 flex items-center">
                     <CheckCircle className="w-3 h-3 mr-1" />
                     Prêt
+                  </span>
+                )}
+                {published && (
+                  <span
+                    className="px-2 py-1 rounded-full text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                    title={
+                      published.publishedAt
+                        ? `Publié le ${formatDate(published.publishedAt)}`
+                        : 'Déjà publié'
+                    }
+                  >
+                    ✓ Publié{' '}
+                    {published.platforms
+                      .map((p) =>
+                        p === 'tiktok' ? '🎵' : p === 'youtube' ? '▶️' : '📸'
+                      )
+                      .join(' ')}
                   </span>
                 )}
               </div>
@@ -630,7 +738,15 @@ function ExportCard({
             </div>
           </div>
         </div>
-        <ContentPanel artifact={video} projectId={projectId} />
+        <ContentPanel
+          artifact={video}
+          projectId={projectId}
+          onContentGenerated={
+            onContentGenerated
+              ? (content) => onContentGenerated(video.id, content)
+              : undefined
+          }
+        />
       </CardContent>
     </Card>
   );

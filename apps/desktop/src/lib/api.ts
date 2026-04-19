@@ -296,36 +296,6 @@ class ApiClient {
     });
   }
 
-  async exportAllVariants(
-    projectId: string,
-    options: {
-      segmentId: string;
-      styles?: string[];  // Default: ["viral", "clean", "impact"]
-      platform?: string;
-      includeCaptions?: boolean;
-      burnSubtitles?: boolean;
-      useNvenc?: boolean;
-      layoutConfig?: any;
-      introConfig?: any;
-      musicConfig?: any;
-    }
-  ) {
-    return this.request<ApiResponse<{ jobId: string; variants: string[] }>>(`/projects/${projectId}/export-variants`, {
-      method: 'POST',
-      body: JSON.stringify({
-        segment_id: options.segmentId,
-        styles: options.styles ?? ['viral', 'clean', 'impact'],
-        platform: options.platform ?? 'tiktok',
-        include_captions: options.includeCaptions ?? true,
-        burn_subtitles: options.burnSubtitles ?? true,
-        use_nvenc: options.useNvenc ?? true,
-        layout_config: options.layoutConfig,
-        intro_config: options.introConfig,
-        music_config: options.musicConfig,
-      }),
-    });
-  }
-
   async listArtifacts(projectId: string) {
     return this.request<ApiResponse<any[]>>(`/projects/${projectId}/artifacts`);
   }
@@ -508,66 +478,6 @@ class ApiClient {
   // NEW AI/ML ENDPOINTS
   // ========================
 
-  // Emotion Detection
-  async analyzeEmotions(videoPath: string, startTime: number, endTime: number, duration: number) {
-    return this.request<any>('/emotion/analyze', {
-      method: 'POST',
-      body: JSON.stringify({
-        video_path: videoPath,
-        start_time: startTime,
-        end_time: endTime,
-        duration,
-      }),
-    });
-  }
-
-  async getEmotionStatus() {
-    return this.request<{ available: boolean; backend: string | null }>('/emotion/status');
-  }
-
-  // Audio Analysis
-  async analyzeAudio(audioPath: string) {
-    return this.request<any>('/audio/analyze', {
-      method: 'POST',
-      body: JSON.stringify({ audio_path: audioPath }),
-    });
-  }
-
-  async getAudioStatus() {
-    return this.request<{ available: boolean; sample_rate: number }>('/audio/status');
-  }
-
-  // ML Scoring
-  async predictMLScore(segment: any, audioData?: any, emotionData?: any) {
-    return this.request<any>('/ml-scoring/predict', {
-      method: 'POST',
-      body: JSON.stringify({
-        segment,
-        audio_data: audioData,
-        emotion_data: emotionData,
-        blend_with_heuristic: true,
-      }),
-    });
-  }
-
-  async addMLFeedback(segment: any, rating: number) {
-    return this.request<any>('/ml-scoring/feedback', {
-      method: 'POST',
-      body: JSON.stringify({ segment, rating }),
-    });
-  }
-
-  async trainMLModel(force = false) {
-    return this.request<any>('/ml-scoring/train', {
-      method: 'POST',
-      body: JSON.stringify({ force }),
-    });
-  }
-
-  async getMLStatus() {
-    return this.request<any>('/ml-scoring/status');
-  }
-
   // Content Generation
   async generateTitles(transcript: string, count = 5, style?: string) {
     return this.request<{ titles: string[]; llm_generated: boolean }>('/content/title', {
@@ -651,101 +561,8 @@ class ApiClient {
     }>(`/virality/similar-stats?predicted_score=${predictedScore}&platform=${platform}&tolerance=${tolerance}`);
   }
 
-  async recordPerformance(data: {
-    segmentId: string;
-    predictedScore: number;
-    platform: string;
-    views: number;
-    likes?: number;
-    completionRate?: number;
-  }) {
-    return this.request<{ status: string; total_records: number }>('/virality/performance', {
-      method: 'POST',
-      body: JSON.stringify({
-        segment_id: data.segmentId,
-        predicted_score: data.predictedScore,
-        platform: data.platform,
-        views: data.views,
-        likes: data.likes ?? 0,
-        completion_rate: data.completionRate ?? 0,
-      }),
-    });
-  }
-
-  // Translation
-  async translateText(text: string, targetLang: string, sourceLang = 'fr') {
-    return this.request<{ original: string; translated: string }>('/translation/text', {
-      method: 'POST',
-      body: JSON.stringify({ text, source_lang: sourceLang, target_lang: targetLang }),
-    });
-  }
-
-  async translateSubtitles(words: any[], targetLang: string, sourceLang = 'fr') {
-    return this.request<{ words: any[] }>('/translation/subtitles', {
-      method: 'POST',
-      body: JSON.stringify({
-        words,
-        source_lang: sourceLang,
-        target_lang: targetLang,
-        preserve_timing: true,
-      }),
-    });
-  }
-
   async getTranslationLanguages() {
     return this.request<{ languages: Record<string, string> }>('/translation/languages');
-  }
-
-  // Virality Prediction
-  async predictVirality(segment: any, includeSuggestions = true) {
-    return this.request<any>('/virality/predict', {
-      method: 'POST',
-      body: JSON.stringify({ segment, include_suggestions: includeSuggestions }),
-    });
-  }
-
-  async predictViralityBatch(segments: any[]) {
-    return this.request<{ predictions: any[]; count: number }>('/virality/batch', {
-      method: 'POST',
-      body: JSON.stringify({ segments, sort_by_score: true }),
-    });
-  }
-
-  // Compilation
-  async createCompilation(
-    projectId: string,
-    options: {
-      segmentIds?: string[];
-      maxDuration?: number;
-      minSegmentScore?: number;
-      title?: string;
-      includeTransitions?: boolean;
-      transitionType?: string;
-    }
-  ) {
-    return this.request<{ job_id: string; status: string }>('/compilation/create', {
-      method: 'POST',
-      body: JSON.stringify({
-        project_id: projectId,
-        segment_ids: options.segmentIds,
-        max_duration: options.maxDuration || 60,
-        min_segment_score: options.minSegmentScore || 60,
-        title: options.title,
-        include_transitions: options.includeTransitions ?? true,
-        transition_type: options.transitionType || 'crossfade',
-      }),
-    });
-  }
-
-  async getCompilationStatus(jobId: string) {
-    return this.request<any>(`/compilation/job/${jobId}`);
-  }
-
-  async autoSelectSegments(projectId: string, maxDuration = 60, minScore = 60) {
-    return this.request<{ segments: any[]; count: number; total_duration: number }>(
-      `/compilation/auto-select?project_id=${projectId}&max_duration=${maxDuration}&min_score=${minScore}`,
-      { method: 'POST' }
-    );
   }
 
   // Social Publishing
@@ -766,30 +583,6 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ platform, credentials }),
     });
-  }
-
-  async publishToSocial(
-    platform: string,
-    videoPath: string,
-    title: string,
-    description?: string,
-    hashtags?: string[]
-  ) {
-    return this.request<{ job_id: string; status: string; platform: string }>('/social/publish', {
-      method: 'POST',
-      body: JSON.stringify({
-        platform,
-        video_path: videoPath,
-        title,
-        description,
-        hashtags,
-        visibility: 'public',
-      }),
-    });
-  }
-
-  async getPublishStatus(jobId: string) {
-    return this.request<any>(`/social/publish/${jobId}`);
   }
 
   // ========================
@@ -844,53 +637,6 @@ class ApiClient {
 
   async getAnalyticsOverview() {
     return this.request<any>('/analytics/overview');
-  }
-
-  async getClipStats(clipId: string) {
-    return this.request<any>(`/analytics/clips/${clipId}/stats`);
-  }
-
-  async getTopClips(limit = 10, metric = 'views', days = 30) {
-    return this.request<{ clips: any[]; metric: string; period_days: number }>(
-      `/analytics/top-clips?limit=${limit}&metric=${metric}&days=${days}`
-    );
-  }
-
-  async recordAnalyticsEvent(
-    eventType: string,
-    data: { projectId?: string; segmentId?: string; clipId?: string; metadata?: any }
-  ) {
-    return this.request<{ success: boolean }>('/analytics/events', {
-      method: 'POST',
-      body: JSON.stringify({
-        event_type: eventType,
-        project_id: data.projectId,
-        segment_id: data.segmentId,
-        clip_id: data.clipId,
-        metadata: data.metadata,
-      }),
-    });
-  }
-
-  async updateClipPerformance(
-    clipId: string,
-    platform: string,
-    metrics: { views?: number; likes?: number; comments?: number; shares?: number }
-  ) {
-    return this.request<{ success: boolean }>('/analytics/clips/performance', {
-      method: 'POST',
-      body: JSON.stringify({
-        clip_id: clipId,
-        platform,
-        ...metrics,
-      }),
-    });
-  }
-
-  async exportAnalytics(projectId?: string, format = 'json', days = 90) {
-    const params = new URLSearchParams({ format, days: days.toString() });
-    if (projectId) params.set('project_id', projectId);
-    return this.request<any>(`/analytics/export?${params}`);
   }
 
   // ========================
@@ -967,25 +713,6 @@ class ApiClient {
   // ========================
   // Translation Multi (batch target languages) & Supported
   // ========================
-
-  async translateSubtitlesMulti(
-    words: Array<{ word: string; start: number; end: number }>,
-    sourceLang: string,
-    targetLangs: string[]
-  ) {
-    return this.request<{
-      results: Record<string, { words: any[]; success: boolean }>;
-      source_lang: string;
-      languages_processed: number;
-    }>('/translation/multi', {
-      method: 'POST',
-      body: JSON.stringify({
-        words,
-        source_lang: sourceLang,
-        target_langs: targetLangs,
-      }),
-    });
-  }
 
   async getSupportedLanguages() {
     return this.request<{
@@ -1080,26 +807,7 @@ class ApiClient {
     });
   }
 
-  async getMe(token: string) {
-    return this.request<any>('/auth/me', {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-  }
-
-  async getQuota(token: string) {
-    return this.request<{ plan: string; exports_this_month: number; limit: number | null; can_export: boolean }>('/auth/me/quota', {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-  }
-
   // LLM / Assistant
-  async chatWithAssistant(message: string, projectId?: string, context?: any[]) {
-    return this.request<{ response: string; action?: any }>('/llm/chat', {
-      method: 'POST',
-      body: JSON.stringify({ message, project_id: projectId, context }),
-    });
-  }
-
   async getLLMStatus() {
     return this.request<{ available: boolean; model: string }>('/llm/status');
   }
