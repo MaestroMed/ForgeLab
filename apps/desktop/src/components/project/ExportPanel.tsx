@@ -18,6 +18,11 @@ interface ExportPanelProps {
   };
 }
 
+interface QCResult {
+  overall: 'pass' | 'warning' | 'fail';
+  checks: { name: string; passed: boolean; message: string }[];
+}
+
 interface Artifact {
   id: string;
   segmentId: string;
@@ -27,6 +32,41 @@ interface Artifact {
   filename: string;
   size: number;
   createdAt: string;
+  description?: string; // JSON: { qc: QCResult } for video artifacts
+}
+
+/** Parse QC data stored as JSON in artifact.description */
+function parseQC(artifact: Artifact): QCResult | null {
+  if (!artifact.description) return null;
+  try {
+    const parsed = JSON.parse(artifact.description);
+    return parsed?.qc ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** QC badge: ✅ pass, ⚠ warning, ✗ fail */
+function QCBadge({ qc }: { qc: QCResult }) {
+  const config = {
+    pass:    { label: 'QC ✓', cls: 'bg-green-500/10 text-green-400 border-green-500/20' },
+    warning: { label: 'QC ⚠', cls: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20' },
+    fail:    { label: 'QC ✗', cls: 'bg-red-500/10 text-red-400 border-red-500/20' },
+  }[qc.overall];
+
+  const tooltip = qc.checks
+    .filter((c) => !c.passed)
+    .map((c) => c.message)
+    .join('\n') || 'Tous les contrôles qualité sont passés';
+
+  return (
+    <span
+      className={`px-2 py-1 rounded-full text-[10px] font-medium border ${config.cls}`}
+      title={tooltip}
+    >
+      {config.label}
+    </span>
+  );
 }
 
 export default function ExportPanel({ project }: ExportPanelProps) {
@@ -223,9 +263,10 @@ function ExportCard({
   const baseUrl = ENGINE_BASE_URL;
   const videoUrl = `${baseUrl}/v1/projects/${projectId}/artifacts/${video.id}/file`;
   const coverUrl = cover ? `${baseUrl}/v1/projects/${projectId}/artifacts/${cover.id}/file` : null;
+  const qc = parseQC(video);
 
   return (
-    <Card 
+    <Card
       className={`hover:shadow-panel-hover transition-all cursor-pointer ${
         isSelected ? 'ring-2 ring-blue-500 bg-blue-500/5' : ''
       }`}
@@ -270,10 +311,14 @@ function ExportCard({
               </div>
 
               <div className="flex items-center gap-2">
-                <span className="px-2 py-1 rounded-full text-[10px] font-medium bg-green-500/10 text-green-400 border border-green-500/20 flex items-center">
-                  <CheckCircle className="w-3 h-3 mr-1" />
-                  Prêt
-                </span>
+                {qc ? (
+                  <QCBadge qc={qc} />
+                ) : (
+                  <span className="px-2 py-1 rounded-full text-[10px] font-medium bg-green-500/10 text-green-400 border border-green-500/20 flex items-center">
+                    <CheckCircle className="w-3 h-3 mr-1" />
+                    Prêt
+                  </span>
+                )}
               </div>
             </div>
 

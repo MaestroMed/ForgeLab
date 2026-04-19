@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ENGINE_BASE_URL } from '@/lib/config';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { api } from '@/lib/api';
+import { useSegmentStats, useSegmentTags, useSegmentSuggestions } from '@/lib/queries';
+import { SkeletonRow } from '@/components/ui/Skeleton';
 import { SegmentFilterBar, type FilterState, type SegmentStats } from '@/components/segments/SegmentFilterBar';
 import { useSegmentFilterStore, useToastStore } from '@/store';
 import { useSegmentNavigation } from '@/hooks/useSegmentNavigation';
@@ -58,7 +60,7 @@ type SortMode = 'score' | 'duration' | 'time';
 
 export default function ForgePanel({ project }: ForgePanelProps) {
   const navigate = useNavigate();
-  const { addToast } = useToastStore();
+  useToastStore();
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -66,8 +68,10 @@ export default function ForgePanel({ project }: ForgePanelProps) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [selectedSegment, setSelectedSegment] = useState<Segment | null>(null);
   
-  // Stats from backend
-  const [segmentStats, setSegmentStats] = useState<SegmentStats | null>(null);
+  // Stats from backend (via React Query)
+  const { data: statsData } = useSegmentStats(project.id);
+  const segmentStats = (statsData?.data ?? null) as SegmentStats | null;
+
   const [totalFiltered, setTotalFiltered] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -89,11 +93,19 @@ export default function ForgePanel({ project }: ForgePanelProps) {
   // Debounce search input to avoid API calls on every keystroke
   const debouncedSearch = useDebounce(search, 300);
 
-  // Available tags for this project
-  const [availableTags, setAvailableTags] = useState<string[]>([]);
-  
-  // Smart suggestions
-  const [suggestions, setSuggestions] = useState<{ segment: Segment; reason: string }[]>([]);
+  // Available tags for this project (via React Query)
+  const { data: tagsData } = useSegmentTags(project.id);
+  const availableTags = (tagsData?.data?.tags ?? []) as string[];
+
+  // Smart suggestions (via React Query)
+  const { data: suggestionsData } = useSegmentSuggestions(project.id);
+  const suggestions = useMemo(() => {
+    if (!suggestionsData?.data?.suggestions) return [];
+    return suggestionsData.data.suggestions.map((seg: Segment) => ({
+      segment: seg,
+      reason: suggestionsData.data!.reasons[seg.id] || 'Recommandé',
+    }));
+  }, [suggestionsData]);
   const [showSuggestions, setShowSuggestions] = useState(true);
   
   const filters: FilterState = { minScore, minDuration, maxDuration, limit, search, tags: selectedTags };
@@ -114,17 +126,11 @@ export default function ForgePanel({ project }: ForgePanelProps) {
   const [showBatchExportModal, setShowBatchExportModal] = useState(false);
   const [batchExportLoading, setBatchExportLoading] = useState(false);
   const [batchExportProgress, setBatchExportProgress] = useState<{ current: number; total: number; status: string } | null>(null);
+  const [batchPlatform, setBatchPlatform] = useState<'tiktok' | 'youtube_shorts' | 'instagram' | 'twitter'>('tiktok');
   
   // Multi-select state
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-
-  // Load stats, tags, and suggestions on mount
-  useEffect(() => {
-    loadStats();
-    loadTags();
-    loadSuggestions();
-  }, [project.id]);
 
   // Load segments when filters change — use debouncedSearch to avoid API call on every keystroke
   useEffect(() => {
@@ -132,58 +138,6 @@ export default function ForgePanel({ project }: ForgePanelProps) {
     loadSegments(1);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id, minScore, minDuration, maxDuration, limit, sortBy, debouncedSearch, selectedTags]);
-
-  const loadStats = async () => {
-    try {
-      const res = await api.getSegmentStats(project.id);
-      if (res.data) {
-        setSegmentStats(res.data);
-      }
-    } catch (error) {
-      console.error('Failed to load segment stats:', error);
-      addToast({
-        type: 'error',
-        title: 'Erreur de statistiques',
-        message: 'Impossible de charger les statistiques des segments.',
-      });
-    }
-  };
-
-  const loadTags = async () => {
-    try {
-      const res = await api.getSegmentTags(project.id);
-      if (res.data?.tags) {
-        setAvailableTags(res.data.tags);
-      }
-    } catch (error) {
-      console.error('Failed to load tags:', error);
-      addToast({
-        type: 'error',
-        title: 'Erreur de tags',
-        message: 'Impossible de charger les tags disponibles.',
-      });
-    }
-  };
-
-  const loadSuggestions = async () => {
-    try {
-      const res = await api.getSegmentSuggestions(project.id, 5);
-      if (res.data?.suggestions) {
-        const suggestionsWithReasons = res.data.suggestions.map(seg => ({
-          segment: seg as Segment,
-          reason: res.data!.reasons[seg.id] || 'Recommandé',
-        }));
-        setSuggestions(suggestionsWithReasons);
-      }
-    } catch (error) {
-      console.error('Failed to load suggestions:', error);
-      addToast({
-        type: 'error',
-        title: 'Erreur de suggestions',
-        message: 'Impossible de charger les suggestions de segments.',
-      });
-    }
-  };
 
   const loadSegments = async (page: number = 1) => {
     if (page === 1) {
@@ -337,7 +291,7 @@ export default function ForgePanel({ project }: ForgePanelProps) {
         minScore: 70,
         maxClips: 500,
         style: 'viral_pro',
-        platform: 'tiktok',
+        platform: batchPlatform,
         includeCaptions: true,
         burnSubtitles: true,
         includeCover: true,
@@ -548,6 +502,29 @@ export default function ForgePanel({ project }: ForgePanelProps) {
                   )}
                 </div>
 
+                {/* Platform selector */}
+                <div className="grid grid-cols-2 gap-2 mb-4">
+                  {([
+                    { id: 'tiktok',         label: 'TikTok',     emoji: '🎵' },
+                    { id: 'youtube_shorts', label: 'YT Shorts',  emoji: '▶️' },
+                    { id: 'instagram',      label: 'Reels',      emoji: '📸' },
+                    { id: 'twitter',        label: 'Twitter/X',  emoji: '𝕏' },
+                  ] as const).map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => !batchExportLoading && setBatchPlatform(p.id)}
+                      disabled={batchExportLoading}
+                      className={`py-2 px-3 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                        batchPlatform === p.id
+                          ? 'bg-amber-500/20 border border-amber-500 text-amber-300'
+                          : 'bg-[var(--bg-secondary)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:border-amber-500/50'
+                      }`}
+                    >
+                      <span>{p.emoji}</span>{p.label}
+                    </button>
+                  ))}
+                </div>
+
                 <div className="bg-[var(--bg-secondary)] rounded-lg p-4 mb-4">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-[var(--text-secondary)]">Clips à exporter</span>
@@ -564,8 +541,8 @@ export default function ForgePanel({ project }: ForgePanelProps) {
                 </div>
 
                 <p className="text-sm text-[var(--text-muted)] mb-4">
-                  Tous les clips seront exportés avec le style <strong className="text-amber-500">VIRAL PRO</strong> optimisé 
-                  pour TikTok, avec sous-titres, covers et metadata.
+                  Tous les clips seront exportés avec le style <strong className="text-amber-500">VIRAL PRO</strong> optimisé
+                  pour <strong className="text-amber-400">{batchPlatform === 'tiktok' ? 'TikTok' : batchPlatform === 'youtube_shorts' ? 'YouTube Shorts' : batchPlatform === 'instagram' ? 'Instagram Reels' : 'Twitter/X'}</strong>, avec sous-titres, covers et metadata.
                 </p>
 
                 {batchExportProgress && (
@@ -665,8 +642,8 @@ export default function ForgePanel({ project }: ForgePanelProps) {
         {/* Segment List */}
         <div className="flex-1 overflow-y-auto p-2 scrollbar-thin">
           {loading ? (
-            <div className="flex items-center justify-center h-32">
-              <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
+            <div className="space-y-2 p-4">
+              {[...Array(6)].map((_, i) => <SkeletonRow key={i} />)}
             </div>
           ) : displayedSegments.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center p-4">

@@ -122,24 +122,20 @@ class ExportService:
             job_manager.update_progress(job, 5, "setup", "Preparing export...")
 
             # ── Single-pass fast path ─────────────────────────────────────
-            # When EXPORT_SINGLE_PASS is enabled AND no features require a
-            # pre-rendered intermediate (intro overlay needs a pre-built clip,
-            # cold open requires transcript analysis), we delegate to the
-            # single-pass pipeline builder which collapses all FFmpeg steps
-            # into one invocation.
+            # When EXPORT_SINGLE_PASS is True (default), we delegate ALL
+            # transformations to the single-pass pipeline builder, which
+            # collapses layout + jump cuts + cold open + subtitles +
+            # intro overlay + music into one FFmpeg filter_complex call.
             #
-            # Fallback to legacy multi-pass when:
-            #  - EXPORT_SINGLE_PASS is False
-            #  - intro is enabled (requires IntroEngine to render the overlay
-            #    clip first, which produces a separate file)
-            needs_intro = intro_config and intro_config.get("enabled")
-            needs_cold_open = cold_open_config and cold_open_config.get("enabled")
-
-            if (
-                settings.EXPORT_SINGLE_PASS
-                and not needs_intro   # IntroEngine renders its own overlay file
-                and not needs_cold_open  # ColdOpenEngine needs transcript analysis first
-            ):
+            # Intro overlay is handled by pre-rendering a standalone intro
+            # clip (blurred background + text) inside _run_single_pass_export,
+            # then compositing it inline via PipelineConfig.intro_path.
+            # Cold open hook timing is detected via ColdOpenEngine and passed
+            # as PipelineConfig.cold_open_hook_start/end.
+            #
+            # Legacy multi-pass path is retained only as a safety net when
+            # EXPORT_SINGLE_PASS is explicitly set to False.
+            if settings.EXPORT_SINGLE_PASS:
                 logger.info("[Export] Using single-pass FFmpeg pipeline")
                 return await self._run_single_pass_export(
                     job=job,
@@ -160,8 +156,10 @@ class ExportService:
                     use_nvenc=use_nvenc,
                     caption_style=caption_style,
                     layout_config=layout_config,
+                    intro_config=intro_config,
                     music_config=music_config,
                     jump_cut_config=jump_cut_config,
+                    cold_open_config=cold_open_config,
                     transcript_segments=transcript_segments,
                     template=template,
                     template_id=template_id,
@@ -289,8 +287,9 @@ class ExportService:
             # ================================================================
 
             video_path = exports_dir / f"{base_name}.mp4"
-            # needs_intro and needs_cold_open were already evaluated above for the
-            # single-pass decision; reuse them here for the legacy pipeline.
+            # Legacy multi-pass path (only reached when EXPORT_SINGLE_PASS=False)
+            needs_intro = intro_config and intro_config.get("enabled")
+            needs_cold_open = cold_open_config and cold_open_config.get("enabled")
             needs_post_processing = needs_intro or needs_jump_cuts or needs_cold_open
 
             # --- STEP 1: Render 9:16 clip with captions ---
@@ -686,25 +685,43 @@ class ExportService:
         use_nvenc: bool,
         caption_style: dict[str, Any] | None,
         layout_config: dict[str, Any] | None,
+        intro_config: dict[str, Any] | None,
         music_config: dict[str, Any] | None,
         jump_cut_config: dict[str, Any] | None,
+        cold_open_config: dict[str, Any] | None,
         transcript_segments: list[dict[str, Any]],
         template: Optional["Template"],
         template_id: str | None,
         db,
     ) -> dict[str, Any]:
         """
-        Single-pass export: assembles all transformations into one FFmpeg call.
+        Single-pass export: assembles ALL transformations into one FFmpeg call.
 
-        Covers: layout composition, jump cuts, subtitle burn, music mix.
-        Cold open and intro overlays fall back to the legacy pipeline because
-        they require separate intermediate files produced by ColdOpenEngine /
-        IntroEngine.
+        Covers: layout composition, jump cuts, cold open reorder, subtitle burn,
+        intro overlay (pre-rendered then composited inline), and music mix.
         """
         logger.info("[SinglePass] Building single-pass FFmpeg pipeline")
         artifacts = []
         datetime.now().strftime("%Y%m%d_%H%M%S")
         video_path = exports_dir / f"{base_name}.mp4"
+
+        # ── Apply platform preset constraints ────────────────────────────
+        preset = settings.PLATFORM_PRESETS.get(platform, {})
+        preset_max_duration = preset.get("max_duration")
+        actual_duration = segment.duration
+        if preset_max_duration and actual_duration > preset_max_duration:
+            logger.warning(
+                f"[SinglePass] Segment duration {actual_duration:.1f}s exceeds "
+                f"{platform} max of {preset_max_duration}s — clip will be trimmed"
+            )
+            actual_duration = preset_max_duration
+
+        # Platform codec: YouTube Shorts prefers H.265 when nvenc not in use
+        _use_nvenc = use_nvenc
+        if platform == "youtube_shorts" and not use_nvenc:
+            # H.265 (libx265) is preferred for YouTube Shorts quality/size ratio
+            # but NVENC h264 is acceptable and much faster
+            logger.info("[SinglePass] YouTube Shorts: using libx265 for CPU encode")
 
         # ── Build layout config ───────────────────────────────────────────
 
@@ -729,6 +746,34 @@ class ExportService:
                 "w": max(0.01, min(content_source["width"], 1.0)),
                 "h": max(0.01, min(content_source["height"], 1.0)),
             }
+
+        # ── Face tracking — animated SmartCrop ──────────────────────────
+        facecam_keyframes: list = []
+        if facecam_rect_norm:
+            # Only run tracking when there's a dedicated facecam zone
+            try:
+                from forge_engine.services.facecam_tracking import FacecamTracker
+                _face_tracker = FacecamTracker()
+                if _face_tracker.is_available():
+                    job_manager.update_progress(
+                        job, 5, "tracking", "Analyse des positions du visage..."
+                    )
+                    _detections = await _face_tracker.track_faces(
+                        video_path=project.source_path,
+                        start_time=segment.start_time,
+                        end_time=segment.start_time + segment.duration,
+                        sample_interval=0.5,
+                    )
+                    facecam_keyframes = _face_tracker.generate_keyframes(_detections)
+                    logger.info(
+                        f"[SinglePass] Face tracking: {len(facecam_keyframes)} keyframes "
+                        f"over {segment.duration:.0f}s"
+                    )
+                    if len(facecam_keyframes) <= 1:
+                        # Not enough movement to animate — use static crop
+                        facecam_keyframes = []
+            except Exception as _e:
+                logger.info(f"[SinglePass] Face tracking unavailable ({_e}), using static crop")
 
         # ── Build ASS subtitle file ───────────────────────────────────────
         ass_path = None
@@ -810,17 +855,95 @@ class ExportService:
                 music_path_obj = mp
                 music_volume = music_config.get("volume", 0.15)
 
+        # ── Cold open hook detection ─────────────────────────────────────
+        cold_open_hook_start: float | None = None
+        cold_open_hook_end: float | None = None
+        if cold_open_config and cold_open_config.get("enabled"):
+            try:
+                # Timestamps must be relative to clip start (0-based)
+                adjusted_transcript = [
+                    {
+                        **seg,
+                        "start": seg["start"] - segment.start_time,
+                        "end": seg["end"] - segment.start_time,
+                    }
+                    for seg in transcript_segments
+                    if segment.start_time <= seg.get("start", 0) <= segment.end_time
+                ]
+                segment_dict = {"start_time": 0.0, "end_time": segment.duration}
+                language = cold_open_config.get("language", "fr")
+                variations = await self.cold_open.generate_cold_opens(
+                    segment=segment_dict,
+                    transcript_segments=adjusted_transcript,
+                    language=language,
+                    max_variations=1,
+                )
+                real_variations = [v for v in variations if v.id != "control"]
+                if real_variations:
+                    best = real_variations[0]
+                    hs, he = best.hook.start_time, best.hook.end_time
+                    if hs >= 1.0 and he <= segment.duration - 1.0:
+                        cold_open_hook_start = hs
+                        cold_open_hook_end = he
+                        logger.info(
+                            f"[SinglePass] Cold open hook detected: "
+                            f"{hs:.1f}s–{he:.1f}s (score={best.hook.score})"
+                        )
+                    else:
+                        logger.info("[SinglePass] Cold open hook too close to edges, skipping")
+                else:
+                    logger.info("[SinglePass] No cold open hook found")
+            except Exception as e:
+                logger.warning(f"[SinglePass] Cold open detection failed: {e}, continuing without")
+
+        # ── Intro pre-render ─────────────────────────────────────────────
+        intro_clip_path: Path | None = None
+        intro_duration_val: float = 0.0
+        if intro_config and intro_config.get("enabled"):
+            try:
+                if not intro_config.get("title"):
+                    intro_config = {**intro_config, "title": segment.topic_label or "Untitled"}
+                intro_duration_val = float(intro_config.get("duration", 2.5))
+                _intro_out = exports_dir / f"{base_name}_intro_clip.mp4"
+                job_manager.update_progress(job, 8, "intro", "Pre-rendering intro clip...")
+                await self.intro.render_intro(
+                    source_path=project.source_path,
+                    output_path=str(_intro_out),
+                    start_time=segment.start_time,
+                    duration=intro_duration_val,
+                    config=intro_config,
+                )
+                if _intro_out.exists() and _intro_out.stat().st_size > 0:
+                    intro_clip_path = _intro_out
+                    logger.info(
+                        f"[SinglePass] Intro pre-rendered: {_intro_out.name} "
+                        f"({intro_duration_val:.1f}s)"
+                    )
+                else:
+                    logger.warning("[SinglePass] Intro render produced no output, skipping")
+            except Exception as e:
+                logger.warning(f"[SinglePass] Intro pre-render failed: {e}, continuing without")
+                intro_clip_path = None
+                intro_duration_val = 0.0
+
         # ── Build PipelineConfig ─────────────────────────────────────────
         pipeline_cfg = PipelineConfig(
             source_path=Path(project.source_path),
             segment_start=segment.start_time,
-            segment_duration=segment.duration,
+            segment_duration=actual_duration,  # Possibly trimmed to platform max
             output_width=settings.OUTPUT_WIDTH,
             output_height=settings.OUTPUT_HEIGHT,
+            source_width=project.width or 1920,
+            source_height=project.height or 1080,
             facecam_rect=facecam_rect_norm,
             content_rect=content_rect_norm,
+            facecam_keyframes=facecam_keyframes,
             ass_path=ass_path,
             keep_ranges=keep_ranges,
+            cold_open_hook_start=cold_open_hook_start,
+            cold_open_hook_end=cold_open_hook_end,
+            intro_path=intro_clip_path,
+            intro_duration=intro_duration_val,
             music_path=music_path_obj,
             music_volume=music_volume,
             output_path=video_path,

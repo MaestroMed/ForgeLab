@@ -24,6 +24,14 @@ class PipelineConfig:
     facecam_rect: dict | None = None   # {x, y, w, h} normalized 0-1
     content_rect: dict | None = None
 
+    # Source dimensions (needed for animated face tracking crop)
+    source_width: int = 1920
+    source_height: int = 1080
+
+    # Face tracking — animated SmartCrop keyframes
+    # Each entry: {time: float, crop: {x,y,width,height} (0-1 normalized), zoom: float}
+    facecam_keyframes: list = field(default_factory=list)
+
     # Subtitles
     ass_path: Path | None = None       # Pre-generated ASS file
 
@@ -100,15 +108,33 @@ class PipelineSinglePass:
             f_w = int(fr["w"] * out_w) & ~1
             f_h = int(fr["h"] * out_h) & ~1
 
+            # Facecam stream: animated tracking crop or static crop
+            if cfg.facecam_keyframes:
+                from forge_engine.services.facecam_tracking import FacecamTracker
+                _tracker = FacecamTracker()
+                facecam_filter = _tracker.generate_ffmpeg_filter(
+                    cfg.facecam_keyframes,
+                    input_width=cfg.source_width,
+                    input_height=cfg.source_height,
+                    output_width=f_w,
+                    output_height=f_h,
+                    fps=cfg.fps,
+                    segment_start=cfg.segment_start,
+                )
+                logger.debug("[Pipeline] Using animated face-tracking crop for facecam")
+            else:
+                facecam_filter = (
+                    f"crop={f_w}:{f_h}:{f_x}:{f_y},scale={f_w}:{f_h}"
+                )
+
             filters.append(
                 # Black canvas
                 f"color=black:{out_w}x{out_h}:r={cfg.fps}[canvas];"
                 # Content zone — scale source crop to zone size
                 f"[{source_idx}:v]crop={c_w}:{c_h}:{c_x}:{c_y},"
                 f"scale={c_w}:{c_h}[content_scaled];"
-                # Facecam zone — scale source crop to zone size
-                f"[{source_idx}:v]crop={f_w}:{f_h}:{f_x}:{f_y},"
-                f"scale={f_w}:{f_h}[facecam_scaled];"
+                # Facecam zone — animated tracking or static crop
+                f"[{source_idx}:v]{facecam_filter}[facecam_scaled];"
                 # Compose on canvas
                 f"[canvas][content_scaled]overlay={c_x}:{c_y}[with_content];"
                 f"[with_content][facecam_scaled]overlay={f_x}:{f_y}[composed_v]"
@@ -204,6 +230,9 @@ class PipelineSinglePass:
         # Codec selection
         if cfg.use_nvenc:
             vcodec = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", str(cfg.crf)]
+        elif cfg.platform == "youtube_shorts":
+            # H.265 for best quality/size ratio on YouTube Shorts (CPU encode)
+            vcodec = ["-c:v", "libx265", "-preset", "medium", "-crf", str(cfg.crf), "-tag:v", "hvc1"]
         else:
             vcodec = ["-c:v", "libx264", "-preset", "medium", "-crf", str(cfg.crf)]
 

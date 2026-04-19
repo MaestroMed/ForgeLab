@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { mediaUrl } from '@/lib/config';
+import { useProject, useSegmentStats, useSegmentTags } from '@/lib/queries';
 import {
   ArrowLeft,
   Play,
@@ -63,26 +64,33 @@ export default function ClipEditorPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   useRef<HTMLDivElement>(null); // canvasContainerRef
 
+  // React Query — project, stats, tags (cached + auto-refresh)
+  const { data: projectResponse, isLoading: projectLoading } = useProject(projectId);
+  const project = (projectResponse?.data ?? null) as Project | null;
+
+  const { data: statsData } = useSegmentStats(projectId ?? '');
+  const segmentStats = (statsData?.data ?? null) as SegmentStats | null;
+
+  const { data: tagsData } = useSegmentTags(projectId ?? '');
+  const availableTags = (tagsData?.data?.tags ?? []) as string[];
+
   // State
-  const [project, setProject] = useState<Project | null>(null);
   const [timeline, setTimeline] = useState<any>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [selectedSegment, setSelectedSegment] = useState<Segment | null>(null);
   const [loading, setLoading] = useState(true);
-  
+
   // Segment filter state from persisted store
-  const { 
-    minScore, minDuration, maxDuration, limit, 
+  const {
+    minScore, minDuration, maxDuration, limit,
     sortBy, search, selectedTags,
     setFilters: setStoreFilters,
     setSearch,
     setSelectedTags,
   } = useSegmentFilterStore();
-  
-  const [segmentStats, setSegmentStats] = useState<SegmentStats | null>(null);
+
   const [, setTotalFiltered] = useState(0);
-  const [availableTags, setAvailableTags] = useState<string[]>([]);
-  
+
   const filters: FilterState = { minScore, minDuration, maxDuration, limit, search, tags: selectedTags };
   
   const setFilters = (newFilters: FilterState) => {
@@ -199,32 +207,19 @@ export default function ClipEditorPage() {
     }
   };
 
-  // Load project and timeline on mount
+  // Load timeline on mount (project/stats/tags handled by React Query hooks above)
   useEffect(() => {
-    async function loadProject() {
+    async function loadTimeline() {
       if (!projectId) return;
       try {
-        const [projectRes, timelineRes, statsRes, tagsRes] = await Promise.all([
-          api.getProject(projectId),
-          api.getTimeline(projectId),
-          api.getSegmentStats(projectId),
-          api.getSegmentTags(projectId),
-        ]);
-        setProject(projectRes.data ?? null);
+        const timelineRes = await api.getTimeline(projectId);
         setTimeline(timelineRes.data);
-        if (statsRes.data) {
-          setSegmentStats(statsRes.data);
-        }
-        if (tagsRes.data?.tags) {
-          setAvailableTags(tagsRes.data.tags);
-        }
       } catch (err) {
-        console.error('Failed to load project:', err);
-        addToast({ type: 'error', title: 'Erreur', message: 'Impossible de charger le projet' });
+        console.error('Failed to load timeline:', err);
       }
     }
-    loadProject();
-  }, [projectId, addToast]);
+    loadTimeline();
+  }, [projectId]);
 
   // Load segments when filters change
   useEffect(() => {
@@ -306,7 +301,7 @@ export default function ClipEditorPage() {
     return () => window.removeEventListener('keydown', handleKey);
   }, [currentTime, handlePlayPause, handleSeek]);
 
-  if (loading) {
+  if (projectLoading || (loading && segments.length === 0)) {
     return (
       <div className="flex items-center justify-center h-screen bg-[var(--bg-primary)]">
         <div className="animate-spin w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full" />

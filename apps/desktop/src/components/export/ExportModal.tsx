@@ -29,7 +29,26 @@ interface CaptionStyle {
   wordsPerLine: number;
 }
 
+type PlatformId = 'tiktok' | 'youtube_shorts' | 'instagram' | 'twitter';
+
+interface PlatformPreset {
+  id: PlatformId;
+  label: string;
+  emoji: string;
+  maxDuration: number; // seconds
+  lufs: number;
+  description: string;
+}
+
+const PLATFORM_PRESETS: PlatformPreset[] = [
+  { id: 'tiktok',         label: 'TikTok',          emoji: '🎵', maxDuration: 60,  lufs: -14, description: 'max 60s · −14 LUFS' },
+  { id: 'youtube_shorts', label: 'YouTube Shorts',  emoji: '▶️', maxDuration: 60,  lufs: -14, description: 'max 60s · −14 LUFS' },
+  { id: 'instagram',      label: 'Instagram Reels', emoji: '📸', maxDuration: 90,  lufs: -16, description: 'max 90s · −16 LUFS' },
+  { id: 'twitter',        label: 'Twitter / X',     emoji: '𝕏',  maxDuration: 140, lufs: -16, description: 'max 140s · 512MB' },
+];
+
 interface ExportOptions {
+  platform: PlatformId;
   format: 'mp4' | 'mov' | 'webm';
   resolution: '1080x1920' | '720x1280' | '480x854';
   fps: 30 | 60;
@@ -80,6 +99,7 @@ export function ExportModal({
   const subtitleStyle = useSubtitleStyleStore((s) => s.style);
   
   const [options, setOptions] = useState<ExportOptions>({
+    platform: 'tiktok',
     format: 'mp4',
     resolution: '1080x1920',
     fps: 30,
@@ -183,6 +203,30 @@ export function ExportModal({
           <div className="p-6 max-h-[400px] overflow-auto">
             {activeTab === 'video' && (
               <div className="space-y-6">
+                {/* Platform presets */}
+                <div>
+                  <label className="text-sm font-medium text-gray-300 block mb-3">Plateforme</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {PLATFORM_PRESETS.map((preset) => (
+                      <button
+                        key={preset.id}
+                        onClick={() => setOptions({ ...options, platform: preset.id })}
+                        className={`p-3 rounded-xl text-left transition-all ${
+                          options.platform === preset.id
+                            ? 'bg-blue-500/20 border-2 border-blue-500'
+                            : 'bg-white/5 border-2 border-transparent hover:bg-white/10'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-base">{preset.emoji}</span>
+                          <span className="font-medium text-white text-sm">{preset.label}</span>
+                        </div>
+                        <div className="text-xs text-gray-400">{preset.description}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 {/* Format */}
                 <div>
                   <label className="text-sm font-medium text-gray-300 block mb-3">Format</label>

@@ -520,33 +520,31 @@ class FacecamTracker:
         output_width: int = 1080,
         output_height: int = 1920,
         fps: int = 30,
+        segment_start: float = 0.0,
     ) -> str:
         """Generate FFmpeg filter string for animated crop.
 
         If 0 or 1 keyframe: static crop centered on the face (or frame center).
         If 2+ keyframes: piecewise-linear interpolation using FFmpeg crop with
-        dynamic x/y expressions evaluated per frame.
+        dynamic x/y expressions evaluated per frame via output frame variable ``on``.
+
+        Each keyframe dict must have:
+          - ``crop``: normalised {x, y, width, height} in source frame
+          - ``time``: absolute timestamp (seconds) in source video
+
+        ``segment_start`` is used to convert absolute timestamps to
+        clip-relative frame numbers (output frame 0 = segment_start).
 
         Returns:
-            FFmpeg filter_complex string
+            FFmpeg filter string (no surrounding ``[]`` labels)
         """
         if not keyframes:
             return self.center_crop_filter(output_width, output_height)
 
-        # Normalise: each keyframe carries a 'crop' sub-dict produced by
-        # generate_keyframes(), which uses keys x/y/width/height (normalised).
-        def _crop_rect(kf: dict[str, Any]) -> dict[str, float]:
-            return kf.get("crop", kf)  # tolerate flat dicts too
-
-        if len(keyframes) == 1:
-            return self._build_zoompan_filter(
-                [_crop_rect(keyframes[0])],
-                output_width, output_height, fps, input_width, input_height,
-            )
-
         return self._build_zoompan_filter(
-            [_crop_rect(kf) for kf in keyframes],
+            keyframes,
             output_width, output_height, fps, input_width, input_height,
+            segment_start=segment_start,
         )
 
     def center_crop_filter(self, out_w: int, out_h: int) -> str:
@@ -561,34 +559,43 @@ class FacecamTracker:
         fps: int,
         src_w: int,
         src_h: int,
+        segment_start: float = 0.0,
     ) -> str:
         """Build a crop filter expression that smoothly follows the face position.
 
-        keyframes: list of normalised crop rects with keys x, y, width, height.
+        keyframes: list of dicts with keys:
+          - ``crop``: normalised {x, y, width, height}
+          - ``time``: absolute source timestamp (seconds)
         """
         if not keyframes:
             return self.center_crop_filter(out_w, out_h)
 
+        def _crop_rect(kf: dict[str, Any]) -> dict[str, float]:
+            """Extract normalised crop rect from a full keyframe dict."""
+            return kf.get("crop", kf)  # tolerate flat dicts (legacy)
+
         if len(keyframes) == 1:
-            kf = keyframes[0]
+            kf = _crop_rect(keyframes[0])
             x_px = int(kf["x"] * src_w)
             y_px = int(kf["y"] * src_h)
             w_px = max(2, int(kf["width"] * src_w) & ~1)
             h_px = max(2, int(kf["height"] * src_h) & ~1)
             return f"crop={w_px}:{h_px}:{x_px}:{y_px},scale={out_w}:{out_h}"
 
-        # Convert normalised coords → pixel coords with frame numbers
+        # Convert normalised coords → pixel coords with TIME-based frame numbers.
+        # `on` in FFmpeg crop expressions is the OUTPUT frame counter (0-based),
+        # so frame_num = (absolute_time - segment_start) * fps.
         kf_pixels = []
-        for i, kf in enumerate(keyframes):
-            # Spread keyframes evenly across the video if no explicit time is given;
-            # generate_keyframes() stores time in the parent dict, not the crop rect,
-            # so we do best-effort by using index-based frame estimation.
+        for kf in keyframes:
+            crop = _crop_rect(kf)
+            t = kf.get("time", segment_start)
+            frame_num = max(0, int((t - segment_start) * fps))
             kf_pixels.append({
-                "frame": i,  # relative index — actual spread handled via time in outer dict
-                "x": int(kf["x"] * src_w),
-                "y": int(kf["y"] * src_h),
-                "w": max(2, int(kf["width"] * src_w) & ~1),
-                "h": max(2, int(kf["height"] * src_h) & ~1),
+                "frame": frame_num,
+                "x": int(crop["x"] * src_w),
+                "y": int(crop["y"] * src_h),
+                "w": max(2, int(crop["width"] * src_w) & ~1),
+                "h": max(2, int(crop["height"] * src_h) & ~1),
             })
 
         def build_lerp_expr(coord: str) -> str:
