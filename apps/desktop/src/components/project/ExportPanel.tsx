@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useQueryClient } from '@tanstack/react-query';
-import { Download, Play, Pause, FolderOpen, CheckCircle, X, Volume2, VolumeX, RefreshCw, Sparkles, Eye } from 'lucide-react';
+import { Download, Play, Pause, FolderOpen, CheckCircle, X, Volume2, VolumeX, RefreshCw, Sparkles, Eye, Send } from 'lucide-react';
 import { ENGINE_BASE_URL } from '@/lib/config';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
+import SocialPublishModal from '@/components/export/SocialPublishModal';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Progress } from '@/components/ui/Progress';
 import { SkeletonRow } from '@/components/ui/Skeleton';
@@ -74,6 +75,8 @@ export default function ExportPanel({ project }: ExportPanelProps) {
   const queryClient = useQueryClient();
   const { addToast } = useToastStore();
   const [selectedVideo, setSelectedVideo] = useState<Artifact | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [publishingArtifact, setPublishingArtifact] = useState<Artifact | null>(null);
   const previousJobStatusRef = useRef<Record<string, string>>({});
 
   // React Query: fetch artifacts
@@ -218,6 +221,8 @@ export default function ExportPanel({ project }: ExportPanelProps) {
                         onSelect={setSelectedVideo}
                         isSelected={selectedVideo?.id === video?.id}
                         projectId={project.id}
+                        onPreview={(url) => setPreviewUrl(url)}
+                        onPublish={(artifact) => setPublishingArtifact(artifact)}
                       />
                     </motion.div>
                   );
@@ -238,6 +243,37 @@ export default function ExportPanel({ project }: ExportPanelProps) {
           />
         )}
       </AnimatePresence>
+
+      {/* Quick Preview Modal (360p preview video) */}
+      {previewUrl && (
+        <div
+          className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-8"
+          onClick={() => setPreviewUrl(null)}
+        >
+          <div
+            className="max-w-md aspect-[9/16] bg-black rounded-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <video src={previewUrl} autoPlay loop controls className="w-full h-full" />
+          </div>
+          <button
+            className="absolute top-4 right-4 text-white/60 hover:text-white"
+            onClick={() => setPreviewUrl(null)}
+          >
+            <X className="w-6 h-6" />
+          </button>
+        </div>
+      )}
+
+      {/* Social Publish Modal */}
+      {publishingArtifact && (
+        <SocialPublishModal
+          artifactId={publishingArtifact.id}
+          projectId={project.id}
+          defaultTitle={publishingArtifact.filename.replace(/\.[^.]+$/, '')}
+          onClose={() => setPublishingArtifact(null)}
+        />
+      )}
     </div>
   );
 }
@@ -250,8 +286,8 @@ interface ContentData {
 }
 
 function ContentPanel({
-  artifact: _artifact,
-  projectId: _projectId,
+  artifact,
+  projectId,
 }: {
   artifact: Artifact;
   projectId: string;
@@ -262,19 +298,64 @@ function ContentPanel({
   const [editedTitle, setEditedTitle] = useState('');
   const [editedDesc, setEditedDesc] = useState('');
   const [editedHashtags, setEditedHashtags] = useState('');
+  const [similarStats, setSimilarStats] = useState<{ count: number; avg_views: number } | null>(null);
   const { addToast } = useToastStore();
+
+  // Fetch similar-clips stats once the panel is opened
+  useEffect(() => {
+    if (open && !similarStats) {
+      // Simplest: use a default predicted score (70). Real impl could derive from segment.
+      api
+        .getSimilarStats(70, 'tiktok')
+        .then((res) => {
+          // Endpoint returns the stats object directly (no ApiResponse wrapper)
+          if (res && res.count > 0) {
+            setSimilarStats({ count: res.count, avg_views: res.avg_views });
+          }
+        })
+        .catch(() => {});
+    }
+  }, [open, similarStats]);
 
   const generate = async () => {
     setLoading(true);
     try {
-      const res = await api.generateSegmentContent('', [], 'tiktok');
+      // Fetch the segment to get its transcript
+      const segRes = await api.getSegment(projectId, artifact.segmentId);
+      const segment = segRes?.data as any; // ApiSegment shape
+
+      // Extract transcript text, fallback to joined transcriptSegments words
+      const directText: string =
+        typeof segment?.transcript === 'string'
+          ? segment.transcript
+          : segment?.transcript?.text ?? '';
+
+      const wordsList: any[] =
+        segment?.transcriptSegments ??
+        segment?.transcript?.words ??
+        [];
+
+      const transcript: string =
+        directText ||
+        wordsList.map((w: any) => w.word ?? w.text ?? '').join(' ');
+
+      const tags: string[] = segment?.score?.tags ?? segment?.tags ?? [];
+
+      if (!transcript) {
+        addToast({ type: 'warning', title: 'Transcript vide', message: 'Pas de transcription pour ce segment.' });
+        setLoading(false);
+        return;
+      }
+
+      const res = await api.generateSegmentContent(transcript, tags, 'tiktok');
       if (res?.data) {
         setContent(res.data);
         setEditedTitle(res.data.titles[0] ?? '');
         setEditedDesc(res.data.description);
         setEditedHashtags(res.data.hashtags.join(' '));
       }
-    } catch {
+    } catch (e) {
+      console.error('Content generation failed:', e);
       addToast({ type: 'error', title: 'Erreur', message: 'Impossible de générer le contenu.' });
     } finally {
       setLoading(false);
@@ -377,6 +458,12 @@ function ContentPanel({
                 </div>
               </div>
 
+              {similarStats && (
+                <div className="mt-2 text-[10px] text-[var(--text-muted)] bg-white/5 rounded px-2 py-1.5 border border-white/5">
+                  📊 Clips similaires: ~{similarStats.avg_views.toLocaleString()} vues en moyenne ({similarStats.count} clips)
+                </div>
+              )}
+
               <button
                 className="text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
                 onClick={generate}
@@ -397,12 +484,16 @@ function ExportCard({
   onSelect,
   isSelected,
   projectId,
+  onPreview,
+  onPublish,
 }: {
   artifacts: Artifact[];
   onOpen: (path: string) => void;
   onSelect: (video: Artifact) => void;
   isSelected: boolean;
   projectId: string;
+  onPreview: (url: string) => void;
+  onPublish: (artifact: Artifact) => void;
 }) {
   const video = artifacts.find((a) => a.type === 'video');
   const cover = artifacts.find((a) => a.type === 'cover');
@@ -508,11 +599,12 @@ function ExportCard({
                 size="sm"
                 onClick={async (e) => {
                   e.stopPropagation();
-                  // For preview, we'd need the segmentId — use video.segmentId
                   try {
                     const res = await api.generateSegmentPreview(projectId, video.segmentId);
-                    if (res?.data?.preview_path && window.forge) {
-                      await window.forge.showItem(res.data.preview_path);
+                    if (res?.data?.preview_path) {
+                      // Convert file path to URL via backend static file serving
+                      const encoded = encodeURIComponent(res.data.preview_path);
+                      onPreview(`${ENGINE_BASE_URL}/v1/projects/previews/file?path=${encoded}`);
                     }
                   } catch {
                     // silently ignore
@@ -522,6 +614,18 @@ function ExportCard({
               >
                 <Eye className="w-4 h-4 mr-1" />
                 Aperçu
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onPublish(video);
+                }}
+                title="Publier sur les réseaux sociaux"
+              >
+                <Send className="w-4 h-4 mr-1" />
+                Publier
               </Button>
             </div>
           </div>

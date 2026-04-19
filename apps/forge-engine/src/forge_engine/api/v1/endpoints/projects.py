@@ -1101,6 +1101,27 @@ async def generate_segment_preview(
     }
 
 
+@router.get("/previews/file")
+async def serve_preview_file(path: str):
+    """Serve a preview file by absolute path (restricted to TEMP_PATH/previews)."""
+    from fastapi.responses import FileResponse
+    from forge_engine.core.config import settings
+    from pathlib import Path as _P
+
+    requested = _P(path).resolve()
+    allowed_dir = (settings.TEMP_PATH / "previews").resolve()
+
+    try:
+        requested.relative_to(allowed_dir)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path not allowed")
+
+    if not requested.exists():
+        raise HTTPException(status_code=404, detail="Preview not found")
+
+    return FileResponse(str(requested), media_type="video/mp4")
+
+
 @router.post("/{project_id}/segments/{segment_id}/variants")
 async def generate_variants(
     project_id: str,

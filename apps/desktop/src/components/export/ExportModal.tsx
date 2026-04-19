@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { useSubtitleStyleStore } from '@/store';
+import { api } from '@/lib/api';
 
 interface CaptionStyle {
   fontFamily: string;
@@ -61,6 +62,7 @@ interface ExportOptions {
   exportMetadata: boolean;
   outputDir?: string;
   captionStyle?: CaptionStyle;
+  languages?: string[];
 }
 
 interface ExportModalProps {
@@ -115,6 +117,21 @@ export function ExportModal({
 
   const [exporting, setExporting] = useState(false);
   const [activeTab, setActiveTab] = useState<'video' | 'subtitles' | 'extras'>('video');
+  const [exportLanguages, setExportLanguages] = useState<string[]>([]);
+
+  // Available languages (hard-coded list; real list via api.getSupportedLanguages() if wanted)
+  const availableLanguages = [
+    { code: 'en', flag: '🇬🇧', label: 'English' },
+    { code: 'es', flag: '🇪🇸', label: 'Español' },
+    { code: 'pt', flag: '🇵🇹', label: 'Português' },
+    { code: 'de', flag: '🇩🇪', label: 'Deutsch' },
+    { code: 'ar', flag: '🇸🇦', label: 'العربية' },
+    { code: 'it', flag: '🇮🇹', label: 'Italiano' },
+  ];
+
+  const toggleLang = (code: string) => {
+    setExportLanguages((prev) => prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]);
+  };
 
   // Sync caption style with store when modal opens or store changes
   useEffect(() => {
@@ -136,8 +153,8 @@ export function ExportModal({
     // Always use the latest caption style from store at export time
     const storeState = useSubtitleStyleStore.getState();
     const latestStyle = storeState.style;
-    
-    await onExport({ ...options, captionStyle: latestStyle });
+
+    await onExport({ ...options, captionStyle: latestStyle, languages: exportLanguages });
     setExporting(false);
     onClose();
   };
@@ -341,6 +358,32 @@ export function ExportModal({
                   checked={options.exportSrt}
                   onChange={(v) => setOptions({ ...options, exportSrt: v })}
                 />
+
+                <div className="mt-4 pt-4 border-t border-white/5">
+                  <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                    🌍 Exporter en plusieurs langues
+                    <span className="text-[10px] text-[var(--text-muted)]">(optionnel)</span>
+                  </h4>
+                  <div className="grid grid-cols-3 gap-2">
+                    {availableLanguages.map((lang) => (
+                      <button
+                        key={lang.code}
+                        onClick={() => toggleLang(lang.code)}
+                        className={`flex items-center gap-2 p-2 rounded-lg border text-sm transition-colors ${
+                          exportLanguages.includes(lang.code) ? 'border-viral-medium bg-viral-medium/10' : 'border-white/10 hover:border-white/20'
+                        }`}
+                      >
+                        <span>{lang.flag}</span>
+                        <span>{lang.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {exportLanguages.length > 0 && (
+                    <p className="text-xs text-[var(--text-muted)] mt-2">
+                      {exportLanguages.length} langue(s) supplémentaire(s) seront exportées en parallèle.
+                    </p>
+                  )}
+                </div>
               </div>
             )}
 
@@ -377,27 +420,33 @@ export function ExportModal({
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-between p-6 border-t border-white/10 bg-white/5">
-            <div className="text-sm text-gray-400">
-              Taille estimée: <strong className="text-white">{estimatedSize()}</strong>
+          <div className="border-t border-white/10 bg-white/5">
+            {/* Cost estimate (cloud GPU only) */}
+            <div className="px-6 pt-4">
+              <CostEstimate duration={duration} />
             </div>
-            <div className="flex items-center gap-3">
-              <Button variant="secondary" onClick={onClose}>
-                Annuler
-              </Button>
-              <Button onClick={handleExport} disabled={exporting}>
-                {exporting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Export en cours...
-                  </>
-                ) : (
-                  <>
-                    <Download className="w-4 h-4 mr-2" />
-                    Exporter
-                  </>
-                )}
-              </Button>
+            <div className="flex items-center justify-between p-6 pt-3">
+              <div className="text-sm text-gray-400">
+                Taille estimée: <strong className="text-white">{estimatedSize()}</strong>
+              </div>
+              <div className="flex items-center gap-3">
+                <Button variant="secondary" onClick={onClose}>
+                  Annuler
+                </Button>
+                <Button onClick={handleExport} disabled={exporting}>
+                  {exporting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Export en cours...
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-4 h-4 mr-2" />
+                      Exporter
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
           </div>
         </motion.div>
@@ -453,6 +502,20 @@ function formatDuration(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins}m ${secs}s`;
+}
+
+function CostEstimate({ duration }: { duration: number }) {
+  const [estimate, setEstimate] = useState<any>(null);
+  useEffect(() => {
+    (api.estimateCloudCost(duration, 'local') as Promise<any>).then((r: any) => setEstimate(r?.data ?? r));
+  }, [duration]);
+  if (!estimate || estimate.cost_usd === 0) return null;
+  return (
+    <div className="mb-3 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-xs">
+      <p className="font-medium">Estimation cloud</p>
+      <p className="text-blue-400">{estimate.cost_display} pour ~{estimate.estimated_seconds}s</p>
+    </div>
+  );
 }
 
 export default ExportModal;

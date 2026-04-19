@@ -7,10 +7,11 @@ import {
   useEngineStore, useToastStore, useThemeStore, useAmbientAudioStore,
   useSubtitleStyleStore, useIntroStore, AmbientTrack
 } from '@/store';
-import { 
+import {
   FolderOpen, HardDrive, RefreshCw, Zap, Cloud, Monitor,
   Palette, Volume2, Key, FileVideo, FlaskConical, Settings, Sun, Moon,
-  Sparkles, Check, Eye, EyeOff, Trash2, Download
+  Sparkles, Check, Eye, EyeOff, Trash2, Download,
+  Share2, Building2
 } from 'lucide-react';
 
 // Settings sections
@@ -22,6 +23,9 @@ const SETTINGS_SECTIONS = [
   { id: 'performance', icon: Zap, label: 'Performances' },
   { id: 'export', icon: FileVideo, label: 'Export' },
   { id: 'experimental', icon: FlaskConical, label: 'Expérimental' },
+  { id: 'cloud-gpu', icon: Cloud, label: 'Cloud GPU' },
+  { id: 'social', icon: Share2, label: 'Réseaux sociaux' },
+  { id: 'enterprise', icon: Building2, label: 'Enterprise' },
 ];
 
 interface ProviderInfo {
@@ -185,6 +189,9 @@ export default function SettingsPage() {
             )}
             {activeSection === 'export' && <ExportDefaultsSection />}
             {activeSection === 'experimental' && <ExperimentalSection />}
+            {activeSection === 'cloud-gpu' && <CloudGpuSection />}
+            {activeSection === 'social' && <SocialSection />}
+            {activeSection === 'enterprise' && <EnterpriseSection />}
           </motion.div>
         </AnimatePresence>
       </main>
@@ -1037,5 +1044,348 @@ function formatBytes(bytes: number): string {
     size /= 1024;
     unitIndex++;
   }  return `${size.toFixed(1)} ${units[unitIndex]}`;
+}
+
+// ============ CLOUD GPU SECTION ============
+function CloudGpuSection() {
+  const [status, setStatus] = useState<any>(null);
+  const [providers, setProviders] = useState<any[]>([]);
+  const [estimate, setEstimate] = useState<any>(null);
+  const [selectedProvider, setSelectedProvider] = useState('local');
+  const [testDuration, setTestDuration] = useState(60);
+
+  useEffect(() => {
+    api.getCloudStatus().then((r: any) => setStatus(r?.data ?? r)).catch(() => {});
+    api.listCloudProviders().then((r: any) => setProviders(r?.data?.providers ?? r?.providers ?? [])).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const computeEstimate = async () => {
+      try {
+        const r: any = await api.estimateCloudCost(testDuration, selectedProvider);
+        setEstimate(r?.data ?? r);
+      } catch {
+        setEstimate(null);
+      }
+    };
+    computeEstimate();
+  }, [selectedProvider, testDuration]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Cloud className="w-5 h-5" /> Cloud GPU Processing</CardTitle>
+        <CardDescription>
+          Déléguez le traitement aux GPUs cloud quand votre machine est occupée. Coûts par clip.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div>
+          <span className="text-xs text-[var(--text-muted)]">Provider actuel</span>
+          <p className="font-semibold">{status?.provider ?? 'Chargement...'}</p>
+          <p className="text-xs text-[var(--text-muted)] mt-1">
+            Cloud {status?.cloud_enabled ? 'activé' : 'désactivé'} · Overflow {status?.overflow_enabled ? 'ON' : 'OFF'}
+          </p>
+        </div>
+
+        <div>
+          <label className="text-xs text-[var(--text-muted)] uppercase">Provider</label>
+          <div className="grid grid-cols-2 gap-2 mt-1">
+            {providers.map((p: any) => (
+              <button
+                key={p.id}
+                onClick={() => setSelectedProvider(p.id)}
+                className={`p-3 rounded-lg border text-left transition-colors ${
+                  selectedProvider === p.id ? 'border-viral-medium bg-viral-medium/10' : 'border-white/10 hover:border-white/20'
+                }`}
+              >
+                <div className="font-medium">{p.name}</div>
+                <div className="text-xs text-[var(--text-muted)]">
+                  ${Number(p.rate_per_minute ?? 0).toFixed(5)}/min{p.requires_key ? ' · clé requise' : ''}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <label className="text-xs text-[var(--text-muted)] uppercase">Durée test (secondes)</label>
+          <input
+            type="number"
+            value={testDuration}
+            onChange={(e) => setTestDuration(Number(e.target.value))}
+            className="w-full mt-1 bg-white/5 border border-white/10 rounded px-3 py-2"
+          />
+        </div>
+
+        {estimate && (
+          <div className="p-4 rounded-lg bg-viral-medium/10 border border-viral-medium/30">
+            <p className="text-xs text-[var(--text-muted)]">Coût estimé</p>
+            <p className="text-2xl font-bold">{estimate.cost_display ?? `$${estimate.cost_usd}`}</p>
+            <p className="text-xs mt-1">~{estimate.estimated_seconds}s de traitement</p>
+          </div>
+        )}
+
+        <p className="text-xs text-[var(--text-muted)] italic">
+          Configurez les clés API via variables d'environnement FORGE_CLOUD_RUNPOD_API_KEY, FORGE_CLOUD_MODAL_TOKEN_ID, etc.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ============ SOCIAL SECTION ============
+function SocialSection() {
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const { addToast } = useToastStore();
+
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      const r: any = await api.getSocialStatus();
+      const data = r?.data ?? r;
+      setAccounts(data?.connected_accounts ?? []);
+    } catch {
+      setAccounts([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { refresh(); }, []);
+
+  const disconnect = async (platform: string) => {
+    await api.disconnectSocial(platform);
+    addToast({ type: 'success', title: 'Déconnecté', message: `${platform} déconnecté.` });
+    refresh();
+  };
+
+  const platformEmoji: Record<string, string> = {
+    tiktok: '🎵',
+    youtube: '▶️',
+    instagram: '📸',
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>Comptes connectés</CardTitle>
+          <CardDescription>Publiez vos clips directement sur vos plateformes.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <p className="text-sm text-[var(--text-muted)]">Chargement...</p>
+          ) : accounts.length === 0 ? (
+            <p className="text-sm text-[var(--text-muted)]">Aucun compte connecté.</p>
+          ) : (
+            <div className="space-y-2">
+              {accounts.map((acc: any) => {
+                const platform = typeof acc === 'string' ? acc : acc.platform;
+                const username = typeof acc === 'string' ? undefined : acc.username;
+                return (
+                  <div key={platform} className="flex items-center justify-between p-3 rounded-lg bg-white/5">
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl">{platformEmoji[platform] ?? '🌐'}</span>
+                      <div>
+                        <p className="font-medium capitalize">{platform}</p>
+                        <p className="text-xs text-[var(--text-muted)]">{username ?? '—'}</p>
+                      </div>
+                    </div>
+                    <Button variant="secondary" size="sm" onClick={() => disconnect(platform)}>
+                      Déconnecter
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Connecter un compte</CardTitle>
+          <CardDescription>
+            OAuth2 flow à venir. En attendant, configurez les tokens via l'API backend.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <p className="text-xs text-[var(--text-muted)]">
+            Utilisez <code className="bg-white/10 px-1 rounded">POST /v1/social/accounts/connect</code> avec votre token OAuth.
+          </p>
+          <div className="grid grid-cols-3 gap-2">
+            {['tiktok', 'youtube', 'instagram'].map((p) => (
+              <div key={p} className="p-3 rounded-lg bg-white/5 border border-white/10 text-center">
+                <span className="text-2xl">{platformEmoji[p]}</span>
+                <p className="text-xs mt-1 capitalize">{p}</p>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ============ ENTERPRISE SECTION ============
+function EnterpriseSection() {
+  const [branding, setBranding] = useState<any>(null);
+  const [storage, setStorage] = useState<any>(null);
+  const { addToast } = useToastStore();
+
+  useEffect(() => {
+    api.getBranding().then((r: any) => setBranding(r?.data ?? r ?? {})).catch(() => setBranding({}));
+    api.getStorageStatus().then((r: any) => setStorage(r?.data ?? r)).catch(() => {});
+  }, []);
+
+  const save = async () => {
+    await api.updateBranding(branding);
+    addToast({ type: 'success', title: 'Enregistré', message: 'Branding mis à jour.' });
+  };
+
+  const testS3 = async () => {
+    try {
+      const r: any = await api.testS3Connection();
+      const data = r?.data ?? r;
+      if (data?.connected) {
+        addToast({ type: 'success', title: 'S3 OK', message: `${data.buckets.length} buckets trouvés.` });
+      } else {
+        addToast({ type: 'error', title: 'S3 Error', message: 'Connexion échouée.' });
+      }
+    } catch {
+      addToast({ type: 'error', title: 'S3 Error', message: 'Connexion échouée.' });
+    }
+  };
+
+  if (!branding) return <p className="text-sm text-[var(--text-muted)]">Chargement...</p>;
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Building2 className="w-5 h-5" /> Branding</CardTitle>
+          <CardDescription>Personnalisez l'apparence pour votre équipe ou client.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div>
+            <label className="text-xs text-[var(--text-muted)]">Nom de l'app</label>
+            <input
+              type="text"
+              value={branding.app_name || ''}
+              onChange={(e) => setBranding({ ...branding, app_name: e.target.value })}
+              className="w-full mt-1 bg-white/5 border border-white/10 rounded px-3 py-2"
+            />
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="text-xs text-[var(--text-muted)]">Couleur principale</label>
+              <input
+                type="color"
+                value={branding.primary_color || '#00D4FF'}
+                onChange={(e) => setBranding({ ...branding, primary_color: e.target.value })}
+                className="w-full mt-1 h-10 rounded cursor-pointer"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-[var(--text-muted)]">Secondaire</label>
+              <input
+                type="color"
+                value={branding.secondary_color || '#8B5CF6'}
+                onChange={(e) => setBranding({ ...branding, secondary_color: e.target.value })}
+                className="w-full mt-1 h-10 rounded cursor-pointer"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-[var(--text-muted)]">Accent</label>
+              <input
+                type="color"
+                value={branding.accent_color || '#F59E0B'}
+                onChange={(e) => setBranding({ ...branding, accent_color: e.target.value })}
+                className="w-full mt-1 h-10 rounded cursor-pointer"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-[var(--text-muted)]">Watermark (optionnel)</label>
+            <input
+              type="text"
+              value={branding.watermark_text || ''}
+              onChange={(e) => setBranding({ ...branding, watermark_text: e.target.value })}
+              placeholder="@votre_marque"
+              className="w-full mt-1 bg-white/5 border border-white/10 rounded px-3 py-2"
+            />
+          </div>
+          <Button onClick={save}>Enregistrer le branding</Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><HardDrive className="w-5 h-5" /> Stockage S3</CardTitle>
+          <CardDescription>S3 compatible (AWS, MinIO, Wasabi, Cloudflare R2...)</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm">Activer S3</span>
+            <input
+              type="checkbox"
+              checked={branding.s3_enabled || false}
+              onChange={(e) => setBranding({ ...branding, s3_enabled: e.target.checked })}
+            />
+          </div>
+          {branding.s3_enabled && (
+            <>
+              <input
+                type="text"
+                placeholder="Bucket"
+                value={branding.s3_bucket || ''}
+                onChange={(e) => setBranding({ ...branding, s3_bucket: e.target.value })}
+                className="w-full bg-white/5 border border-white/10 rounded px-3 py-2"
+              />
+              <input
+                type="text"
+                placeholder="Région"
+                value={branding.s3_region || 'us-east-1'}
+                onChange={(e) => setBranding({ ...branding, s3_region: e.target.value })}
+                className="w-full bg-white/5 border border-white/10 rounded px-3 py-2"
+              />
+              <input
+                type="text"
+                placeholder="Endpoint custom (MinIO/R2, optionnel)"
+                value={branding.s3_endpoint || ''}
+                onChange={(e) => setBranding({ ...branding, s3_endpoint: e.target.value })}
+                className="w-full bg-white/5 border border-white/10 rounded px-3 py-2"
+              />
+              <input
+                type="text"
+                placeholder="Access key"
+                value={branding.s3_access_key || ''}
+                onChange={(e) => setBranding({ ...branding, s3_access_key: e.target.value })}
+                className="w-full bg-white/5 border border-white/10 rounded px-3 py-2"
+              />
+              <input
+                type="password"
+                placeholder="Secret key"
+                value={branding.s3_secret_key || ''}
+                onChange={(e) => setBranding({ ...branding, s3_secret_key: e.target.value })}
+                className="w-full bg-white/5 border border-white/10 rounded px-3 py-2"
+              />
+              <div className="flex gap-2">
+                <Button onClick={save}>Enregistrer</Button>
+                <Button variant="secondary" onClick={testS3}>Tester la connexion</Button>
+              </div>
+              {storage && (
+                <p className="text-xs text-[var(--text-muted)]">
+                  {storage.s3_configured ? '✅ S3 configuré' : '⚠️ S3 non configuré'}
+                </p>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
 }
 

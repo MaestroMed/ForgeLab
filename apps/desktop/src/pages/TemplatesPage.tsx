@@ -4,9 +4,12 @@
  * Local marketplace for style templates
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useToastStore } from '@/store/toast';
 import { motion, AnimatePresence } from 'framer-motion';
+import { api } from '@/lib/api';
+import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
 import {
   LayoutTemplate,
   Search,
@@ -24,7 +27,18 @@ import {
   Type,
   Layers,
   Palette,
+  Store,
+  PackagePlus,
 } from 'lucide-react';
+
+interface MarketplaceTemplate {
+  id: string;
+  name: string;
+  description: string;
+  preview_emoji: string;
+  caption_style?: any;
+  layout?: any;
+}
 
 interface Template {
   id: string;
@@ -106,6 +120,12 @@ export default function TemplatesPage() {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
 
+  // Marketplace state
+  const [marketplace, setMarketplace] = useState<MarketplaceTemplate[]>([]);
+  const [marketplaceLoading, setMarketplaceLoading] = useState(true);
+  const [installing, setInstalling] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+
   // Load custom templates from localStorage
   useEffect(() => {
     const saved = localStorage.getItem('forge_custom_templates');
@@ -118,6 +138,111 @@ export default function TemplatesPage() {
       }
     }
   }, []);
+
+  // Load marketplace templates from backend
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r: any = await api.listMarketplaceTemplates();
+        if (cancelled) return;
+        const list: MarketplaceTemplate[] = r?.data?.templates ?? r?.templates ?? [];
+        setMarketplace(list);
+      } catch (err) {
+        console.error('Failed to load marketplace templates', err);
+      } finally {
+        if (!cancelled) setMarketplaceLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const installMarketplaceTemplate = async (tpl: MarketplaceTemplate) => {
+    if (installing) return;
+    setInstalling(tpl.id);
+    try {
+      const r: any = await api.installMarketplaceTemplate(tpl.id);
+      const payload = r?.data ?? r;
+      addToast({
+        type: 'success',
+        title: 'Template installé',
+        message: `"${payload?.name ?? tpl.name}" est disponible.`,
+        duration: 3000,
+      });
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: 'Installation échouée',
+        message: err instanceof Error ? err.message : 'Erreur inconnue',
+        duration: 4000,
+      });
+    } finally {
+      setInstalling(null);
+    }
+  };
+
+  const exportFromMarketplace = async (tpl: MarketplaceTemplate) => {
+    try {
+      const r: any = await api.exportTemplate(tpl.id);
+      const bundle = r?.data ?? r;
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${tpl.name.toLowerCase().replace(/\s+/g, '-')}.forge-bundle.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      addToast({
+        type: 'success',
+        title: 'Template exporté',
+        message: `"${tpl.name}" téléchargé.`,
+        duration: 3000,
+      });
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: 'Export échoué',
+        message: err instanceof Error ? err.message : 'Erreur inconnue',
+        duration: 4000,
+      });
+    }
+  };
+
+  const handleImportBundle = async (file: File) => {
+    try {
+      const text = await file.text();
+      const bundle = JSON.parse(text);
+      const r: any = await api.importTemplate(bundle);
+      const payload = r?.data ?? r;
+      addToast({
+        type: 'success',
+        title: 'Template importé',
+        message: `"${payload?.name ?? 'Template'}" importé avec succès.`,
+        duration: 3000,
+      });
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: 'Import échoué',
+        message: err instanceof Error ? err.message : 'Bundle invalide',
+        duration: 4000,
+      });
+    }
+  };
+
+  const triggerImport = () => {
+    importInputRef.current?.click();
+  };
+
+  const onImportFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleImportBundle(file);
+    }
+    e.target.value = '';
+  };
 
   const filteredTemplates = templates.filter(t => {
     if (search && !t.name.toLowerCase().includes(search.toLowerCase())) {
@@ -217,15 +342,31 @@ export default function TemplatesPage() {
           </h1>
           <p className="text-gray-400 mt-1">Gérez et appliquez des templates de style</p>
         </div>
-        
+
         <div className="flex items-center gap-3">
-          <button
-            onClick={importTemplate}
-            className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 
-              rounded-lg text-gray-300 transition-colors"
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".json,application/json"
+            onChange={onImportFileChange}
+            className="hidden"
+          />
+          <Button
+            variant="secondary"
+            size="md"
+            onClick={triggerImport}
+            className="flex items-center gap-2"
           >
             <Upload className="w-4 h-4" />
-            Importer
+            Importer un bundle
+          </Button>
+          <button
+            onClick={importTemplate}
+            className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10
+              rounded-lg text-gray-300 transition-colors"
+          >
+            <PackagePlus className="w-4 h-4" />
+            Importer template
           </button>
           <button
             className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500
@@ -235,6 +376,74 @@ export default function TemplatesPage() {
             Créer un template
           </button>
         </div>
+      </div>
+
+      {/* Marketplace Section */}
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Store className="w-5 h-5 text-purple-400" />
+            <h2 className="text-lg font-semibold text-white">Marketplace</h2>
+            <span className="text-xs text-gray-400">
+              {marketplaceLoading ? 'Chargement...' : `${marketplace.length} templates disponibles`}
+            </span>
+          </div>
+        </div>
+
+        {marketplaceLoading ? (
+          <div className="flex gap-3 overflow-hidden">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div
+                key={i}
+                className="shrink-0 w-64 h-40 rounded-xl bg-white/5 border border-white/10 animate-pulse"
+              />
+            ))}
+          </div>
+        ) : marketplace.length === 0 ? (
+          <Card className="p-6 text-center text-sm text-gray-400">
+            Aucun template disponible sur le marketplace pour le moment.
+          </Card>
+        ) : (
+          <div className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1 snap-x">
+            {marketplace.map((tpl) => (
+              <div
+                key={tpl.id}
+                className="shrink-0 w-64 snap-start rounded-xl bg-white/5 border border-white/10
+                  hover:border-purple-500/50 transition-colors overflow-hidden flex flex-col"
+              >
+                <div className="h-28 flex items-center justify-center bg-gradient-to-br from-purple-900/30 to-pink-900/30">
+                  <span className="text-5xl" role="img" aria-label={tpl.name}>
+                    {tpl.preview_emoji || '✨'}
+                  </span>
+                </div>
+                <div className="p-3 flex flex-col flex-1">
+                  <h3 className="font-medium text-white text-sm truncate">{tpl.name}</h3>
+                  <p className="text-xs text-gray-400 mt-1 line-clamp-2 flex-1">
+                    {tpl.description}
+                  </p>
+                  <div className="flex items-center gap-2 mt-3">
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={() => installMarketplaceTemplate(tpl)}
+                      loading={installing === tpl.id}
+                      className="flex-1"
+                    >
+                      Installer
+                    </Button>
+                    <button
+                      onClick={() => exportFromMarketplace(tpl)}
+                      title="Exporter le bundle"
+                      className="p-1.5 text-gray-400 hover:text-white transition-colors"
+                    >
+                      <Download className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Filters */}

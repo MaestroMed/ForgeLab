@@ -1,166 +1,133 @@
 /**
  * Analytics Dashboard Page
- * 
- * Performance tracking and insights for exported clips
+ *
+ * Real-time performance tracking backed by the Forge Engine
+ * analytics endpoints (`/v1/analytics/summary` and
+ * `/v1/analytics/trends/performance`).
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
+import { useQuery } from '@tanstack/react-query';
 import {
   BarChart3,
   TrendingUp,
   Eye,
-  Heart,
-  MessageCircle,
-  Share2,
-  Clock,
   Trophy,
   RefreshCw,
-  Filter,
-  Download,
   ArrowUp,
   ArrowDown,
+  Target,
+  Film,
+  Activity,
+  Clock,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
-interface ClipStats {
-  id: string;
-  name: string;
-  platform: string;
+type Platform = 'tiktok' | 'youtube_shorts' | 'instagram' | 'twitter';
+
+interface TopClip {
+  segment_id: string;
   views: number;
   likes: number;
-  comments: number;
-  shares: number;
-  engagementRate: number;
-  publishedAt: string;
-  thumbnailUrl?: string;
+  predicted_score: number;
+  actual_score: number;
+  timestamp: number;
 }
 
-interface OverviewStats {
-  totalViews: number;
-  totalLikes: number;
-  totalComments: number;
-  totalShares: number;
-  avgEngagement: number;
-  totalClips: number;
-  viewsTrend: number; // percentage change
-  likeTrend: number;
+interface AnalyticsSummary {
+  platform: string;
+  total_clips: number;
+  total_views: number;
+  avg_views: number;
+  avg_completion_rate: number;
+  top_clips: TopClip[];
+  prediction_accuracy_pct: number | null;
+}
+
+interface TrendWeek {
+  week: number;
+  views: number;
+  clips: number;
+  avg_score: number;
+}
+
+interface PerformanceTrends {
+  platform: string;
+  weeks: number;
+  data: TrendWeek[];
+}
+
+const PLATFORMS: Array<{ id: Platform; label: string; color: string }> = [
+  { id: 'tiktok', label: 'TikTok', color: 'from-pink-500 to-rose-500' },
+  { id: 'youtube_shorts', label: 'YouTube Shorts', color: 'from-red-500 to-red-600' },
+  { id: 'instagram', label: 'Instagram', color: 'from-purple-500 to-pink-500' },
+  { id: 'twitter', label: 'Twitter', color: 'from-sky-400 to-blue-500' },
+];
+
+function formatNumber(num: number): string {
+  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
+  if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
+  return num.toString();
+}
+
+function relativeTime(timestamp: number): string {
+  // Backend timestamps are unix seconds.
+  const now = Date.now() / 1000;
+  const diff = Math.max(0, now - timestamp);
+  const minutes = diff / 60;
+  const hours = minutes / 60;
+  const days = hours / 24;
+  if (days >= 30) return `il y a ${Math.floor(days / 30)} mois`;
+  if (days >= 1) return `il y a ${Math.floor(days)} jour${days >= 2 ? 's' : ''}`;
+  if (hours >= 1) return `il y a ${Math.floor(hours)} h`;
+  if (minutes >= 1) return `il y a ${Math.floor(minutes)} min`;
+  return 'à l’instant';
+}
+
+function accuracyColor(pct: number): { text: string; bg: string; border: string } {
+  if (pct > 80) {
+    return { text: 'text-green-300', bg: 'bg-green-500/20', border: 'border-green-500/30' };
+  }
+  if (pct > 60) {
+    return { text: 'text-yellow-300', bg: 'bg-yellow-500/20', border: 'border-yellow-500/30' };
+  }
+  return { text: 'text-red-300', bg: 'bg-red-500/20', border: 'border-red-500/30' };
 }
 
 export default function AnalyticsPage() {
-  const [overview, setOverview] = useState<OverviewStats | null>(null);
-  const [topClips, setTopClips] = useState<ClipStats[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [dateRange, setDateRange] = useState<'7d' | '30d' | '90d'>('30d');
-  const [sortBy, setSortBy] = useState<'views' | 'engagement' | 'recent'>('views');
+  const [selectedPlatform, setSelectedPlatform] = useState<Platform>('tiktok');
 
-  useEffect(() => {
-    fetchAnalytics();
-  }, [dateRange, sortBy]);
+  const { data: summaryData, refetch: refetchSummary, isFetching: isSummaryFetching } =
+    useQuery({
+      queryKey: ['analytics-summary', selectedPlatform],
+      queryFn: () => api.getAnalyticsSummary(selectedPlatform, 10),
+      staleTime: 60_000,
+    });
 
-  const fetchAnalytics = async () => {
-    setLoading(true);
-    try {
-      // Fetch overview stats
-      const days = dateRange === '7d' ? 7 : dateRange === '30d' ? 30 : 90;
-      const dashboardRes = await api.request<any>(`/analytics/dashboard?days=${days}`);
-      
-      if (dashboardRes) {
-        setOverview({
-          totalViews: dashboardRes.total_views || 0,
-          totalLikes: dashboardRes.total_likes || 0,
-          totalComments: dashboardRes.total_comments || 0,
-          totalShares: dashboardRes.total_shares || 0,
-          avgEngagement: dashboardRes.avg_engagement || 0,
-          totalClips: dashboardRes.total_clips || 0,
-          viewsTrend: dashboardRes.views_trend || 0,
-          likeTrend: dashboardRes.likes_trend || 0,
-        });
-      }
-      
-      // Fetch top clips
-      const clipsRes = await api.request<any>(`/analytics/top-clips?limit=10&metric=${sortBy}&days=${days}`);
-      if (clipsRes?.clips) {
-        setTopClips(clipsRes.clips.map((c: any) => ({
-          id: c.id,
-          name: c.name || 'Clip sans nom',
-          platform: c.platform || 'unknown',
-          views: c.views || 0,
-          likes: c.likes || 0,
-          comments: c.comments || 0,
-          shares: c.shares || 0,
-          engagementRate: c.engagement_rate || 0,
-          publishedAt: c.published_at || '',
-          thumbnailUrl: c.thumbnail_url,
-        })));
-      }
-    } catch (error) {
-      console.error('Failed to fetch analytics:', error);
-      // Set mock data for demo
-      setOverview({
-        totalViews: 0,
-        totalLikes: 0,
-        totalComments: 0,
-        totalShares: 0,
-        avgEngagement: 0,
-        totalClips: 0,
-        viewsTrend: 0,
-        likeTrend: 0,
-      });
-      setTopClips([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { data: trendsData } = useQuery({
+    queryKey: ['analytics-trends', selectedPlatform],
+    queryFn: () => api.getPerformanceTrends(selectedPlatform, 8),
+    staleTime: 60_000,
+  });
 
-  const formatNumber = (num: number) => {
-    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
-    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
-    return num.toString();
-  };
+  // The API client returns the raw payload (no ApiResponse wrapper) for
+  // these two endpoints, so use the response directly.
+  const summary = summaryData as AnalyticsSummary | undefined;
+  const trends = trendsData as PerformanceTrends | undefined;
 
-  const StatCard = ({ 
-    icon: Icon, 
-    label, 
-    value, 
-    trend, 
-    color 
-  }: { 
-    icon: any;
-    label: string;
-    value: number;
-    trend?: number;
-    color: string;
-  }) => (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="bg-white/5 backdrop-blur-sm rounded-xl p-5 border border-white/10"
-    >
-      <div className="flex items-start justify-between">
-        <div className={`p-2 rounded-lg ${color}`}>
-          <Icon className="w-5 h-5 text-white" />
-        </div>
-        {trend !== undefined && (
-          <div className={`flex items-center gap-1 text-xs ${
-            trend > 0 ? 'text-green-400' : trend < 0 ? 'text-red-400' : 'text-gray-400'
-          }`}>
-            {trend > 0 ? <ArrowUp className="w-3 h-3" /> : trend < 0 ? <ArrowDown className="w-3 h-3" /> : null}
-            {Math.abs(trend)}%
-          </div>
-        )}
-      </div>
-      <div className="mt-4">
-        <p className="text-2xl font-bold text-white">{formatNumber(value)}</p>
-        <p className="text-sm text-gray-400 mt-1">{label}</p>
-      </div>
-    </motion.div>
-  );
+  const totalViews = summary?.total_views ?? 0;
+  const totalClips = summary?.total_clips ?? 0;
+  const avgCompletion = summary?.avg_completion_rate ?? 0;
+  const accuracyPct = summary?.prediction_accuracy_pct;
+
+  const trendPoints = trends?.data ?? [];
+  const maxTrendViews = Math.max(1, ...trendPoints.map((w) => w.views));
 
   return (
     <div className="min-h-full bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800 p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white flex items-center gap-3">
             <BarChart3 className="w-7 h-7 text-cyan-400" />
@@ -168,208 +135,405 @@ export default function AnalyticsPage() {
           </h1>
           <p className="text-gray-400 mt-1">Suivez les performances de vos clips</p>
         </div>
-        
-        <div className="flex items-center gap-3">
-          {/* Date range selector */}
-          <div className="flex bg-white/5 rounded-lg p-1">
-            {(['7d', '30d', '90d'] as const).map((range) => (
-              <button
-                key={range}
-                onClick={() => setDateRange(range)}
-                className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                  dateRange === range
-                    ? 'bg-cyan-500 text-white'
-                    : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                {range === '7d' ? '7 jours' : range === '30d' ? '30 jours' : '90 jours'}
-              </button>
-            ))}
-          </div>
-          
-          <button
-            onClick={fetchAnalytics}
-            className="p-2 bg-white/5 rounded-lg hover:bg-white/10 transition-colors"
-          >
-            <RefreshCw className={`w-5 h-5 text-gray-400 ${loading ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
-      </div>
 
-      {/* Overview Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard
-          icon={Eye}
-          label="Total Vues"
-          value={overview?.totalViews || 0}
-          trend={overview?.viewsTrend}
-          color="bg-blue-500"
-        />
-        <StatCard
-          icon={Heart}
-          label="Total Likes"
-          value={overview?.totalLikes || 0}
-          trend={overview?.likeTrend}
-          color="bg-pink-500"
-        />
-        <StatCard
-          icon={MessageCircle}
-          label="Commentaires"
-          value={overview?.totalComments || 0}
-          color="bg-purple-500"
-        />
-        <StatCard
-          icon={Share2}
-          label="Partages"
-          value={overview?.totalShares || 0}
-          color="bg-green-500"
-        />
-      </div>
-
-      {/* Additional metrics */}
-      <div className="grid grid-cols-3 gap-4 mb-8">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="bg-gradient-to-br from-cyan-500/20 to-blue-500/20 rounded-xl p-5 border border-cyan-500/20"
-        >
-          <div className="flex items-center gap-3">
-            <Trophy className="w-8 h-8 text-yellow-400" />
-            <div>
-              <p className="text-2xl font-bold text-white">{overview?.totalClips || 0}</p>
-              <p className="text-sm text-gray-400">Clips publiés</p>
-            </div>
-          </div>
-        </motion.div>
-        
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15 }}
-          className="bg-gradient-to-br from-purple-500/20 to-pink-500/20 rounded-xl p-5 border border-purple-500/20"
-        >
-          <div className="flex items-center gap-3">
-            <TrendingUp className="w-8 h-8 text-purple-400" />
-            <div>
-              <p className="text-2xl font-bold text-white">{overview?.avgEngagement?.toFixed(1) || 0}%</p>
-              <p className="text-sm text-gray-400">Engagement moyen</p>
-            </div>
-          </div>
-        </motion.div>
-        
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="bg-gradient-to-br from-green-500/20 to-emerald-500/20 rounded-xl p-5 border border-green-500/20"
-        >
-          <div className="flex items-center gap-3">
-            <Clock className="w-8 h-8 text-green-400" />
-            <div>
-              <p className="text-2xl font-bold text-white">-</p>
-              <p className="text-sm text-gray-400">Durée moyenne visionnée</p>
-            </div>
-          </div>
-        </motion.div>
-      </div>
-
-      {/* Top Clips */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.25 }}
-        className="bg-white/5 backdrop-blur-sm rounded-xl border border-white/10"
-      >
-        <div className="p-5 border-b border-white/10 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-white">Top Clips</h2>
-          
-          <div className="flex items-center gap-2">
-            <Filter className="w-4 h-4 text-gray-400" />
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as any)}
-              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white"
-            >
-              <option value="views">Par vues</option>
-              <option value="engagement">Par engagement</option>
-              <option value="recent">Récents</option>
-            </select>
-          </div>
-        </div>
-        
-        <div className="divide-y divide-white/5">
-          {loading ? (
-            <div className="p-8 text-center">
-              <RefreshCw className="w-8 h-8 text-gray-400 animate-spin mx-auto" />
-              <p className="text-gray-400 mt-2">Chargement...</p>
-            </div>
-          ) : topClips.length === 0 ? (
-            <div className="p-8 text-center">
-              <BarChart3 className="w-12 h-12 text-gray-600 mx-auto" />
-              <p className="text-gray-400 mt-4">Aucun clip publié pour le moment</p>
-              <p className="text-gray-500 text-sm mt-1">
-                Publiez vos clips sur TikTok, YouTube ou Instagram pour voir les stats
-              </p>
-            </div>
-          ) : (
-            topClips.map((clip, index) => (
-              <motion.div
-                key={clip.id}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.05 }}
-                className="p-4 flex items-center gap-4 hover:bg-white/5 transition-colors"
-              >
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center text-white font-bold">
-                  {index + 1}
-                </div>
-                
-                <div className="w-16 h-10 bg-gray-800 rounded overflow-hidden flex-shrink-0">
-                  {clip.thumbnailUrl ? (
-                    <img src={clip.thumbnailUrl} alt="" className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-gray-600">
-                      <BarChart3 className="w-4 h-4" />
-                    </div>
-                  )}
-                </div>
-                
-                <div className="flex-1 min-w-0">
-                  <p className="text-white font-medium truncate">{clip.name}</p>
-                  <p className="text-xs text-gray-500 capitalize">{clip.platform}</p>
-                </div>
-                
-                <div className="flex items-center gap-6 text-sm">
-                  <div className="text-center">
-                    <p className="text-white font-semibold">{formatNumber(clip.views)}</p>
-                    <p className="text-xs text-gray-500">vues</p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-white font-semibold">{formatNumber(clip.likes)}</p>
-                    <p className="text-xs text-gray-500">likes</p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-white font-semibold">{clip.engagementRate.toFixed(1)}%</p>
-                    <p className="text-xs text-gray-500">engage</p>
-                  </div>
-                </div>
-              </motion.div>
-            ))
-          )}
-        </div>
-      </motion.div>
-
-      {/* Export button */}
-      <div className="mt-6 flex justify-end">
         <button
-          onClick={() => api.request('/analytics/export?format=csv')}
-          className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-gray-300 transition-colors"
+          onClick={() => refetchSummary()}
+          className="p-2 bg-white/5 rounded-lg hover:bg-white/10 transition-colors"
+          title="Rafraîchir"
         >
-          <Download className="w-4 h-4" />
-          Exporter les données
+          <RefreshCw
+            className={`w-5 h-5 text-gray-400 ${isSummaryFetching ? 'animate-spin' : ''}`}
+          />
         </button>
       </div>
+
+      {/* Platform selector */}
+      <div className="flex flex-wrap items-center gap-2 mb-8">
+        {PLATFORMS.map((p) => {
+          const active = selectedPlatform === p.id;
+          return (
+            <button
+              key={p.id}
+              onClick={() => setSelectedPlatform(p.id)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all border ${
+                active
+                  ? `bg-gradient-to-r ${p.color} text-white border-white/20 shadow-lg`
+                  : 'bg-white/5 text-gray-400 border-white/10 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              {p.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {summary && summary.total_clips === 0 ? (
+        <EmptyState />
+      ) : (
+        <>
+          {/* Overview cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            <OverviewCard
+              icon={Eye}
+              label="Total Views"
+              value={totalViews.toLocaleString()}
+              color="bg-blue-500"
+              delay={0}
+            />
+            <OverviewCard
+              icon={Film}
+              label="Total Clips"
+              value={totalClips.toString()}
+              color="bg-purple-500"
+              delay={0.05}
+            />
+            <OverviewCard
+              icon={Activity}
+              label="Avg Completion Rate"
+              value={`${(avgCompletion * 100).toFixed(1)}%`}
+              color="bg-emerald-500"
+              delay={0.1}
+            />
+            <AccuracyCard accuracyPct={accuracyPct ?? null} delay={0.15} />
+          </div>
+
+          {/* Trends chart */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            className="bg-white/5 backdrop-blur-sm rounded-xl border border-white/10 p-5 mb-8"
+          >
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-cyan-400" />
+                Tendance sur 8 semaines
+              </h2>
+              <div className="text-xs text-gray-500">
+                {trendPoints.length > 0
+                  ? `${trendPoints.reduce((s, w) => s + w.clips, 0)} clips au total`
+                  : 'Pas encore de données'}
+              </div>
+            </div>
+            <TrendsChart points={trendPoints} maxViews={maxTrendViews} />
+          </motion.div>
+
+          {/* Top clips */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.25 }}
+            className="bg-white/5 backdrop-blur-sm rounded-xl border border-white/10"
+          >
+            <div className="p-5 border-b border-white/10 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-yellow-400" />
+                Top Clips
+              </h2>
+              <span className="text-xs text-gray-500">
+                {summary?.top_clips?.length ?? 0} clips
+              </span>
+            </div>
+
+            <div className="divide-y divide-white/5">
+              {!summary ? (
+                <div className="p-8 text-center">
+                  <RefreshCw className="w-8 h-8 text-gray-400 animate-spin mx-auto" />
+                  <p className="text-gray-400 mt-2">Chargement…</p>
+                </div>
+              ) : summary.top_clips.length === 0 ? (
+                <div className="p-8 text-center">
+                  <BarChart3 className="w-12 h-12 text-gray-600 mx-auto" />
+                  <p className="text-gray-400 mt-4">
+                    Aucune performance enregistrée pour cette plateforme
+                  </p>
+                </div>
+              ) : (
+                summary.top_clips.map((clip, index) => (
+                  <TopClipRow key={clip.segment_id + index} clip={clip} rank={index + 1} />
+                ))
+              )}
+            </div>
+          </motion.div>
+        </>
+      )}
+
+      {!summary && (
+        <div className="mt-8 text-center">
+          <RefreshCw className="w-8 h-8 text-gray-400 animate-spin mx-auto" />
+          <p className="text-gray-400 mt-2">Chargement des analytics…</p>
+        </div>
+      )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Overview cards
+// ---------------------------------------------------------------------------
+
+function OverviewCard({
+  icon: Icon,
+  label,
+  value,
+  color,
+  delay,
+}: {
+  icon: typeof Eye;
+  label: string;
+  value: string;
+  color: string;
+  delay: number;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay }}
+      className="bg-white/5 backdrop-blur-sm rounded-xl p-5 border border-white/10"
+    >
+      <div className="flex items-start justify-between">
+        <div className={`p-2 rounded-lg ${color}`}>
+          <Icon className="w-5 h-5 text-white" />
+        </div>
+      </div>
+      <div className="mt-4">
+        <p className="text-2xl font-bold text-white">{value}</p>
+        <p className="text-sm text-gray-400 mt-1">{label}</p>
+      </div>
+    </motion.div>
+  );
+}
+
+function AccuracyCard({
+  accuracyPct,
+  delay,
+}: {
+  accuracyPct: number | null;
+  delay: number;
+}) {
+  const isNull = accuracyPct === null;
+  const color = !isNull ? accuracyColor(accuracyPct as number) : null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay }}
+      className="bg-white/5 backdrop-blur-sm rounded-xl p-5 border border-white/10"
+    >
+      <div className="flex items-start justify-between">
+        <div className="p-2 rounded-lg bg-amber-500">
+          <Target className="w-5 h-5 text-white" />
+        </div>
+        {!isNull && color && (
+          <span
+            className={`text-xs px-2 py-0.5 rounded-full border ${color.text} ${color.bg} ${color.border}`}
+          >
+            {(accuracyPct as number).toFixed(0)}%
+          </span>
+        )}
+      </div>
+      <div className="mt-4">
+        <p className="text-2xl font-bold text-white">
+          {isNull ? 'N/A' : `${(accuracyPct as number).toFixed(1)}%`}
+        </p>
+        <p className="text-sm text-gray-400 mt-1">Prediction Accuracy</p>
+      </div>
+    </motion.div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Trends chart (pure SVG)
+// ---------------------------------------------------------------------------
+
+function TrendsChart({ points, maxViews }: { points: TrendWeek[]; maxViews: number }) {
+  const width = 640;
+  const height = 180;
+  const padding = { top: 10, right: 8, bottom: 28, left: 8 };
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+
+  const slots = Math.max(points.length, 8);
+  const gap = 8;
+  const barWidth = Math.max(8, (innerWidth - gap * (slots - 1)) / slots);
+
+  // Labels S-8 .. S-1 (from oldest to newest)
+  const labels: string[] = [];
+  for (let i = slots; i >= 1; i -= 1) labels.push(`S-${i}`);
+
+  return (
+    <div className="w-full overflow-x-auto">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="w-full h-44"
+        preserveAspectRatio="none"
+      >
+        <defs>
+          <linearGradient id="barGradient" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#22d3ee" stopOpacity="0.9" />
+            <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.5" />
+          </linearGradient>
+        </defs>
+
+        {/* Baseline */}
+        <line
+          x1={padding.left}
+          x2={width - padding.right}
+          y1={height - padding.bottom}
+          y2={height - padding.bottom}
+          stroke="rgba(255,255,255,0.1)"
+          strokeWidth={1}
+        />
+
+        {Array.from({ length: slots }).map((_, index) => {
+          const point = points[index];
+          const views = point?.views ?? 0;
+          const barHeight = maxViews > 0 ? (views / maxViews) * innerHeight : 0;
+          const x = padding.left + index * (barWidth + gap);
+          const y = height - padding.bottom - barHeight;
+          return (
+            <g key={index}>
+              {views > 0 ? (
+                <rect
+                  x={x}
+                  y={y}
+                  width={barWidth}
+                  height={barHeight}
+                  rx={3}
+                  fill="url(#barGradient)"
+                />
+              ) : (
+                <rect
+                  x={x}
+                  y={height - padding.bottom - 2}
+                  width={barWidth}
+                  height={2}
+                  rx={1}
+                  fill="rgba(255,255,255,0.08)"
+                />
+              )}
+              {views > 0 && (
+                <text
+                  x={x + barWidth / 2}
+                  y={y - 4}
+                  textAnchor="middle"
+                  fontSize="9"
+                  fill="rgba(255,255,255,0.7)"
+                >
+                  {formatNumber(views)}
+                </text>
+              )}
+              <text
+                x={x + barWidth / 2}
+                y={height - padding.bottom + 16}
+                textAnchor="middle"
+                fontSize="10"
+                fill="rgba(255,255,255,0.45)"
+              >
+                {labels[index]}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Top clip row
+// ---------------------------------------------------------------------------
+
+function TopClipRow({ clip, rank }: { clip: TopClip; rank: number }) {
+  const delta = clip.actual_score - clip.predicted_score;
+  const deltaColor =
+    delta > 0 ? 'text-green-400' : delta < 0 ? 'text-red-400' : 'text-gray-400';
+  const DeltaIcon = delta > 0 ? ArrowUp : delta < 0 ? ArrowDown : Activity;
+  const shortId =
+    clip.segment_id.length > 10
+      ? `${clip.segment_id.slice(0, 6)}…${clip.segment_id.slice(-4)}`
+      : clip.segment_id;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: -20 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ delay: rank * 0.04 }}
+      className="p-4 flex items-center gap-4 hover:bg-white/5 transition-colors"
+    >
+      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center text-white font-bold text-sm">
+        #{rank}
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <p className="text-white font-medium truncate">Clip {shortId}</p>
+        <p className="text-xs text-gray-500 flex items-center gap-1">
+          <Clock className="w-3 h-3" />
+          {relativeTime(clip.timestamp)}
+        </p>
+      </div>
+
+      <div className="text-center hidden sm:block">
+        <p className="text-white font-semibold">{formatNumber(clip.views)}</p>
+        <p className="text-xs text-gray-500">vues</p>
+      </div>
+
+      <div className="flex items-center gap-3 text-sm">
+        <div className="text-center">
+          <p className="text-gray-300 font-semibold">{clip.predicted_score.toFixed(1)}</p>
+          <p className="text-xs text-gray-500">prédit</p>
+        </div>
+        <div className="text-center">
+          <p className="text-white font-semibold">{clip.actual_score.toFixed(1)}</p>
+          <p className="text-xs text-gray-500">réel</p>
+        </div>
+        <div className={`flex items-center gap-1 text-xs font-medium ${deltaColor}`}>
+          <DeltaIcon className="w-3 h-3" />
+          {Math.abs(delta).toFixed(1)}
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Empty state
+// ---------------------------------------------------------------------------
+
+function EmptyState() {
+  const snippet = `POST /v1/virality/performance
+{
+  "segment_id": "...",
+  "predicted_score": 72,
+  "platform": "tiktok",
+  "views": 50000
+}`;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="bg-white/5 backdrop-blur-sm rounded-xl border border-white/10 p-10 text-center"
+    >
+      <div className="w-16 h-16 mx-auto rounded-full bg-gradient-to-br from-cyan-500/20 to-blue-500/20 flex items-center justify-center border border-cyan-500/20">
+        <BarChart3 className="w-8 h-8 text-cyan-400" />
+      </div>
+      <h3 className="mt-5 text-lg font-semibold text-white">
+        Aucune donnée de performance enregistrée
+      </h3>
+      <p className="mt-2 text-sm text-gray-400 max-w-xl mx-auto">
+        Les stats apparaissent automatiquement quand vous enregistrez les vues/likes de vos
+        clips publiés via l’API{' '}
+        <code className="px-1.5 py-0.5 rounded bg-white/10 text-cyan-300 text-xs">
+          /v1/virality/performance
+        </code>
+        .
+      </p>
+      <pre className="mt-6 inline-block text-left bg-black/40 border border-white/10 rounded-lg p-4 text-xs text-gray-200 font-mono whitespace-pre overflow-x-auto">
+        {snippet}
+      </pre>
+    </motion.div>
   );
 }
