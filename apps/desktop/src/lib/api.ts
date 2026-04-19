@@ -252,6 +252,7 @@ class ApiClient {
       min_silence_ms?: number;
       padding_ms?: number;
     };
+    languages?: string[];
   }) {
     return this.request<ApiResponse<{ jobId: string }>>(`/projects/${projectId}/export`, {
       method: 'POST',
@@ -270,6 +271,7 @@ class ApiClient {
         layout_config: options.layoutConfig,
         intro_config: options.introConfig,
         jump_cut_config: options.jumpCutConfig,
+        languages: options.languages ?? [],
       }),
     });
   }

@@ -37,6 +37,90 @@ from forge_engine.services.render import RenderService
 logger = logging.getLogger(__name__)
 
 
+def _format_srt_time(seconds: float) -> str:
+    """Format seconds as SRT timestamp HH:MM:SS,mmm."""
+    if seconds < 0:
+        seconds = 0.0
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int(round((seconds - int(seconds)) * 1000))
+    if ms >= 1000:
+        ms = 0
+        s += 1
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+async def _export_translated_subtitles(
+    *,
+    segment: Segment,
+    transcript_segments: list[dict[str, Any]],
+    target_langs: list[str],
+    main_video_path: Path,
+    source_lang: str = "fr",
+) -> list[Path]:
+    """
+    Produce .srt files for each requested target language, saved next to the
+    main video export. Returns the list of written paths.
+    """
+    if not target_langs:
+        return []
+
+    # Flatten words from transcript segments (each has {text, start, end, words?}).
+    # Prefer word-level timing; fall back to segment-level.
+    words: list[dict[str, Any]] = []
+    for seg in transcript_segments or []:
+        seg_words = seg.get("words") or []
+        if seg_words:
+            for w in seg_words:
+                words.append({
+                    "word": w.get("word") or w.get("text", ""),
+                    "start": float(w.get("start", 0.0)),
+                    "end": float(w.get("end", 0.0)),
+                })
+        elif seg.get("text"):
+            words.append({
+                "word": seg["text"],
+                "start": float(seg.get("start", 0.0)),
+                "end": float(seg.get("end", 0.0)),
+            })
+
+    if not words:
+        logger.info("[Export] No transcript words available — skipping translated subtitles")
+        return []
+
+    try:
+        from forge_engine.services.translation import TranslationService
+        trans_service = TranslationService.get_instance()
+        results = await trans_service.translate_to_languages(
+            words=words,
+            source_lang=source_lang,
+            target_langs=target_langs,
+        )
+    except Exception as e:  # noqa: BLE001 — translation is best-effort
+        logger.warning("[Export] Translation service failed: %s", e)
+        return []
+
+    written: list[Path] = []
+    for lang, result in results.items():
+        if not result or not getattr(result, "segments", None):
+            continue
+        srt_path = main_video_path.with_name(f"{main_video_path.stem}.{lang}.srt")
+        try:
+            srt_lines: list[str] = []
+            for i, seg in enumerate(result.segments, 1):
+                start = _format_srt_time(float(seg.start_time))
+                end = _format_srt_time(float(seg.end_time))
+                srt_lines.append(f"{i}\n{start} --> {end}\n{seg.translated_text}\n")
+            srt_path.write_text("\n".join(srt_lines), encoding="utf-8")
+            written.append(srt_path)
+            logger.info("[Export] Saved translated subtitle: %s", srt_path)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[Export] Failed to write %s SRT: %s", lang, e)
+
+    return written
+
+
 class ExportService:
     """Service for exporting clips and generating export packs."""
 
@@ -66,7 +150,8 @@ class ExportService:
         intro_config: dict[str, Any] | None = None,
         music_config: dict[str, Any] | None = None,
         jump_cut_config: dict[str, Any] | None = None,
-        cold_open_config: dict[str, Any] | None = None
+        cold_open_config: dict[str, Any] | None = None,
+        languages: list[str] | None = None,
     ) -> dict[str, Any]:
         """Run the export pipeline."""
         logger.info(f"[EXPORT] Starting export for project={project_id}, segment={segment_id}")
@@ -164,6 +249,7 @@ class ExportService:
                     template=template,
                     template_id=template_id,
                     db=db,
+                    languages=languages or [],
                 )
             # ── End single-pass fast path ─────────────────────────────────
 
@@ -470,6 +556,29 @@ class ExportService:
             db.add(video_artifact)
             artifacts.append(video_artifact)
 
+            # Generate translated subtitle files alongside the main export
+            if languages:
+                translated_paths = await _export_translated_subtitles(
+                    segment=segment,
+                    transcript_segments=transcript_segments,
+                    target_langs=list(languages),
+                    main_video_path=video_path,
+                )
+                for srt_path in translated_paths:
+                    # Lang code is the last suffix before .srt (e.g. foo.en.srt -> "en")
+                    lang_code = srt_path.stem.rsplit(".", 1)[-1]
+                    srt_artifact = Artifact(
+                        project_id=project_id,
+                        segment_id=segment_id,
+                        variant=variant,
+                        type=f"captions_srt_{lang_code}",
+                        path=str(srt_path),
+                        filename=srt_path.name,
+                        size=srt_path.stat().st_size if srt_path.exists() else 0,
+                    )
+                    db.add(srt_artifact)
+                    artifacts.append(srt_artifact)
+
             # Render cover
             if include_cover:
                 job_manager.update_progress(job, 75, "cover", "Generating cover...")
@@ -693,6 +802,7 @@ class ExportService:
         template: Optional["Template"],
         template_id: str | None,
         db,
+        languages: list[str] | None = None,
     ) -> dict[str, Any]:
         """
         Single-pass export: assembles ALL transformations into one FFmpeg call.
@@ -988,6 +1098,28 @@ class ExportService:
         )
         db.add(video_artifact)
         artifacts.append(video_artifact)
+
+        # ── Translated subtitle files (if requested) ─────────────────────
+        if languages:
+            translated_paths = await _export_translated_subtitles(
+                segment=segment,
+                transcript_segments=transcript_segments,
+                target_langs=list(languages),
+                main_video_path=video_path,
+            )
+            for srt_path in translated_paths:
+                lang_code = srt_path.stem.rsplit(".", 1)[-1]
+                srt_artifact = Artifact(
+                    project_id=project_id,
+                    segment_id=segment_id,
+                    variant=variant,
+                    type=f"captions_srt_{lang_code}",
+                    path=str(srt_path),
+                    filename=srt_path.name,
+                    size=srt_path.stat().st_size if srt_path.exists() else 0,
+                )
+                db.add(srt_artifact)
+                artifacts.append(srt_artifact)
 
         # ── Cover ────────────────────────────────────────────────────────
         if include_cover:

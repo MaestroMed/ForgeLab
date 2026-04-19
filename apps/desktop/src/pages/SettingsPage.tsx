@@ -3,10 +3,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/Card';
 import { api } from '@/lib/api';
-import { 
+import { ENGINE_BASE_URL } from '@/lib/config';
+import {
   useEngineStore, useToastStore, useThemeStore, useAmbientAudioStore,
   useSubtitleStyleStore, useIntroStore, AmbientTrack
 } from '@/store';
+import { useAuthStore } from '@/store/auth';
 import {
   FolderOpen, HardDrive, RefreshCw, Zap, Cloud, Monitor,
   Palette, Volume2, Key, FileVideo, FlaskConical, Settings, Sun, Moon,
@@ -172,12 +174,15 @@ export default function SettingsPage() {
               />
             )}
             {activeSection === 'api-keys' && (
-              <ApiKeysSection 
-                providers={providers}
-                currentProvider={currentProvider}
-                switchProvider={switchProvider}
-                switchingProvider={switchingProvider}
-              />
+              <div className="space-y-6">
+                <ApiKeysSection
+                  providers={providers}
+                  currentProvider={currentProvider}
+                  switchProvider={switchProvider}
+                  switchingProvider={switchingProvider}
+                />
+                <UserApiSection />
+              </div>
             )}
             {activeSection === 'performance' && (
               <PerformanceSection 
@@ -617,6 +622,130 @@ function ApiKeysSection({
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// ============ USER API SECTION (personal key + webhook) ============
+function UserApiSection() {
+  const { token } = useAuthStore();
+  const { addToast } = useToastStore();
+  const [apiKey, setApiKey] = useState<string>('');
+  const [webhookUrl, setWebhookUrl] = useState<string>('');
+  const [showApiKey, setShowApiKey] = useState(false);
+
+  useEffect(() => {
+    if (!token) return;
+    fetch(`${ENGINE_BASE_URL}/v1/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((data) => {
+        setApiKey(data?.api_key || '');
+        setWebhookUrl(data?.webhook_url || '');
+      })
+      .catch(() => {});
+  }, [token]);
+
+  if (!token) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>API publique & Webhook</CardTitle>
+          <CardDescription>
+            Connectez-vous en mode SaaS pour gérer vos clés API.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  const rotateKey = async () => {
+    try {
+      const res = await fetch(`${ENGINE_BASE_URL}/v1/auth/me/api-key/rotate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      setApiKey(data?.api_key || '');
+      addToast({ type: 'success', title: 'Clé rotée', message: 'Nouvelle clé API générée.' });
+    } catch {
+      addToast({ type: 'error', title: 'Erreur', message: 'Rotation impossible.' });
+    }
+  };
+
+  const saveWebhook = async () => {
+    try {
+      await fetch(`${ENGINE_BASE_URL}/v1/auth/me/webhook`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ webhook_url: webhookUrl }),
+      });
+      addToast({ type: 'success', title: 'Webhook enregistré', message: 'URL mise à jour.' });
+    } catch {
+      addToast({ type: 'error', title: 'Erreur', message: 'Enregistrement impossible.' });
+    }
+  };
+
+  const copyKey = () => {
+    if (!apiKey) return;
+    navigator.clipboard.writeText(apiKey).catch(() => {});
+    addToast({ type: 'success', title: 'Copié' });
+  };
+
+  return (
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle>Clé API personnelle</CardTitle>
+          <CardDescription>
+            Pour l'API publique /v2/clips — gardez-la secrète.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-2">
+            <input
+              type={showApiKey ? 'text' : 'password'}
+              value={apiKey}
+              readOnly
+              className="flex-1 bg-white/5 border border-white/10 rounded px-3 py-2 text-sm font-mono"
+            />
+            <Button variant="secondary" size="sm" onClick={() => setShowApiKey(!showApiKey)}>
+              {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </Button>
+            <Button variant="secondary" size="sm" onClick={copyKey}>
+              Copier
+            </Button>
+            <Button variant="secondary" size="sm" onClick={rotateKey}>
+              Rotate
+            </Button>
+          </div>
+          <p className="text-xs text-[var(--text-muted)]">
+            Utilisation:{' '}
+            <code className="bg-white/10 px-1 rounded">
+              X-API-Key: {apiKey ? `${apiKey.slice(0, 8)}...` : '...'}
+            </code>
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Webhook de complétion</CardTitle>
+          <CardDescription>URL appelée quand un job /v2/clips se termine.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <input
+            type="url"
+            value={webhookUrl}
+            onChange={(e) => setWebhookUrl(e.target.value)}
+            placeholder="https://your-server.com/hooks/forge"
+            className="w-full bg-white/5 border border-white/10 rounded px-3 py-2 text-sm"
+          />
+          <Button onClick={saveWebhook}>Enregistrer</Button>
+        </CardContent>
+      </Card>
+    </>
   );
 }
 

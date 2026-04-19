@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useUIStore } from '@/store';
+import { useAuthStore } from '@/store/auth';
 
 const navItems = [
   { path: '/', icon: Home, label: 'Accueil' },
@@ -25,6 +26,7 @@ const navItems = [
 export default function Sidebar() {
   const location = useLocation();
   const { sidebarCollapsed, toggleSidebar } = useUIStore();
+  const { user, saasMode } = useAuthStore();
 
   return (
     <motion.aside
@@ -76,6 +78,32 @@ export default function Sidebar() {
           })}
         </ul>
       </nav>
+
+      {/* Quota badge (SaaS mode only) */}
+      {saasMode && user && !sidebarCollapsed && (
+        <div className="p-4 border-t border-white/5">
+          <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider">
+            Plan {user.plan}
+          </div>
+          <div className="mt-1 flex items-center justify-between text-xs">
+            <span>Exports</span>
+            <span>
+              {user.exports_this_month}
+              {user.plan === 'free' ? ' / 5' : ''}
+            </span>
+          </div>
+          {user.plan === 'free' && (
+            <div className="mt-2 h-1 bg-white/10 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-viral-medium to-viral-high"
+                style={{
+                  width: `${Math.min(100, (user.exports_this_month / 5) * 100)}%`,
+                }}
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Collapse button */}
       <div className="p-2 border-t border-[var(--border-color)]">

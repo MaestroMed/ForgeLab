@@ -127,6 +127,7 @@ class ExportRequest(BaseModel):
     intro_config: IntroConfigRequest | None = None
     music_config: MusicConfigRequest | None = None
     jump_cut_config: JumpCutConfigRequest | None = None
+    languages: list[str] = []  # Additional language codes for translated subtitle exports
 
 
 class GenerateVariantsRequest(BaseModel):
@@ -1038,9 +1039,11 @@ async def generate_segment_preview(
     import asyncio
     import hashlib
     import time
+    from pathlib import Path as _P
 
     from forge_engine.core.config import settings
     from forge_engine.services.ffmpeg import FFmpegService
+    from forge_engine.services.pipeline_builder import PipelineConfig, PipelineSinglePass
 
     # Load project and segment
     project = await db.get(Project, project_id)
@@ -1050,8 +1053,8 @@ async def generate_segment_preview(
     if not segment or segment.project_id != project_id:
         raise HTTPException(status_code=404, detail="Segment not found")
 
-    # Cache key based on segment + settings hash
-    cache_key = hashlib.md5(f"{segment_id}-preview-360p".encode()).hexdigest()[:12]
+    # Cache key — bumped to v2 so we invalidate old raw-encode previews
+    cache_key = hashlib.md5(f"{segment_id}-preview-v2-360p".encode()).hexdigest()[:12]
     preview_dir = settings.TEMP_PATH / "previews"
     preview_dir.mkdir(parents=True, exist_ok=True)
     preview_path = preview_dir / f"{cache_key}.mp4"
@@ -1065,40 +1068,113 @@ async def generate_segment_preview(
             "height": 640,
         }
 
-    # Generate 360p preview
-    ffmpeg = FFmpegService.get_instance()
-    cmd = [
-        ffmpeg.ffmpeg_path,
-        "-y",
-        "-ss", str(segment.start_time),
-        "-i", project.source_path,
-        "-t", str(min(segment.duration, 60)),  # Cap at 60s for preview
-        "-vf", "scale=360:640:force_original_aspect_ratio=decrease,pad=360:640:(ow-iw)/2:(oh-ih)/2",
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-crf", "32",
-        "-c:a", "aac",
-        "-b:a", "64k",
-        "-movflags", "+faststart",
-        str(preview_path),
-    ]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
+    # Capped preview duration: 20s max (enough to see the pipeline result)
+    preview_duration = min(segment.duration, 20.0)
+
+    # Resolve layout rects — Project has no facecam_rect/content_rect columns,
+    # but Segment does. Fall back from project -> segment so we still honour
+    # any future project-level defaults.
+    facecam_rect = (
+        getattr(project, "facecam_rect", None)
+        or getattr(segment, "facecam_rect", None)
+        or None
     )
-    await asyncio.wait_for(proc.communicate(), timeout=30)
+    content_rect = (
+        getattr(project, "content_rect", None)
+        or getattr(segment, "content_rect", None)
+        or None
+    )
 
-    if not preview_path.exists():
-        raise HTTPException(status_code=500, detail="Preview generation failed")
+    try:
+        pipeline_cfg = PipelineConfig(
+            source_path=_P(project.source_path),
+            segment_start=segment.start_time,
+            segment_duration=preview_duration,
+            source_width=project.width or 1920,
+            source_height=project.height or 1080,
+            output_width=360,
+            output_height=640,
+            fps=24,  # Lower fps for preview
+            crf=32,  # Low quality for speed
+            platform="preview",
+            facecam_rect=facecam_rect,
+            content_rect=content_rect,
+            output_path=_P(preview_path),
+            use_nvenc=False,
+            # No subtitles, no cold open, no intro for the preview to keep it fast
+        )
 
-    return {
-        "preview_path": str(preview_path),
-        "cached": False,
-        "width": 360,
-        "height": 640,
-        "duration": float(min(segment.duration, 60)),
-    }
+        pipeline = PipelineSinglePass(pipeline_cfg)
+        cmd = pipeline.build_command()
+
+        # Force ultrafast preset for preview
+        for i, arg in enumerate(cmd):
+            if arg == "-preset" and i + 1 < len(cmd):
+                cmd[i + 1] = "ultrafast"
+                break
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+
+        if not preview_path.exists() or preview_path.stat().st_size < 1024:
+            logger.warning(
+                "Preview pipeline failed, falling back to raw re-encode. Stderr: %s",
+                stderr[:500] if stderr else "",
+            )
+            raise RuntimeError("pipeline_failed")
+
+        return {
+            "preview_path": str(preview_path),
+            "cached": False,
+            "width": 360,
+            "height": 640,
+            "duration": preview_duration,
+            "pipeline_applied": True,
+        }
+
+    except Exception as e:
+        # Fallback: raw re-encode
+        logger.info("Preview pipeline unavailable (%s), using raw re-encode", e)
+        ffmpeg = FFmpegService.get_instance()
+        cmd = [
+            ffmpeg.ffmpeg_path,
+            "-y",
+            "-ss", str(segment.start_time),
+            "-i", project.source_path,
+            "-t", str(preview_duration),
+            "-vf",
+            "scale=360:640:force_original_aspect_ratio=decrease,"
+            "pad=360:640:(ow-iw)/2:(oh-ih)/2",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "32",
+            "-c:a", "aac",
+            "-b:a", "64k",
+            "-movflags", "+faststart",
+            str(preview_path),
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=30)
+
+        if not preview_path.exists():
+            raise HTTPException(status_code=500, detail="Preview generation failed")
+
+        return {
+            "preview_path": str(preview_path),
+            "cached": False,
+            "width": 360,
+            "height": 640,
+            "duration": preview_duration,
+            "pipeline_applied": False,
+        }
 
 
 @router.get("/previews/file")
@@ -1209,6 +1285,7 @@ async def export_segment(
         intro_config=request.intro_config.model_dump() if request.intro_config else None,
         music_config=request.music_config.model_dump() if request.music_config else None,
         jump_cut_config=request.jump_cut_config.model_dump() if request.jump_cut_config else None,
+        languages=request.languages or [],
     )
 
     return {"success": True, "data": {"jobId": job.id}}

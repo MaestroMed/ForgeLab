@@ -187,6 +187,7 @@ export default function ClipEditorPage() {
         layoutConfig,
         introConfig: introConfig.enabled ? introConfig : undefined,
         jumpCutConfig: jumpCutConfig.enabled ? jumpCutConfig : undefined,
+        languages: Array.isArray(options.languages) ? options.languages : [],
       });
       
       if (response.data?.jobId) {
