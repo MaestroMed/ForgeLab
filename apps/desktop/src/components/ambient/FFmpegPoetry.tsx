@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
-import { ENGINE_BASE_URL } from '@/lib/config';
 import { useJobsStore } from '@/store';
+import { useJobLogs } from '@/lib/hooks/useJobLogs';
 
 /**
  * Cinema-mode ambient decoration: streams the FFmpeg log lines of the currently
@@ -11,6 +11,7 @@ export default function FFmpegPoetry() {
   const [lines, setLines] = useState<string[]>([]);
   const [cinemaActive, setCinemaActive] = useState(false);
   const seenLines = useRef<Set<string>>(new Set());
+  const activeJobIdRef = useRef<string | undefined>(undefined);
 
   const activeJob = useJobsStore((s) =>
     s.jobs.find(
@@ -18,48 +19,61 @@ export default function FFmpegPoetry() {
     ),
   );
 
-  // Watch for the `cinema-mode` class on <body>.
+  // Watch for the `cinema-mode` class on <body>. Filter by attributeName
+  // so we don't re-read body.classList for every unrelated mutation.
   useEffect(() => {
     const update = () => setCinemaActive(document.body.classList.contains('cinema-mode'));
     update();
-    const observer = new MutationObserver(update);
+    const observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.attributeName === 'class') {
+          update();
+          break;
+        }
+      }
+    });
     observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
     return () => observer.disconnect();
   }, []);
 
-  // Poll logs for the active job.
+  // Shared job logs query — the same `useJobLogs` hook powers JobLogDrawer,
+  // so both subscribers share a single polling stream per job id (React
+  // Query dedups via the query key). We still track `seenLines` locally
+  // because we only surface newly-arrived lines as ambient text.
+  const { data: fetchedLines = [] } = useJobLogs(
+    activeJob?.id,
+    50,
+    Boolean(activeJob && cinemaActive),
+  );
+
+  // Reset the seen-set and buffer whenever the target job changes or the
+  // cinema mode is toggled off.
   useEffect(() => {
     if (!activeJob || !cinemaActive) {
       setLines([]);
       seenLines.current.clear();
+      activeJobIdRef.current = undefined;
       return;
     }
-    let alive = true;
-    const fetchLogs = async () => {
-      try {
-        const res = await fetch(`${ENGINE_BASE_URL}/v1/jobs/${activeJob.id}/logs?lines=50`);
-        const data = await res.json();
-        const newLines: string[] = data?.data?.lines ?? data?.lines ?? [];
-        if (!alive) return;
-        const fresh = newLines.filter((l) => {
-          if (seenLines.current.has(l)) return false;
-          seenLines.current.add(l);
-          return true;
-        });
-        if (fresh.length > 0) {
-          setLines((prev) => [...prev, ...fresh].slice(-30));
-        }
-      } catch {
-        /* ignore — engine may still be starting */
-      }
-    };
-    fetchLogs();
-    const iv = window.setInterval(fetchLogs, 1500);
-    return () => {
-      alive = false;
-      window.clearInterval(iv);
-    };
-  }, [activeJob?.id, cinemaActive]);
+    if (activeJobIdRef.current !== activeJob.id) {
+      seenLines.current.clear();
+      setLines([]);
+      activeJobIdRef.current = activeJob.id;
+    }
+  }, [activeJob?.id, cinemaActive, activeJob]);
+
+  // Append newly-seen lines as they arrive from the shared query.
+  useEffect(() => {
+    if (!activeJob || !cinemaActive) return;
+    const fresh = fetchedLines.filter((l) => {
+      if (seenLines.current.has(l)) return false;
+      seenLines.current.add(l);
+      return true;
+    });
+    if (fresh.length > 0) {
+      setLines((prev) => [...prev, ...fresh].slice(-30));
+    }
+  }, [fetchedLines, activeJob, cinemaActive]);
 
   if (!cinemaActive || !activeJob || lines.length === 0) return null;
 

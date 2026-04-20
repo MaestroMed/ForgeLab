@@ -5,12 +5,13 @@
  * Publishes the artifact to TikTok / YouTube Shorts / Instagram.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Calendar, Send, Loader2, AlertCircle, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { api } from '@/lib/api';
 import { useToastStore } from '@/store';
+import { useSocialStatus } from '@/lib/hooks/useSocialStatus';
 
 interface Props {
   artifactId: string;
@@ -39,7 +40,11 @@ export default function SocialPublishModal({
 }: Props) {
   const { addToast } = useToastStore();
   const [platform, setPlatform] = useState<Platform>('tiktok');
-  const [connected, setConnected] = useState<Platform[]>([]);
+  const { data: socialStatus } = useSocialStatus();
+  const connected = useMemo<Platform[]>(() => {
+    const accs = socialStatus?.connected_accounts ?? [];
+    return accs.map((a) => (typeof a === 'string' ? a : a.platform)) as Platform[];
+  }, [socialStatus]);
   const [title, setTitle] = useState(defaultTitle);
   const [description, setDescription] = useState(defaultDescription);
   const [hashtags, setHashtags] = useState(defaultHashtags.join(' '));
@@ -48,14 +53,6 @@ export default function SocialPublishModal({
   const [visibility, setVisibility] = useState<'public' | 'unlisted' | 'private'>('public');
   const [publishing, setPublishing] = useState(false);
   const [result, setResult] = useState<{ success: boolean; url?: string; error?: string } | null>(null);
-
-  useEffect(() => {
-    (api.getSocialStatus() as Promise<any>).then((r: any) => {
-      const data = r?.data ?? r;
-      const accs = data?.connected_accounts || [];
-      setConnected(accs.map((a: any) => (typeof a === 'string' ? a : a.platform)));
-    });
-  }, []);
 
   const isConnected = connected.includes(platform);
   const info = PLATFORM_INFO[platform];

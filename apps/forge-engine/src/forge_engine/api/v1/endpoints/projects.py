@@ -1550,12 +1550,44 @@ async def get_audio_peaks(
     bars: int = Query(200, ge=20, le=2000),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get audio waveform peaks (amplitude values normalized 0-1) for the VodSpine."""
+    """Get audio waveform peaks (amplitude values normalized 0-1) for the VodSpine.
+
+    Cached on disk per (project_id, bars). The cache is invalidated when the
+    source media is newer than the cached file.
+    """
+    import json
+
     from forge_engine.core.config import settings
 
     project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # On-disk cache lookup (fast path, avoids re-running ffmpeg)
+    cache_dir = settings.LIBRARY_PATH / "audio_peaks_cache"
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    cache_path = cache_dir / f"{project_id}_{bars}.json"
+
+    if cache_path.exists():
+        try:
+            # Compare against source mtime so a re-ingest invalidates stale peaks.
+            source_mtime = 0.0
+            if project.source_path and Path(project.source_path).exists():
+                source_mtime = Path(project.source_path).stat().st_mtime
+            cache_mtime = cache_path.stat().st_mtime
+            if cache_mtime >= source_mtime:
+                data = json.loads(cache_path.read_text())
+                if (
+                    isinstance(data, dict)
+                    and "peaks" in data
+                    and len(data["peaks"]) == bars
+                ):
+                    return data
+        except Exception:
+            pass
 
     # Prefer the extracted/normalized audio asset, then proxy, then raw source.
     audio_source: str | None = None
@@ -1646,7 +1678,15 @@ async def get_audio_peaks(
             except Exception:
                 peaks.append(0.0)
 
-        return {"peaks": peaks, "bars": len(peaks), "duration": duration}
+        result_payload = {"peaks": peaks, "bars": len(peaks), "duration": duration}
+
+        # Persist to disk cache for subsequent calls.
+        try:
+            cache_path.write_text(json.dumps(result_payload, separators=(",", ":")))
+        except Exception as _e:
+            logger.debug("Non-critical: audio peaks cache write failed: %s", _e)
+
+        return result_payload
     except Exception as e:
         logger.warning("Audio peaks failed for project %s: %s", project_id, e)
         return {"peaks": [], "bars": 0, "duration": project.duration or 0}

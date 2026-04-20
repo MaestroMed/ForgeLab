@@ -16,6 +16,10 @@ from forge_engine.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Module-level flag so the "FFmpeg initialized" banner is logged at most once
+# per process, regardless of how many FFmpegService instances are created.
+_ffmpeg_logged_init = False
+
 
 class FFmpegService:
     """Service for FFmpeg operations."""
@@ -130,10 +134,13 @@ class FFmpegService:
             self.has_scale_npp = "scale_npp" in filters_output or "scale_cuda" in filters_output
 
             self._initialized = True
-            logger.info(
-                "FFmpeg %s initialized - NVENC: %s, NVDEC: %s, scale_npp: %s, libass: %s",
-                self.version, self.has_nvenc, self.has_nvdec, self.has_scale_npp, self.has_libass
-            )
+            global _ffmpeg_logged_init
+            if not _ffmpeg_logged_init:
+                logger.info(
+                    "FFmpeg %s initialized - NVENC: %s, NVDEC: %s, scale_npp: %s, libass: %s",
+                    self.version, self.has_nvenc, self.has_nvdec, self.has_scale_npp, self.has_libass
+                )
+                _ffmpeg_logged_init = True
             return True
 
         except Exception as e:

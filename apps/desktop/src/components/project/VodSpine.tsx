@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { celebrate } from '@/components/ambient/Celebration';
 import { sfxViral } from '@/lib/sfx';
@@ -60,6 +60,12 @@ export default function VodSpine({
   const [freshIds, setFreshIds] = useState<Set<string>>(new Set());
   const firstRenderRef = useRef(true);
 
+  // rAF-throttled scrubber updates — mousemove can fire 60-120Hz but we only
+  // need one state update per frame. Coalescing here prevents runaway renders
+  // and keeps the downstream video-seek logic stable.
+  const rafRef = useRef<number | null>(null);
+  const pendingRef = useRef<{ x: number; width: number } | null>(null);
+
   // Track newly discovered segments so they get an entrance animation + ripple.
   // On first render we seed the known/seen sets so segments already on disk
   // don't all animate at once — the ceremony is reserved for live arrivals.
@@ -114,6 +120,16 @@ export default function VodSpine({
     return () => clearTimeout(timeout);
   }, [segments]);
 
+  // Clean up any pending scrubber rAF on unmount so we don't leak a frame.
+  useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, []);
+
   const spineY = height / 2;
   const gemRadius = 8;
 
@@ -140,19 +156,38 @@ export default function VodSpine({
     return result;
   }, [audioPeaks]);
 
-  const handleHover = (seg: SpineSegment | null, el?: HTMLElement | null) => {
-    setHoveredId(seg?.id ?? null);
-    setHoveredGemEl(seg ? (el ?? null) : null);
-    if (!seg) setScrubberPosition(0);
-    onSegmentHover?.(seg);
-  };
+  // Stable hover/leave/move callbacks for the memoized Gem subcomponent so
+  // the unaffected gems don't re-render whenever hoveredId changes.
+  const handleHover = useCallback(
+    (seg: SpineSegment, el: HTMLElement) => {
+      setHoveredId(seg.id);
+      setHoveredGemEl(el);
+      onSegmentHover?.(seg);
+    },
+    [onSegmentHover],
+  );
 
-  const onGemMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleLeave = useCallback(() => {
+    setHoveredId(null);
+    setHoveredGemEl(null);
+    setScrubberPosition(0);
+    onSegmentHover?.(null);
+  }, [onSegmentHover]);
+
+  const handleGemMove = useCallback((e: React.MouseEvent<HTMLElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const pct = Math.max(0, Math.min(1, x / rect.width));
-    setScrubberPosition(pct);
-  };
+    pendingRef.current = { x: e.clientX - rect.left, width: rect.width };
+
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      const p = pendingRef.current;
+      if (p && p.width > 0) {
+        const pct = Math.max(0, Math.min(1, p.x / p.width));
+        setScrubberPosition(pct);
+      }
+      rafRef.current = null;
+    });
+  }, []);
 
   const hoveredSeg = hoveredId ? segments.find((s) => s.id === hoveredId) : null;
 
@@ -217,109 +252,21 @@ export default function VodSpine({
       )}
 
       {/* Segment gems */}
-      {segments.map((seg) => {
-        const midTime = (seg.startTime + seg.endTime) / 2;
-        const leftPct = (midTime / duration) * 100;
-        const color = scoreToColor(seg.score);
-        const segDuration = seg.endTime - seg.startTime;
-        const widthPct = Math.max(0.5, (segDuration / duration) * 100);
-        const isHovered = hoveredId === seg.id;
-        const isFresh = freshIds.has(seg.id);
-        const pulseDuration = Math.max(0.8, 2 - (seg.score / 100) * 1.5);
-
-        return (
-          <div
-            key={seg.id}
-            className="absolute top-0 bottom-5 group cursor-pointer"
-            style={{ left: `${leftPct}%`, transform: 'translateX(-50%)', width: `${widthPct}%`, minWidth: 16 }}
-            onClick={() => onSegmentClick(seg)}
-            onMouseEnter={(e) => handleHover(seg, e.currentTarget)}
-            onMouseLeave={() => handleHover(null)}
-            onMouseMove={onGemMouseMove}
-          >
-            {/* Segment duration bar */}
-            <div
-              className="absolute h-0.5 transition-all"
-              style={{
-                top: spineY,
-                left: 0,
-                right: 0,
-                backgroundColor: color.fill,
-                boxShadow: isHovered ? `0 0 12px ${color.glow}` : 'none',
-                opacity: isHovered ? 1 : 0.6,
-              }}
-            />
-
-            {/* Ripple ring for freshly discovered gems */}
-            {isFresh && (
-              <motion.div
-                className="absolute rounded-full pointer-events-none"
-                style={{
-                  top: spineY - gemRadius,
-                  left: '50%',
-                  width: gemRadius * 2,
-                  height: gemRadius * 2,
-                  marginLeft: -gemRadius,
-                  border: `2px solid ${color.fill}`,
-                  boxShadow: `0 0 20px ${color.glow}`,
-                }}
-                initial={{ scale: 1, opacity: 0.9 }}
-                animate={{ scale: 4, opacity: 0 }}
-                transition={{ duration: 1.2, ease: 'easeOut' }}
-              />
-            )}
-
-            {/* The gem itself */}
-            <motion.div
-              className="absolute rounded-full"
-              style={{
-                top: spineY - gemRadius,
-                left: '50%',
-                transform: 'translateX(-50%)',
-                width: gemRadius * 2,
-                height: gemRadius * 2,
-                backgroundColor: color.fill,
-                boxShadow: `0 0 ${12 + (seg.score / 100) * 20}px ${color.glow}, 0 0 2px ${color.fill}`,
-              }}
-              initial={isFresh ? { scale: 0, opacity: 0 } : false}
-              animate={{
-                scale: isHovered ? [1, 1.3, 1] : [1, 1.15, 1],
-                opacity: [0.7, 1, 0.7],
-              }}
-              transition={{
-                scale: {
-                  duration: isHovered ? 0.4 : pulseDuration,
-                  repeat: Infinity,
-                  ease: 'easeInOut',
-                  // Let the pop-in animation run before the pulse kicks in.
-                  delay: isFresh ? 0.35 : 0,
-                },
-                opacity: {
-                  duration: pulseDuration,
-                  repeat: Infinity,
-                  ease: 'easeInOut',
-                  delay: isFresh ? 0.35 : 0,
-                },
-              }}
-            />
-            {/* Score label on hover */}
-            {isHovered && (
-              <div
-                className="absolute text-[10px] font-bold tabular-nums pointer-events-none"
-                style={{
-                  top: spineY - gemRadius - 18,
-                  left: '50%',
-                  transform: 'translateX(-50%)',
-                  color: color.fill,
-                  textShadow: `0 0 6px ${color.glow}`,
-                }}
-              >
-                {Math.round(seg.score)}
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {segments.map((seg) => (
+        <Gem
+          key={seg.id}
+          seg={seg}
+          duration={duration}
+          spineY={spineY}
+          gemRadius={gemRadius}
+          isHovered={hoveredId === seg.id}
+          isFresh={freshIds.has(seg.id)}
+          onClick={onSegmentClick}
+          onHover={handleHover}
+          onLeave={handleLeave}
+          onMove={handleGemMove}
+        />
+      ))}
 
       {/* Hover text tooltip — repositioned BELOW gem when video preview is active, else above */}
       <AnimatePresence>
@@ -389,6 +336,138 @@ export default function VodSpine({
 }
 
 // ---------------------------------------------------------------------------
+// Memoized gem — extracted so only the hovered/unhovered gem re-renders when
+// hover state flips, instead of the whole timeline. The `isHovered` /
+// `isFresh` / `onClick` / `onHover` / `onLeave` / `onMove` inputs are the only
+// things that change at runtime; everything else is derived from the segment.
+// ---------------------------------------------------------------------------
+
+interface GemProps {
+  seg: SpineSegment;
+  duration: number;
+  spineY: number;
+  gemRadius: number;
+  isHovered: boolean;
+  isFresh: boolean;
+  onClick: (seg: SpineSegment) => void;
+  onHover: (seg: SpineSegment, el: HTMLElement) => void;
+  onLeave: () => void;
+  onMove: (e: React.MouseEvent<HTMLElement>) => void;
+}
+
+const Gem = memo(function Gem({
+  seg,
+  duration,
+  spineY,
+  gemRadius,
+  isHovered,
+  isFresh,
+  onClick,
+  onHover,
+  onLeave,
+  onMove,
+}: GemProps) {
+  const midTime = (seg.startTime + seg.endTime) / 2;
+  const leftPct = (midTime / duration) * 100;
+  const color = scoreToColor(seg.score);
+  const segDuration = seg.endTime - seg.startTime;
+  const widthPct = Math.max(0.5, (segDuration / duration) * 100);
+  const pulseDuration = Math.max(0.8, 2 - (seg.score / 100) * 1.5);
+
+  return (
+    <div
+      className="absolute top-0 bottom-5 group cursor-pointer"
+      style={{ left: `${leftPct}%`, transform: 'translateX(-50%)', width: `${widthPct}%`, minWidth: 16 }}
+      onClick={() => onClick(seg)}
+      onMouseEnter={(e) => onHover(seg, e.currentTarget)}
+      onMouseLeave={onLeave}
+      onMouseMove={onMove}
+    >
+      {/* Segment duration bar */}
+      <div
+        className="absolute h-0.5 transition-all"
+        style={{
+          top: spineY,
+          left: 0,
+          right: 0,
+          backgroundColor: color.fill,
+          boxShadow: isHovered ? `0 0 12px ${color.glow}` : 'none',
+          opacity: isHovered ? 1 : 0.6,
+        }}
+      />
+
+      {/* Ripple ring for freshly discovered gems */}
+      {isFresh && (
+        <motion.div
+          className="absolute rounded-full pointer-events-none"
+          style={{
+            top: spineY - gemRadius,
+            left: '50%',
+            width: gemRadius * 2,
+            height: gemRadius * 2,
+            marginLeft: -gemRadius,
+            border: `2px solid ${color.fill}`,
+            boxShadow: `0 0 20px ${color.glow}`,
+          }}
+          initial={{ scale: 1, opacity: 0.9 }}
+          animate={{ scale: 4, opacity: 0 }}
+          transition={{ duration: 1.2, ease: 'easeOut' }}
+        />
+      )}
+
+      {/* The gem itself */}
+      <motion.div
+        className="absolute rounded-full"
+        style={{
+          top: spineY - gemRadius,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          width: gemRadius * 2,
+          height: gemRadius * 2,
+          backgroundColor: color.fill,
+          boxShadow: `0 0 ${12 + (seg.score / 100) * 20}px ${color.glow}, 0 0 2px ${color.fill}`,
+        }}
+        initial={isFresh ? { scale: 0, opacity: 0 } : false}
+        animate={{
+          scale: isHovered ? [1, 1.3, 1] : [1, 1.15, 1],
+          opacity: [0.7, 1, 0.7],
+        }}
+        transition={{
+          scale: {
+            duration: isHovered ? 0.4 : pulseDuration,
+            repeat: Infinity,
+            ease: 'easeInOut',
+            // Let the pop-in animation run before the pulse kicks in.
+            delay: isFresh ? 0.35 : 0,
+          },
+          opacity: {
+            duration: pulseDuration,
+            repeat: Infinity,
+            ease: 'easeInOut',
+            delay: isFresh ? 0.35 : 0,
+          },
+        }}
+      />
+      {/* Score label on hover */}
+      {isHovered && (
+        <div
+          className="absolute text-[10px] font-bold tabular-nums pointer-events-none"
+          style={{
+            top: spineY - gemRadius - 18,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            color: color.fill,
+            textShadow: `0 0 6px ${color.glow}`,
+          }}
+        >
+          {Math.round(seg.score)}
+        </div>
+      )}
+    </div>
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Scrubbable hover video preview — 9:16 portrait thumbnail that seeks based
 // on mouse X position within the hovered gem.
 // ---------------------------------------------------------------------------
@@ -407,6 +486,13 @@ function HoverVideoPreview({
   const videoRef = useRef<HTMLVideoElement>(null);
   const [loaded, setLoaded] = useState(false);
 
+  // Seek coalescer — `currentTime = x` on an HTMLVideoElement kicks off an
+  // async decoder seek, and hammering it from mousemove causes the decoder
+  // to thrash. We keep a pending-target ref plus a seeking-flag ref, and
+  // only issue a new seek when the previous one has fired 'seeked'.
+  const pendingSeekRef = useRef<number | null>(null);
+  const seekingRef = useRef(false);
+
   // Position above the hovered gem. Recompute each render because the parent
   // rect can change as the user moves across adjacent gems.
   const rect = parentEl?.getBoundingClientRect();
@@ -418,15 +504,42 @@ function HoverVideoPreview({
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !loaded) return;
+
     const segDuration = segment.endTime - segment.startTime;
     const targetTime = segment.startTime + scrubberPosition * segDuration;
-    if (Math.abs(video.currentTime - targetTime) > 0.1) {
+    pendingSeekRef.current = targetTime;
+
+    const trySeek = () => {
+      if (seekingRef.current) return;
+      const target = pendingSeekRef.current;
+      if (target === null) return;
+      if (Math.abs(video.currentTime - target) < 0.15) return;
+
+      seekingRef.current = true;
       try {
-        video.currentTime = targetTime;
+        video.currentTime = target;
       } catch {
-        // Some browsers throw if the buffer isn't ready — ignore and retry next move.
+        // Some browsers throw if the buffer isn't ready — reset the flag and
+        // let the next move retry.
+        seekingRef.current = false;
       }
-    }
+    };
+
+    const onSeeked = () => {
+      seekingRef.current = false;
+      // If the user kept moving while we were mid-seek, catch up now.
+      const target = pendingSeekRef.current;
+      if (target !== null && Math.abs(video.currentTime - target) > 0.15) {
+        trySeek();
+      }
+    };
+
+    video.addEventListener('seeked', onSeeked);
+    trySeek();
+
+    return () => {
+      video.removeEventListener('seeked', onSeeked);
+    };
   }, [scrubberPosition, segment.startTime, segment.endTime, loaded]);
 
   const currentTimeDisplay =

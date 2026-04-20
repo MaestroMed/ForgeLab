@@ -343,6 +343,70 @@ function TopSegmentsCarousel({
     [segments],
   );
 
+  // Per-card rAF throttle state. Each card has its own video element, so we
+  // key the throttle state on segment id to avoid cards interfering with
+  // each other. We store the latest pending pointer sample and a single
+  // queued frame; additional mousemoves just overwrite the pending sample.
+  const cardScrubRefs = useRef<
+    Map<
+      string,
+      {
+        raf: number | null;
+        pending: { x: number; width: number; video: HTMLVideoElement } | null;
+      }
+    >
+  >(new Map());
+
+  // Clean up any queued rAFs on unmount so we don't leak frames across
+  // navigation to a different project.
+  useEffect(() => {
+    const refs = cardScrubRefs.current;
+    return () => {
+      refs.forEach((state) => {
+        if (state.raf !== null) cancelAnimationFrame(state.raf);
+      });
+      refs.clear();
+    };
+  }, []);
+
+  const handleCardMouseMove = (
+    e: React.MouseEvent<HTMLDivElement>,
+    segId: string,
+  ) => {
+    const card = e.currentTarget;
+    const video = card.querySelector('video') as HTMLVideoElement | null;
+    if (!video || !video.duration || !isFinite(video.duration)) return;
+    const rect = card.getBoundingClientRect();
+
+    let state = cardScrubRefs.current.get(segId);
+    if (!state) {
+      state = { raf: null, pending: null };
+      cardScrubRefs.current.set(segId, state);
+    }
+    state.pending = {
+      x: e.clientX - rect.left,
+      width: rect.width,
+      video,
+    };
+
+    if (state.raf !== null) return;
+    const s = state;
+    state.raf = requestAnimationFrame(() => {
+      const p = s.pending;
+      s.raf = null;
+      if (!p || p.width <= 0) return;
+      const pct = Math.max(0, Math.min(1, p.x / p.width));
+      const target = p.video.duration * pct;
+      if (Math.abs(p.video.currentTime - target) > 0.2) {
+        try {
+          p.video.currentTime = target;
+        } catch {
+          // ignore — buffer not ready, next frame will retry
+        }
+      }
+    });
+  };
+
   if (top.length === 0) {
     return (
       <div className="px-12 pb-6">
@@ -364,25 +428,15 @@ function TopSegmentsCarousel({
           const videoUrl = `${ENGINE_BASE_URL}/v1/projects/${projectId}/media/proxy#t=${seg.startTime},${seg.endTime}`;
           const color = scoreColor(seg.score);
 
-          // Horizontal mouse position scrubs the card's video across its full
-          // duration, letting viewers skim the clip in under a second.
-          const handleCardMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-            const video = e.currentTarget.querySelector('video');
-            if (!video || !video.duration || !isFinite(video.duration)) return;
-            const rect = e.currentTarget.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const pct = Math.max(0, Math.min(1, x / rect.width));
-            const target = video.duration * pct;
-            if (Math.abs(video.currentTime - target) > 0.2) {
-              try {
-                video.currentTime = target;
-              } catch {
-                // ignore
-              }
-            }
-          };
-
           const handleCardMouseLeave = (e: React.MouseEvent<HTMLDivElement>) => {
+            // Cancel any queued scrub frame so we don't seek a card that's
+            // no longer under the pointer.
+            const state = cardScrubRefs.current.get(seg.id);
+            if (state?.raf !== null && state?.raf !== undefined) {
+              cancelAnimationFrame(state.raf);
+              state.raf = null;
+              state.pending = null;
+            }
             const video = e.currentTarget.querySelector('video');
             if (!video) return;
             video.pause();
@@ -402,7 +456,7 @@ function TopSegmentsCarousel({
               className="snap-start flex-shrink-0 w-[220px] group relative rounded-xl overflow-hidden cursor-pointer border border-white/5 hover:border-white/20 transition-colors"
               style={{ height: 390 }}
               onClick={() => onOpen(seg)}
-              onMouseMove={handleCardMouseMove}
+              onMouseMove={(e) => handleCardMouseMove(e, seg.id)}
               onMouseLeave={handleCardMouseLeave}
             >
               <video

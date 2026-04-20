@@ -5,14 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { api } from '@/lib/api';
 import { useToastStore, useJobsStore } from '@/store';
 import { formatDuration } from '@/lib/utils';
-
-interface Dictionary {
-  id: string;
-  name: string;
-  description: string;
-  corrections_count: number;
-  hotwords_count: number;
-}
+import { useDictionaries } from '@/lib/hooks/useDictionaries';
 
 interface VideoInfo {
   id: string;
@@ -51,8 +44,9 @@ export function UrlImportModal({ isOpen, onClose, onImportComplete, initialUrl }
   const [autoIngest, setAutoIngest] = useState(true);
   const [autoAnalyze, setAutoAnalyze] = useState(true);
   const [selectedDictionary, setSelectedDictionary] = useState<string>('');
-  const [dictionaries, setDictionaries] = useState<Dictionary[]>([]);
-  
+  // Shared query — single fetch is reused across all dictionary pickers.
+  const { data: dictionaries = [], isError: dictionariesError } = useDictionaries();
+
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
@@ -61,31 +55,25 @@ export function UrlImportModal({ isOpen, onClose, onImportComplete, initialUrl }
   // Project name: auto-filled from video title until the user edits it manually
   const [projectName, setProjectName] = useState('');
   const [nameEdited, setNameEdited] = useState(false);
-  
-  // Load available dictionaries
+
+  // Auto-select first dictionary once the cached list is available.
   useEffect(() => {
-    if (!isOpen) return;
-    api.listDictionaries()
-      .then(response => {
-        if (response.success && response.data) {
-          setDictionaries(response.data);
-          // Auto-select first dictionary if available
-          if (response.data.length > 0) {
-            setSelectedDictionary(prev => prev || response.data![0].id);
-          }
-        }
-      })
-      .catch(() => {
-        // Dictionaries are optional — show a non-blocking warning
-        addToast({
-          type: 'warning',
-          title: 'Dictionnaires indisponibles',
-          message: 'Impossible de charger les dictionnaires. L\'import fonctionnera sans.',
-          duration: 4000,
-        });
-      });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
+    if (dictionaries.length > 0) {
+      setSelectedDictionary((prev) => prev || dictionaries[0].id);
+    }
+  }, [dictionaries]);
+
+  // Non-blocking warning when dictionaries fail to load while the modal is open.
+  useEffect(() => {
+    if (!isOpen || !dictionariesError) return;
+    addToast({
+      type: 'warning',
+      title: 'Dictionnaires indisponibles',
+      message: "Impossible de charger les dictionnaires. L'import fonctionnera sans.",
+      duration: 4000,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, dictionariesError]);
   
   // Debounced URL info fetch
   const fetchInfo = useCallback(async (inputUrl: string) => {

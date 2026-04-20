@@ -1,51 +1,24 @@
 import { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ENGINE_BASE_URL } from '@/lib/config';
 import { useJobsStore } from '@/store';
-
-interface GpuStats {
-  utilization_pct: number; // 0-100
-  vram_used_mb: number;
-  vram_total_mb: number;
-  power_w: number;
-  power_max_w: number;
-  temp_c: number;
-}
+import { useGpuStats } from '@/lib/hooks/useGpuStats';
+import { usePageVisibility } from '@/lib/hooks/usePageVisibility';
 
 // Simple backend probe endpoint: GET /v1/gpu/stats
 // The backend parses nvidia-smi and returns a zero-valued payload when no GPU is present.
 
 export default function FurnaceHUD() {
-  const [stats, setStats] = useState<GpuStats | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [visible, setVisible] = useState(true);
+  const pageVisible = usePageVisibility();
   const sparkIdRef = useRef(0);
   const [sparks, setSparks] = useState<Array<{ id: number; x: number; delay: number }>>([]);
   const activeJobs = useJobsStore((s) => s.jobs.filter((j) => j.status === 'running').length);
 
-  // Poll GPU stats every 2s
-  useEffect(() => {
-    let alive = true;
-    const poll = async () => {
-      try {
-        const res = await fetch(`${ENGINE_BASE_URL}/v1/gpu/stats`, {
-          signal: AbortSignal.timeout(1500),
-        });
-        if (res.ok && alive) {
-          const data = (await res.json()) as GpuStats;
-          setStats(data);
-        }
-      } catch {
-        // Silent failure — the furnace just stays cold until the backend replies.
-      }
-    };
-    poll();
-    const iv = setInterval(poll, 2000);
-    return () => {
-      alive = false;
-      clearInterval(iv);
-    };
-  }, []);
+  // Shared GPU stats — React Query dedups across any other component
+  // subscribing to the same `['gpu-stats']` key. Auto-pauses when the
+  // widget is hidden or the tab/document is not visible.
+  const { data: stats = null } = useGpuStats(visible && pageVisible);
 
   // Emit sparks based on GPU utilization
   useEffect(() => {

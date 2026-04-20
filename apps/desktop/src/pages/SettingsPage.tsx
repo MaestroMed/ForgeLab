@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/Button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/Card';
@@ -9,6 +10,7 @@ import {
   useSubtitleStyleStore, useIntroStore, AmbientTrack
 } from '@/store';
 import { useAuthStore } from '@/store/auth';
+import { useSocialStatus } from '@/lib/hooks/useSocialStatus';
 import {
   FolderOpen, HardDrive, RefreshCw, Zap, Cloud, Monitor,
   Palette, Volume2, Key, FileVideo, FlaskConical, Settings, Sun, Moon,
@@ -1265,29 +1267,17 @@ function CloudGpuSection() {
 
 // ============ SOCIAL SECTION ============
 function SocialSection() {
-  const [accounts, setAccounts] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+  const { data: socialStatus, isLoading } = useSocialStatus();
+  const accounts = socialStatus?.connected_accounts ?? [];
+  const loading = isLoading;
   const { addToast } = useToastStore();
-
-  const refresh = async () => {
-    setLoading(true);
-    try {
-      const r: any = await api.getSocialStatus();
-      const data = r?.data ?? r;
-      setAccounts(data?.connected_accounts ?? []);
-    } catch {
-      setAccounts([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { refresh(); }, []);
 
   const disconnect = async (platform: string) => {
     await api.disconnectSocial(platform);
     addToast({ type: 'success', title: 'Déconnecté', message: `${platform} déconnecté.` });
-    refresh();
+    // Invalidate the shared query so every subscriber refreshes in sync.
+    queryClient.invalidateQueries({ queryKey: ['social-status'] });
   };
 
   const platformEmoji: Record<string, string> = {

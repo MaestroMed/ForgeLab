@@ -56,9 +56,19 @@ export default function KeyboardHints() {
   }, [pathname]);
 
   // Auto-hide in cinema mode (toggled via `cinema-mode` class on body).
+  // We only react to `class` attribute mutations and short-circuit as soon
+  // as we've read the current cinema state — body class changes fire for
+  // plenty of unrelated reasons (theme toggles, modal overlays, etc.).
   useEffect(() => {
-    const observer = new MutationObserver(() => {
-      setVisible(!document.body.classList.contains('cinema-mode'));
+    const observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.attributeName === 'class') {
+          const hasCinema = document.body.classList.contains('cinema-mode');
+          const nextVisible = !hasCinema;
+          setVisible((prev) => (prev !== nextVisible ? nextVisible : prev));
+          break;
+        }
+      }
     });
     observer.observe(document.body, {
       attributes: true,

@@ -4,6 +4,7 @@ import { Link2, X, Loader2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useToastStore, useJobsStore } from '@/store';
 import { useNavigate } from 'react-router-dom';
+import { useDictionaries } from '@/lib/hooks/useDictionaries';
 
 interface Props {
   open: boolean;
@@ -21,17 +22,14 @@ interface VideoInfo {
   platform?: string;
 }
 
-interface Dictionary {
-  id: string;
-  name: string;
-}
-
 export default function InlineUrlBar({ open, initialUrl = '', onClose, onImported }: Props) {
   const [url, setUrl] = useState(initialUrl);
   const [info, setInfo] = useState<VideoInfo | null>(null);
   const [loadingInfo, setLoadingInfo] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [dictionaries, setDictionaries] = useState<Dictionary[]>([]);
+  // Dictionaries rarely change — share a single cached query across every
+  // picker in the app.
+  const { data: dictionaries = [] } = useDictionaries();
   const [selectedDict, setSelectedDict] = useState<string>('');
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -43,19 +41,6 @@ export default function InlineUrlBar({ open, initialUrl = '', onClose, onImporte
     if (open) {
       setUrl(initialUrl);
       const t = window.setTimeout(() => inputRef.current?.focus(), 100);
-      // Load dictionaries once per open
-      api
-        .listDictionaries()
-        .then((r) => {
-          const dicts = (r?.data ?? []) as Dictionary[];
-          setDictionaries(dicts);
-          if (dicts.length > 0) {
-            setSelectedDict((prev) => prev || dicts[0].id);
-          }
-        })
-        .catch(() => {
-          /* silently ignore — dictionaries are optional */
-        });
       return () => window.clearTimeout(t);
     } else {
       setInfo(null);
@@ -63,6 +48,13 @@ export default function InlineUrlBar({ open, initialUrl = '', onClose, onImporte
       return undefined;
     }
   }, [open, initialUrl]);
+
+  // Auto-select the first dictionary once the cached list is available.
+  useEffect(() => {
+    if (dictionaries.length > 0) {
+      setSelectedDict((prev) => prev || dictionaries[0].id);
+    }
+  }, [dictionaries]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);

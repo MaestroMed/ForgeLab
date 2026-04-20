@@ -24,7 +24,12 @@ export const useCelebrationStore = create<CelebrationState>((set) => ({
     const id = ++celebId;
     const cx = x ?? window.innerWidth / 2;
     const cy = y ?? window.innerHeight / 2;
-    set((s) => ({ active: [...s.active, { id, type, x: cx, y: cy, label }] }));
+    // Cap concurrent bursts at 3 — rapid-fire celebrations (e.g. analyze
+    // landing 5 viral segments in one second) would otherwise pile motion.divs
+    // into the DOM and eat the frame budget.
+    set((s) => ({
+      active: [...s.active.slice(-2), { id, type, x: cx, y: cy, label }],
+    }));
     setTimeout(() => {
       set((s) => ({ active: s.active.filter((c) => c.id !== id) }));
     }, 3500);

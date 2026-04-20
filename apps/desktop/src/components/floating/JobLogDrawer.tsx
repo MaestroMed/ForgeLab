@@ -1,53 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Terminal } from 'lucide-react';
-import { ENGINE_BASE_URL } from '@/lib/config';
+import { useJobLogs } from '@/lib/hooks/useJobLogs';
 
 interface Props {
   jobId: string;
   onClose: () => void;
 }
 
-interface LogsResponse {
-  success?: boolean;
-  data?: {
-    job_id: string;
-    lines: string[];
-    count: number;
-    total: number;
-  };
-  // Fallback shape (in case the backend response is flat).
-  lines?: string[];
-}
-
 export default function JobLogDrawer({ jobId, onClose }: Props) {
-  const [lines, setLines] = useState<string[]>([]);
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Poll backend every 2s while the drawer is open.
-  useEffect(() => {
-    let active = true;
-    const fetchLogs = async () => {
-      try {
-        const res = await fetch(
-          `${ENGINE_BASE_URL}/v1/jobs/${jobId}/logs?lines=500`,
-        );
-        if (!res.ok) return;
-        const payload: LogsResponse = await res.json();
-        const next = payload?.data?.lines ?? payload?.lines ?? [];
-        if (active) setLines(next);
-      } catch {
-        // silently swallow — backend may be starting up
-      }
-    };
-    fetchLogs();
-    const interval = setInterval(fetchLogs, 2000);
-    return () => {
-      active = false;
-      clearInterval(interval);
-    };
-  }, [jobId]);
+  // Shared job logs query — dedups across any other drawer/overlay tailing
+  // the same job (e.g. FFmpegPoetry for cinema mode).
+  const { data: lines = [] } = useJobLogs(jobId, 500);
 
   // Auto-scroll to the bottom when new lines arrive (unless the user scrolled up).
   useEffect(() => {

@@ -23,7 +23,14 @@ interface HealthState {
   stopPolling: () => void;
 }
 
+const POLL_INTERVAL_MS = 30_000;
+// Skip an identical fetch if one fired within this window — prevents a
+// redundant check when the overlay remounts right after the badge already
+// triggered polling.
+const MIN_REFRESH_MS = 5_000;
+
 let pollInterval: ReturnType<typeof setInterval> | null = null;
+let visibilityHandler: (() => void) | null = null;
 
 export const useHealthStore = create<HealthState>((set, get) => ({
   backendOnline: false,
@@ -33,6 +40,9 @@ export const useHealthStore = create<HealthState>((set, get) => ({
   lastCheck: 0,
 
   check: async () => {
+    const { lastCheck, loading } = get();
+    if (loading) return;
+    if (lastCheck && Date.now() - lastCheck < MIN_REFRESH_MS) return;
     set({ loading: true });
     try {
       const res = await fetch(`${ENGINE_BASE_URL}/v1/health`, {
@@ -61,14 +71,30 @@ export const useHealthStore = create<HealthState>((set, get) => ({
     if (pollInterval) return;
     get().check();
     pollInterval = setInterval(() => {
+      // Skip when the tab is hidden — there's no UI to update and we don't
+      // want to burn requests in the background.
+      if (typeof document !== 'undefined' && document.hidden) return;
       get().check();
-    }, 30000);
+    }, POLL_INTERVAL_MS);
+
+    // Fire an immediate check when the tab regains focus so the user sees a
+    // fresh status instead of whatever we had before hiding.
+    if (typeof document !== 'undefined' && !visibilityHandler) {
+      visibilityHandler = () => {
+        if (!document.hidden) get().check();
+      };
+      document.addEventListener('visibilitychange', visibilityHandler);
+    }
   },
 
   stopPolling: () => {
     if (pollInterval) {
       clearInterval(pollInterval);
       pollInterval = null;
+    }
+    if (typeof document !== 'undefined' && visibilityHandler) {
+      document.removeEventListener('visibilitychange', visibilityHandler);
+      visibilityHandler = null;
     }
   },
 }));

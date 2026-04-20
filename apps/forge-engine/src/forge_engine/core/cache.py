@@ -462,3 +462,57 @@ async def cache_analysis(
     """Cache an analysis result."""
     cache = IntelligentCache.get_instance()
     await cache.set(cache_type, project_id, value, file_path)
+
+
+# ---------------------------------------------------------------------------
+# Lightweight async TTL cache for hot polling endpoints
+# ---------------------------------------------------------------------------
+import asyncio  # noqa: E402
+from collections.abc import Awaitable, Callable  # noqa: E402
+
+
+class TTLCache:
+    """Async-safe TTL cache for expensive endpoints.
+
+    Designed for hot-path endpoints (GPU stats, health) polled aggressively
+    by the UI. Coalesces concurrent requests for the same key so the
+    underlying computation runs at most once per TTL window.
+    """
+
+    def __init__(self, ttl_seconds: float = 2.0):
+        self.ttl = ttl_seconds
+        self._data: dict[str, tuple[Any, float]] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    async def get_or_compute(
+        self,
+        key: str,
+        compute: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        """Return cached value if fresh, else compute and cache."""
+        now = time.time()
+        entry = self._data.get(key)
+        if entry and (now - entry[1]) < self.ttl:
+            return entry[0]
+
+        # Per-key lock so concurrent requests collapse into one compute
+        lock = self._locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            # Re-check after acquiring lock
+            entry = self._data.get(key)
+            if entry and (time.time() - entry[1]) < self.ttl:
+                return entry[0]
+            value = await compute()
+            self._data[key] = (value, time.time())
+            return value
+
+    def invalidate(self, key: str | None = None) -> None:
+        if key is None:
+            self._data.clear()
+        else:
+            self._data.pop(key, None)
+
+
+# Module-level singleton caches for hot endpoints
+gpu_stats_cache = TTLCache(ttl_seconds=2.0)
+health_cache = TTLCache(ttl_seconds=5.0)

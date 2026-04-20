@@ -23,6 +23,65 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# ---------------------------------------------------------------------------
+# NVML fast-path for GPU stats
+# ---------------------------------------------------------------------------
+# nvidia-smi subprocess spawn on Windows costs ~1-2 seconds per call. pynvml
+# binds directly to the NVIDIA driver and is 10-50x faster. We attempt to
+# use it and fall back to nvidia-smi if unavailable.
+_nvml_initialized = False
+_nvml_handle = None
+_nvml_import_tried = False
+
+
+def _try_init_nvml() -> bool:
+    """Try to initialize pynvml for fast GPU queries."""
+    global _nvml_initialized, _nvml_handle, _nvml_import_tried
+    if _nvml_import_tried:
+        return _nvml_initialized
+    _nvml_import_tried = True
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        _nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        _nvml_initialized = True
+        logger.info("NVML initialized for fast GPU queries")
+        return True
+    except Exception as e:
+        logger.debug("pynvml unavailable, falling back to nvidia-smi: %s", e)
+        return False
+
+
+def _gpu_stats_via_nvml() -> dict | None:
+    """Fast path: use pynvml (10-50x faster than nvidia-smi subprocess)."""
+    if not _try_init_nvml():
+        return None
+    try:
+        import pynvml
+        util = pynvml.nvmlDeviceGetUtilizationRates(_nvml_handle)
+        mem = pynvml.nvmlDeviceGetMemoryInfo(_nvml_handle)
+        try:
+            power_w = pynvml.nvmlDeviceGetPowerUsage(_nvml_handle) / 1000.0
+        except Exception:
+            power_w = 0
+        try:
+            power_max_w = pynvml.nvmlDeviceGetPowerManagementLimit(_nvml_handle) / 1000.0
+        except Exception:
+            power_max_w = 285.0
+        temp_c = pynvml.nvmlDeviceGetTemperature(_nvml_handle, pynvml.NVML_TEMPERATURE_GPU)
+        return {
+            "utilization_pct": float(util.gpu),
+            "vram_used_mb": float(mem.used / (1024 * 1024)),
+            "vram_total_mb": float(mem.total / (1024 * 1024)),
+            "power_w": float(power_w),
+            "power_max_w": float(power_max_w),
+            "temp_c": float(temp_c),
+        }
+    except Exception as e:
+        logger.debug("pynvml query failed: %s", e)
+        return None
+
+
 def recommend_whisper_model() -> str:
     """Recommend Whisper model based on available GPU VRAM.
 
@@ -169,7 +228,7 @@ async def get_capabilities() -> dict:
 
 @router.get("/health")
 async def get_full_health() -> dict:
-    """Complete system health check.
+    """Complete system health check. Cached 5s.
 
     Returns per-subsystem status (ffmpeg/gpu/whisper/ollama/disk/system/library)
     plus an overall_status aggregate. Designed to be resilient: any individual
@@ -178,152 +237,157 @@ async def get_full_health() -> dict:
     """
     import time
 
-    checks: dict = {}
-    overall_status = "ok"
+    from forge_engine.core.cache import health_cache
 
-    def _bump(level: str) -> None:
-        nonlocal overall_status
-        if level == "error":
-            overall_status = "error"
-        elif level == "warning" and overall_status == "ok":
-            overall_status = "warning"
+    async def compute():
+        checks: dict = {}
+        overall_status = "ok"
 
-    # FFmpeg
-    try:
-        result = subprocess.run(
-            [settings.FFMPEG_PATH, "-version"],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0:
-            first_line = result.stdout.splitlines()[0] if result.stdout else ""
-            # Check NVENC support via encoder listing
-            try:
-                result2 = subprocess.run(
-                    [settings.FFMPEG_PATH, "-hide_banner", "-encoders"],
-                    capture_output=True, text=True, timeout=5
-                )
-                has_nvenc = "nvenc" in (result2.stdout or "")
-            except Exception:
-                has_nvenc = False
-            checks["ffmpeg"] = {
-                "status": "ok",
-                "version": first_line[:100],
-                "nvenc": has_nvenc,
-            }
-        else:
-            checks["ffmpeg"] = {"status": "error", "message": "FFmpeg command failed"}
-            _bump("error")
-    except Exception as e:
-        checks["ffmpeg"] = {"status": "error", "message": f"FFmpeg not found: {e}"}
-        _bump("error")
+        def _bump(level: str) -> None:
+            nonlocal overall_status
+            if level == "error":
+                overall_status = "error"
+            elif level == "warning" and overall_status == "ok":
+                overall_status = "warning"
 
-    # GPU (nvidia-smi probe; non-NVIDIA GPUs are treated as a warning, not error)
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.total,memory.used,driver_version", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            first = result.stdout.strip().splitlines()[0]
-            parts = [p.strip() for p in first.split(",")]
-            if len(parts) >= 4:
+        # FFmpeg
+        try:
+            result = subprocess.run(
+                [settings.FFMPEG_PATH, "-version"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                first_line = result.stdout.splitlines()[0] if result.stdout else ""
+                # Check NVENC support via encoder listing
                 try:
-                    checks["gpu"] = {
-                        "status": "ok",
-                        "name": parts[0],
-                        "vram_total_mb": int(parts[1]),
-                        "vram_used_mb": int(parts[2]),
-                        "driver": parts[3],
-                    }
-                except ValueError:
-                    checks["gpu"] = {"status": "warning", "message": "GPU output parse error"}
+                    result2 = subprocess.run(
+                        [settings.FFMPEG_PATH, "-hide_banner", "-encoders"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    has_nvenc = "nvenc" in (result2.stdout or "")
+                except Exception:
+                    has_nvenc = False
+                checks["ffmpeg"] = {
+                    "status": "ok",
+                    "version": first_line[:100],
+                    "nvenc": has_nvenc,
+                }
             else:
-                checks["gpu"] = {"status": "warning", "message": "Unexpected nvidia-smi output"}
-        else:
-            checks["gpu"] = {"status": "warning", "message": "No NVIDIA GPU detected (CPU fallback)"}
-    except Exception as e:
-        checks["gpu"] = {"status": "warning", "message": f"GPU detection failed: {e}"}
-
-    # Whisper
-    try:
-        # Import guard — if faster-whisper/ctranslate2 aren't importable this fails.
-        from forge_engine.services.transcription import TranscriptionService  # noqa: F401
-        checks["whisper"] = {
-            "status": "ok",
-            "model": settings.WHISPER_MODEL,
-            "device": settings.WHISPER_DEVICE,
-        }
-    except Exception as e:
-        checks["whisper"] = {"status": "error", "message": str(e)}
-        _bump("error")
-
-    # Ollama (LLM — not running = warning, content generation disabled)
-    try:
-        from forge_engine.services.llm_local import LocalLLMService
-        llm = LocalLLMService.get_instance()
-        available = await llm.check_availability()
-        checks["ollama"] = {
-            "status": "ok" if available else "warning",
-            "model": llm._current_model if available else None,
-            "message": "" if available else "Ollama not running (content generation disabled)",
-        }
-        if not available:
-            _bump("warning")
-    except Exception as e:
-        checks["ollama"] = {"status": "warning", "message": str(e)}
-        _bump("warning")
-
-    # Disk space on LIBRARY_PATH
-    try:
-        usage = shutil.disk_usage(str(settings.LIBRARY_PATH))
-        free_gb = usage.free / (1024 ** 3)
-        total_gb = usage.total / (1024 ** 3)
-        disk_status = "ok" if free_gb > 10 else "warning" if free_gb > 2 else "error"
-        checks["disk"] = {
-            "status": disk_status,
-            "free_gb": round(free_gb, 1),
-            "total_gb": round(total_gb, 1),
-            "library_path": str(settings.LIBRARY_PATH),
-        }
-        _bump(disk_status)
-    except Exception as e:
-        checks["disk"] = {"status": "error", "message": str(e)}
-        _bump("error")
-
-    # System (RAM / CPU) — psutil may not be installed, skip gracefully
-    try:
-        import psutil  # type: ignore
-        vm = psutil.virtual_memory()
-        checks["system"] = {
-            "status": "ok",
-            "cpu_count": psutil.cpu_count(logical=True),
-            "ram_total_gb": round(vm.total / (1024 ** 3), 1),
-            "ram_used_percent": vm.percent,
-        }
-    except ImportError:
-        checks["system"] = {
-            "status": "warning",
-            "message": "psutil not installed (system metrics unavailable)",
-        }
-    except Exception as e:
-        checks["system"] = {"status": "warning", "message": str(e)}
-
-    # Library path sanity
-    try:
-        if Path(settings.LIBRARY_PATH).exists():
-            checks["library"] = {"status": "ok", "path": str(settings.LIBRARY_PATH)}
-        else:
-            checks["library"] = {"status": "error", "path": str(settings.LIBRARY_PATH)}
+                checks["ffmpeg"] = {"status": "error", "message": "FFmpeg command failed"}
+                _bump("error")
+        except Exception as e:
+            checks["ffmpeg"] = {"status": "error", "message": f"FFmpeg not found: {e}"}
             _bump("error")
-    except Exception as e:
-        checks["library"] = {"status": "error", "message": str(e)}
-        _bump("error")
 
-    return {
-        "overall_status": overall_status,
-        "checks": checks,
-        "timestamp": time.time(),
-    }
+        # GPU (nvidia-smi probe; non-NVIDIA GPUs are treated as a warning, not error)
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.total,memory.used,driver_version", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                first = result.stdout.strip().splitlines()[0]
+                parts = [p.strip() for p in first.split(",")]
+                if len(parts) >= 4:
+                    try:
+                        checks["gpu"] = {
+                            "status": "ok",
+                            "name": parts[0],
+                            "vram_total_mb": int(parts[1]),
+                            "vram_used_mb": int(parts[2]),
+                            "driver": parts[3],
+                        }
+                    except ValueError:
+                        checks["gpu"] = {"status": "warning", "message": "GPU output parse error"}
+                else:
+                    checks["gpu"] = {"status": "warning", "message": "Unexpected nvidia-smi output"}
+            else:
+                checks["gpu"] = {"status": "warning", "message": "No NVIDIA GPU detected (CPU fallback)"}
+        except Exception as e:
+            checks["gpu"] = {"status": "warning", "message": f"GPU detection failed: {e}"}
+
+        # Whisper
+        try:
+            # Import guard — if faster-whisper/ctranslate2 aren't importable this fails.
+            from forge_engine.services.transcription import TranscriptionService  # noqa: F401
+            checks["whisper"] = {
+                "status": "ok",
+                "model": settings.WHISPER_MODEL,
+                "device": settings.WHISPER_DEVICE,
+            }
+        except Exception as e:
+            checks["whisper"] = {"status": "error", "message": str(e)}
+            _bump("error")
+
+        # Ollama (LLM — not running = warning, content generation disabled)
+        try:
+            from forge_engine.services.llm_local import LocalLLMService
+            llm = LocalLLMService.get_instance()
+            available = await llm.check_availability()
+            checks["ollama"] = {
+                "status": "ok" if available else "warning",
+                "model": llm._current_model if available else None,
+                "message": "" if available else "Ollama not running (content generation disabled)",
+            }
+            if not available:
+                _bump("warning")
+        except Exception as e:
+            checks["ollama"] = {"status": "warning", "message": str(e)}
+            _bump("warning")
+
+        # Disk space on LIBRARY_PATH
+        try:
+            usage = shutil.disk_usage(str(settings.LIBRARY_PATH))
+            free_gb = usage.free / (1024 ** 3)
+            total_gb = usage.total / (1024 ** 3)
+            disk_status = "ok" if free_gb > 10 else "warning" if free_gb > 2 else "error"
+            checks["disk"] = {
+                "status": disk_status,
+                "free_gb": round(free_gb, 1),
+                "total_gb": round(total_gb, 1),
+                "library_path": str(settings.LIBRARY_PATH),
+            }
+            _bump(disk_status)
+        except Exception as e:
+            checks["disk"] = {"status": "error", "message": str(e)}
+            _bump("error")
+
+        # System (RAM / CPU) — psutil may not be installed, skip gracefully
+        try:
+            import psutil  # type: ignore
+            vm = psutil.virtual_memory()
+            checks["system"] = {
+                "status": "ok",
+                "cpu_count": psutil.cpu_count(logical=True),
+                "ram_total_gb": round(vm.total / (1024 ** 3), 1),
+                "ram_used_percent": vm.percent,
+            }
+        except ImportError:
+            checks["system"] = {
+                "status": "warning",
+                "message": "psutil not installed (system metrics unavailable)",
+            }
+        except Exception as e:
+            checks["system"] = {"status": "warning", "message": str(e)}
+
+        # Library path sanity
+        try:
+            if Path(settings.LIBRARY_PATH).exists():
+                checks["library"] = {"status": "ok", "path": str(settings.LIBRARY_PATH)}
+            else:
+                checks["library"] = {"status": "error", "path": str(settings.LIBRARY_PATH)}
+                _bump("error")
+        except Exception as e:
+            checks["library"] = {"status": "error", "message": str(e)}
+            _bump("error")
+
+        return {
+            "overall_status": overall_status,
+            "checks": checks,
+            "timestamp": time.time(),
+        }
+
+    return await health_cache.get_or_compute("default", compute)
 
 
 @router.get("/whisper-recommendation")
@@ -409,35 +473,46 @@ async def get_platform_presets() -> dict:
 
 @router.get("/gpu/stats")
 async def get_gpu_stats():
-    """Real-time GPU telemetry for the Furnace HUD."""
-    try:
-        result = subprocess.run(
-            ["nvidia-smi",
-             "--query-gpu=utilization.gpu,memory.used,memory.total,power.draw,power.max_limit,temperature.gpu",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=3
-        )
-        if result.returncode == 0:
-            parts = [p.strip() for p in result.stdout.strip().split(",")]
-            if len(parts) >= 6:
-                return {
-                    "utilization_pct": float(parts[0]),
-                    "vram_used_mb": float(parts[1]),
-                    "vram_total_mb": float(parts[2]),
-                    "power_w": float(parts[3]),
-                    "power_max_w": float(parts[4]) if parts[4] != "[Not Supported]" else 285.0,
-                    "temp_c": float(parts[5]),
-                }
-    except Exception:
-        pass
-    return {
-        "utilization_pct": 0,
-        "vram_used_mb": 0,
-        "vram_total_mb": 1,
-        "power_w": 0,
-        "power_max_w": 100,
-        "temp_c": 0,
-    }
+    """Real-time GPU telemetry for the Furnace HUD. Cached 2s."""
+    from forge_engine.core.cache import gpu_stats_cache
+
+    async def compute():
+        # Fast path: pynvml (10-50x faster than nvidia-smi subprocess)
+        stats = _gpu_stats_via_nvml()
+        if stats is not None:
+            return stats
+
+        # Slow fallback: nvidia-smi subprocess
+        try:
+            result = subprocess.run(
+                ["nvidia-smi",
+                 "--query-gpu=utilization.gpu,memory.used,memory.total,power.draw,power.max_limit,temperature.gpu",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=3
+            )
+            if result.returncode == 0:
+                parts = [p.strip() for p in result.stdout.strip().split(",")]
+                if len(parts) >= 6:
+                    return {
+                        "utilization_pct": float(parts[0]),
+                        "vram_used_mb": float(parts[1]),
+                        "vram_total_mb": float(parts[2]),
+                        "power_w": float(parts[3]),
+                        "power_max_w": float(parts[4]) if parts[4] != "[Not Supported]" else 285.0,
+                        "temp_c": float(parts[5]),
+                    }
+        except Exception:
+            pass
+        return {
+            "utilization_pct": 0,
+            "vram_used_mb": 0,
+            "vram_total_mb": 1,
+            "power_w": 0,
+            "power_max_w": 100,
+            "temp_c": 0,
+        }
+
+    return await gpu_stats_cache.get_or_compute("default", compute)
 
 
 @router.post("/transcription/provider")

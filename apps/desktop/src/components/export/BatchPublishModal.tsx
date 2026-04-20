@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Send, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { api } from '@/lib/api';
 import { useToastStore } from '@/store';
+import { useSocialStatus } from '@/lib/hooks/useSocialStatus';
 
 interface Props {
   artifactIds: string[];
@@ -16,17 +17,16 @@ type Platform = 'tiktok' | 'youtube' | 'instagram';
 export default function BatchPublishModal({ artifactIds, projectId, onClose }: Props) {
   const { addToast } = useToastStore();
   const [platforms, setPlatforms] = useState<Set<Platform>>(new Set(['tiktok']));
-  const [connected, setConnected] = useState<Set<string>>(new Set());
+  const { data: socialStatus } = useSocialStatus();
+  const connected = useMemo(() => {
+    const accs = socialStatus?.connected_accounts ?? [];
+    return new Set(
+      accs.map((a) => (typeof a === 'string' ? a : a.platform)),
+    );
+  }, [socialStatus]);
   const [publishing, setPublishing] = useState(false);
   const [results, setResults] = useState<Array<{ artifactId: string; platform: string; success: boolean; error?: string }>>([]);
   const [interval, setIntervalMin] = useState(5); // minutes between each publish
-
-  useEffect(() => {
-    api.getSocialStatus().then((r: any) => {
-      const accs = r?.data?.connected_accounts || r?.connected_accounts || [];
-      setConnected(new Set(accs.map((a: any) => typeof a === 'string' ? a : a.platform)));
-    });
-  }, []);
 
   const togglePlatform = (p: Platform) => {
     setPlatforms((prev) => {
