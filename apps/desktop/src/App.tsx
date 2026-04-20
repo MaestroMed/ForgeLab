@@ -6,6 +6,7 @@ import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import ShortcutsOverlay from '@/components/ui/ShortcutsOverlay';
 import CommandPalette from '@/components/ui/CommandPalette';
 import BackendDownOverlay from '@/components/layout/BackendDownOverlay';
+import FurnaceHUD from '@/components/floating/FurnaceHUD';
 import Layout from '@/components/layout/Layout';
 import HomePage from '@/pages/HomePage';
 import ProjectPage from '@/pages/ProjectPage';
@@ -23,6 +24,7 @@ const AdminPage = lazy(() => import('@/pages/AdminPage'));
 const AnalyticsPage = lazy(() => import('@/pages/AnalyticsPage'));
 const TemplatesPage = lazy(() => import('@/pages/TemplatesPage'));
 const ClipHistoryPage = lazy(() => import('@/pages/ClipHistoryPage'));
+const ReviewModePage = lazy(() => import('@/pages/ReviewModePage'));
 
 function PageLoader() {
   return (
@@ -66,6 +68,7 @@ export default function App() {
               <Route path="/onboarding" element={<ErrorBoundary><OnboardingPage /></ErrorBoundary>} />
               <Route path="/templates" element={<ErrorBoundary><TemplatesPage /></ErrorBoundary>} />
               <Route path="/history" element={<ErrorBoundary><ClipHistoryPage /></ErrorBoundary>} />
+              <Route path="/review/:projectId" element={<ErrorBoundary><ReviewModePage /></ErrorBoundary>} />
             </Routes>
           </Suspense>
         </AnimatePresence>
@@ -73,6 +76,7 @@ export default function App() {
       <ShortcutsOverlay />
       <CommandPalette />
       <BackendDownOverlay />
+      <FurnaceHUD />
       <Toaster />
     </ErrorBoundary>
   );

@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Maximize2, Minimize2 } from 'lucide-react';
 import Sidebar from './Sidebar';
 import TitleBar from './TitleBar';
 import StatusBar from './StatusBar';
@@ -10,6 +11,7 @@ import FloatingProcessWidget from '../floating/FloatingProcessWidget';
 import AmbientAudioProvider from '../ambient/AmbientAudioProvider';
 import { AIChat, AIChatToggle } from '@/components/assistant/AIChat';
 import { useThemeStore, useUIStore } from '@/store';
+import { useCinemaMode } from '@/hooks/useCinemaMode';
 
 interface LayoutProps {
   children: ReactNode;
@@ -20,7 +22,10 @@ export default function Layout({ children }: LayoutProps) {
   const { setFullscreen } = useUIStore();
   const isWestworld = theme === 'westworld';
   const location = useLocation();
-  
+
+  // Cinema mode (F11 / Cmd+Shift+F) — hides chrome via body.cinema-mode CSS
+  const { cinemaMode, toggle: toggleCinema } = useCinemaMode();
+
   // AI Chat state
   const [isAIChatOpen, setIsAIChatOpen] = useState(false);
   
@@ -47,14 +52,18 @@ export default function Layout({ children }: LayoutProps) {
       )}
 
       {/* Title bar */}
-      <TitleBar />
+      <div data-cinema-hide="true">
+        <TitleBar />
+      </div>
 
       <div className="flex-1 flex overflow-hidden">
-        {/* Sidebar */}
-        <Sidebar />
+        {/* Sidebar — hidden in cinema mode */}
+        <div className="sidebar-collapsible" data-cinema-hide="true">
+          <Sidebar />
+        </div>
 
         {/* Main content */}
-        <main className="flex-1 overflow-auto bg-[var(--bg-secondary)]">
+        <main className="main-content flex-1 overflow-auto bg-[var(--bg-secondary)]">
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -68,10 +77,24 @@ export default function Layout({ children }: LayoutProps) {
       </div>
 
       {/* Status bar */}
-      <StatusBar />
+      <div data-cinema-hide="true">
+        <StatusBar />
+      </div>
 
       {/* Job drawer */}
-      <JobDrawer />
+      <div data-cinema-hide="true">
+        <JobDrawer />
+      </div>
+
+      {/* Cinema mode toggle — floating, always reachable */}
+      <button
+        type="button"
+        onClick={toggleCinema}
+        title={cinemaMode ? 'Quitter le mode cinéma (F11)' : 'Mode cinéma (F11)'}
+        className="fixed top-2 right-2 z-50 p-2 rounded-lg bg-black/50 backdrop-blur border border-white/10 text-white/70 hover:text-white hover:bg-black/70 transition-colors shadow-lg"
+      >
+        {cinemaMode ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+      </button>
 
       {/* Shortcuts modal */}
       <ShortcutsModal />

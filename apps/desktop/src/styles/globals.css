@@ -551,4 +551,26 @@ body {
   font-family: 'JetBrains Mono', 'Menlo', 'Monaco', monospace;
 }
 
+/* ===== CINEMA MODE — hide UI chrome for immersive editing ===== */
+body.cinema-mode {
+  background: #000;
+}
+
+body.cinema-mode .sidebar-collapsible,
+body.cinema-mode [data-cinema-hide="true"] {
+  display: none !important;
+}
+
+body.cinema-mode .main-content {
+  padding: 0 !important;
+}
+
+body.cinema-mode .cinema-bar-reveal {
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+body.cinema-mode .cinema-bar-reveal:hover {
+  opacity: 1;
+}
+
 

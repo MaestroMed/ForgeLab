@@ -27,6 +27,7 @@ import { useDebounce } from '@/hooks/useDebounce';
 import { SegmentPreview } from '@/components/project/SegmentPreview';
 import { SegmentScoreCard } from '@/components/project/SegmentScoreCard';
 import SegmentComparisonModal from '@/components/project/SegmentComparisonModal';
+import VodSpine from '@/components/project/VodSpine';
 
 interface ForgePanelProps {
   project: {
@@ -217,9 +218,27 @@ export default function ForgePanel({ project }: ForgePanelProps) {
   };
 
   // Apply client-side limit if set
-  const displayedSegments = filters.limit 
+  const displayedSegments = filters.limit
     ? segments.slice(0, filters.limit)
     : segments;
+
+  // Map to the VodSpine shape — tolerant of camelCase/snake_case shapes
+  const spineSegments = useMemo(() => {
+    return displayedSegments.map((s: any) => ({
+      id: s.id,
+      startTime: s.startTime ?? s.start_time ?? 0,
+      endTime: s.endTime ?? s.end_time ?? 0,
+      score: s.score?.total ?? s.scoreTotal ?? s.score_total ?? 0,
+      transcript: typeof s.transcript === 'string' ? s.transcript : s.transcript?.text,
+      tags: s.tags ?? s.score?.tags ?? [],
+    }));
+  }, [displayedSegments]);
+
+  const vodDuration = useMemo(() => {
+    if (project?.duration && project.duration > 0) return project.duration;
+    if (spineSegments.length === 0) return 0;
+    return Math.max(...spineSegments.map((s) => s.endTime));
+  }, [project?.duration, spineSegments]);
 
   // Stats for legacy compatibility
   const stats = {
@@ -495,7 +514,23 @@ export default function ForgePanel({ project }: ForgePanelProps) {
   }
 
   return (
-    <div className="h-full flex bg-[var(--bg-primary)]">
+    <div className="h-full flex flex-col bg-[var(--bg-primary)]">
+      {/* VOD SPINE — horizontal timeline with glowing gem segments */}
+      {vodDuration > 0 && spineSegments.length > 0 && (
+        <div className="px-4 pt-4 pb-2 border-b border-[var(--border-color)] bg-[var(--bg-primary)]">
+          <VodSpine
+            segments={spineSegments}
+            duration={vodDuration}
+            currentTime={currentTime}
+            onSegmentClick={(seg) => {
+              const fullSeg = displayedSegments.find((s) => s.id === seg.id);
+              if (fullSeg) handleSegmentSelect(fullSeg);
+            }}
+          />
+        </div>
+      )}
+
+      <div className="flex-1 flex min-h-0">
       {/* LEFT: Segment List */}
       <div className="w-80 flex flex-col border-r border-[var(--border-color)] bg-[var(--bg-card)]">
         {/* Header */}
@@ -503,6 +538,19 @@ export default function ForgePanel({ project }: ForgePanelProps) {
           <div className="flex items-center justify-between mb-2">
             <h3 className="font-bold text-lg text-[var(--text-primary)]">Segments</h3>
             <div className="flex items-center gap-2">
+              {/* Review Mode launch */}
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => navigate(`/review/${project.id}`)}
+                disabled={segments.length === 0}
+                className="bg-gradient-to-r from-viral-medium to-viral-high text-xs px-2 py-1 flex items-center gap-1"
+                title="Review Mode — swipe rapide"
+              >
+                <Play className="w-3.5 h-3.5" />
+                Review
+              </Button>
+
               {/* Multi-select toggle */}
               <button
                 onClick={() => {
@@ -510,8 +558,8 @@ export default function ForgePanel({ project }: ForgePanelProps) {
                   if (multiSelectMode) setSelectedIds([]);
                 }}
                 className={`p-1.5 rounded-lg transition-colors ${
-                  multiSelectMode 
-                    ? 'bg-blue-500 text-white' 
+                  multiSelectMode
+                    ? 'bg-blue-500 text-white'
                     : 'bg-[var(--bg-secondary)] text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)]'
                 }`}
                 title={multiSelectMode ? 'Désactiver la sélection multiple' : 'Activer la sélection multiple'}
@@ -893,6 +941,7 @@ export default function ForgePanel({ project }: ForgePanelProps) {
         onNavigateToEditor={(segmentId) => navigate(`/editor/${project.id}?segment=${segmentId}`)}
         onPlaySegment={handleSegmentPlay}
       />
+      </div>
 
       {/* A/B comparison overlay */}
       {comparing && (

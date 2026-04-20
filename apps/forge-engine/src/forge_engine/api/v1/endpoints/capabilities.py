@@ -407,6 +407,39 @@ async def get_platform_presets() -> dict:
     return {"platforms": settings.PLATFORM_PRESETS}
 
 
+@router.get("/gpu/stats")
+async def get_gpu_stats():
+    """Real-time GPU telemetry for the Furnace HUD."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=utilization.gpu,memory.used,memory.total,power.draw,power.max_limit,temperature.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=3
+        )
+        if result.returncode == 0:
+            parts = [p.strip() for p in result.stdout.strip().split(",")]
+            if len(parts) >= 6:
+                return {
+                    "utilization_pct": float(parts[0]),
+                    "vram_used_mb": float(parts[1]),
+                    "vram_total_mb": float(parts[2]),
+                    "power_w": float(parts[3]),
+                    "power_max_w": float(parts[4]) if parts[4] != "[Not Supported]" else 285.0,
+                    "temp_c": float(parts[5]),
+                }
+    except Exception:
+        pass
+    return {
+        "utilization_pct": 0,
+        "vram_used_mb": 0,
+        "vram_total_mb": 1,
+        "power_w": 0,
+        "power_max_w": 100,
+        "temp_c": 0,
+    }
+
+
 @router.post("/transcription/provider")
 async def set_transcription_provider(request: ProviderSettingRequest) -> dict:
     """Set the default transcription provider."""
