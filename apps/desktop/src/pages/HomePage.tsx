@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -37,7 +37,7 @@ export default function HomePage() {
   const queryClient = useQueryClient();
   const { addToast } = useToastStore();
   const { addJob } = useJobsStore();
-  const { projects: storeProjects, lastUpdate, setProjects: setStoreProjects } = useProjectsStore();
+  const { projects: storeProjects, setProjects: setStoreProjects } = useProjectsStore();
   const [search, setSearch] = useState('');
   const [importing, setImporting] = useState(false);
   const [urlModalOpen, setUrlModalOpen] = useState(false);
@@ -107,11 +107,17 @@ export default function HomePage() {
 
   // Always surface pinned projects first — server already orders this way,
   // but sorting client-side keeps optimistic updates stable when toggling.
-  const projects: Project[] = [...rawProjects].sort((a, b) => {
-    const pa = a.isPinned ? 1 : 0;
-    const pb = b.isPinned ? 1 : 0;
-    return pb - pa;
-  });
+  // Memoized to keep a stable reference across renders (prevents
+  // infinite-loop in downstream useEffects).
+  const projects: Project[] = useMemo(
+    () =>
+      [...rawProjects].sort((a, b) => {
+        const pa = a.isPinned ? 1 : 0;
+        const pb = b.isPinned ? 1 : 0;
+        return pb - pa;
+      }),
+    [rawProjects],
+  );
 
   // Dashboard stats (graceful fallback to local data when fields missing)
   const { data: stats } = useQuery({
@@ -138,12 +144,18 @@ export default function HomePage() {
     }
   }, [projectsError, addToast]);
 
-  // Sync to global store for WebSocket updates compatibility
+  // Sync to global store for WebSocket updates compatibility.
+  // Guard: only write when the list actually changed (by id+length) to avoid
+  // a feedback loop with the invalidate-on-lastUpdate effect below.
   useEffect(() => {
-    if (projects.length > 0) {
+    if (projects.length === 0) return;
+    const storeIds = storeProjects.map((p) => p.id).join('|');
+    const currentIds = projects.map((p) => p.id).join('|');
+    if (storeIds !== currentIds) {
       setStoreProjects(projects);
     }
-  }, [projects, setStoreProjects]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects]);
 
   // Keyword shortcuts
   useHotkeys('ctrl+i, meta+i', () => handleImport(), { preventDefault: true });
@@ -167,13 +179,9 @@ export default function HomePage() {
     return () => window.removeEventListener('forge:open-oneclick', openOneClick);
   }, []);
 
-  // Sync local state with store updates from WebSocket
-  useEffect(() => {
-    if (lastUpdate > 0 && storeProjects.length > 0) {
-      // Invalidate queries to pick up WebSocket-driven changes
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
-    }
-  }, [lastUpdate, storeProjects, queryClient]);
+  // (Removed: redundant invalidate-on-lastUpdate effect that caused infinite loop
+  // with the setStoreProjects effect above. WebSocket handlers invalidate
+  // queries directly in store/websocket.ts.)
 
   const handleImport = async () => {
     if (!window.forge) {
