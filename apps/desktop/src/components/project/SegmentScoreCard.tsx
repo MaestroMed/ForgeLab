@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/Button';
 import { formatDuration } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useToastStore } from '@/store';
+import { launchFromEvent } from '@/components/ambient/RocketLaunch';
 
 interface Segment {
   id: string;
@@ -181,6 +182,8 @@ export function SegmentScoreCard({
           size="sm"
           onClick={async (e) => {
             e.stopPropagation();
+            // Fire the rocket FIRST so it feels instant regardless of network latency.
+            launchFromEvent(e, '🚀 TikTok');
             try {
               await api.exportSegment(projectId, {
                 segmentId: segment.id,
@@ -223,6 +226,7 @@ export function SegmentScoreCard({
             size="sm"
             onClick={async (e) => {
               e.stopPropagation();
+              launchFromEvent(e, '🚀 Export');
               try {
                 await api.exportSegment(projectId, {
                   segmentId: segment.id,
@@ -236,7 +240,7 @@ export function SegmentScoreCard({
                   title: 'Export lancé',
                   message: "Check l'onglet Export pour le suivi.",
                 });
-              } catch (err) {
+              } catch {
                 useToastStore.getState().addToast({
                   type: 'error',
                   title: 'Échec',

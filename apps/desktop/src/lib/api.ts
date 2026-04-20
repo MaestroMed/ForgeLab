@@ -301,6 +301,16 @@ class ApiClient {
   }
 
   /**
+   * Fetch pre-computed audio waveform peaks (normalized 0-1) to drive the
+   * VodSpine waveform background.
+   */
+  async getAudioPeaks(projectId: string, bars = 200) {
+    return this.request<{ peaks: number[]; bars: number; duration: number }>(
+      `/projects/${projectId}/audio-peaks?bars=${bars}`,
+    );
+  }
+
+  /**
    * WORLD CLASS BATCH EXPORT - Export all high-scoring clips in one click
    */
   async batchExportAll(

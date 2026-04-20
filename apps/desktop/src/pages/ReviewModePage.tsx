@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { ENGINE_BASE_URL } from '@/lib/config';
 import { useToastStore } from '@/store';
+import { useRocketStore } from '@/components/ambient/RocketLaunch';
 
 export default function ReviewModePage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -32,6 +33,12 @@ export default function ReviewModePage() {
     setSwipeDirection(direction);
     if (direction === 'right') {
       setApprovedIds((prev) => [...prev, current.id]);
+      // Approval feels like a launch — fire a rocket from the card center.
+      useRocketStore.getState().fire(
+        window.innerWidth / 2,
+        window.innerHeight / 2,
+        '🚀 Approuvé',
+      );
     } else {
       setSkippedIds((prev) => [...prev, current.id]);
     }
@@ -88,6 +95,16 @@ export default function ReviewModePage() {
       return;
     }
     addToast({ type: 'info', title: 'Export batch', message: `${approvedIds.length} clips en queue.` });
+    // Fire a celebratory rocket per clip, staggered, before the API calls.
+    approvedIds.forEach((_, i) => {
+      setTimeout(() => {
+        useRocketStore.getState().fire(
+          window.innerWidth / 2 + (Math.random() - 0.5) * 120,
+          window.innerHeight - 80,
+          `🚀 #${i + 1}`,
+        );
+      }, i * 120);
+    });
     for (const id of approvedIds) {
       triggerExport(id).catch(() => {});
     }

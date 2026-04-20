@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { ENGINE_BASE_URL } from '@/lib/config';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -28,6 +29,7 @@ import { SegmentPreview } from '@/components/project/SegmentPreview';
 import { SegmentScoreCard } from '@/components/project/SegmentScoreCard';
 import SegmentComparisonModal from '@/components/project/SegmentComparisonModal';
 import VodSpine from '@/components/project/VodSpine';
+import { launchFromElement, useRocketStore } from '@/components/ambient/RocketLaunch';
 
 interface ForgePanelProps {
   project: {
@@ -240,6 +242,19 @@ export default function ForgePanel({ project }: ForgePanelProps) {
     return Math.max(...spineSegments.map((s) => s.endTime));
   }, [project?.duration, spineSegments]);
 
+  // Audio peaks for VodSpine waveform background — computed once per project,
+  // cached aggressively because the underlying audio never changes for a VOD.
+  const { data: peaksData } = useQuery({
+    queryKey: ['audio-peaks', project.id],
+    queryFn: () => api.getAudioPeaks(project.id, 200),
+    enabled: !!project.id && vodDuration > 0,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+
+  const audioPeaks =
+    (peaksData as any)?.data?.peaks ?? (peaksData as any)?.peaks ?? [];
+
   // Stats for legacy compatibility
   const stats = {
     total: segmentStats?.total ?? segments.length,
@@ -376,6 +391,22 @@ export default function ForgePanel({ project }: ForgePanelProps) {
 
   // Quick TikTok export for active segment (mirrors SegmentScoreCard "TikTok rapide")
   const triggerTikTokExport = useCallback(async (segment: Segment) => {
+    // Fire the rocket BEFORE the API call so it feels instant. If we can find
+    // the segment card in the DOM (by data-segment-id) launch from its center;
+    // otherwise fall back to a fixed bottom-center coordinate.
+    const card = document.querySelector<HTMLElement>(
+      `[data-segment-id="${segment.id}"]`,
+    );
+    if (card) {
+      launchFromElement(card, '🚀 TikTok');
+    } else {
+      useRocketStore.getState().fire(
+        window.innerWidth / 2,
+        window.innerHeight - 120,
+        '🚀 TikTok',
+      );
+    }
+
     try {
       await api.exportSegment(project.id, {
         segmentId: segment.id,
@@ -522,6 +553,7 @@ export default function ForgePanel({ project }: ForgePanelProps) {
             segments={spineSegments}
             duration={vodDuration}
             currentTime={currentTime}
+            audioPeaks={audioPeaks}
             onSegmentClick={(seg) => {
               const fullSeg = displayedSegments.find((s) => s.id === seg.id);
               if (fullSeg) handleSegmentSelect(fullSeg);

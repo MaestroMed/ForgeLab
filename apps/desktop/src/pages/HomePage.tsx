@@ -1,19 +1,26 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ENGINE_BASE_URL } from '@/lib/config';
-import { Plus, Search, Film, Layers, TrendingUp, Calendar, Link2, Upload, MoreVertical, Play, Trash2, FolderOpen as FolderIcon, Pin, Zap } from 'lucide-react';
-import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
-import { SkeletonProjectCard } from '@/components/ui/Skeleton';
+import {
+  Search,
+  Link2,
+  Upload,
+  MoreVertical,
+  Play,
+  Trash2,
+  FolderOpen as FolderIcon,
+  Pin,
+  Zap,
+  Layers,
+  Film,
+} from 'lucide-react';
 import { UrlImportModal } from '@/components/import/UrlImportModal';
 import OneClickModal from '@/components/import/OneClickModal';
-import ProjectProgress from '@/components/project/ProjectProgress';
 import { api } from '@/lib/api';
 import { useProjects, QUERY_KEYS } from '@/lib/queries';
-import { formatDuration } from '@/lib/utils';
 import { useToastStore, useJobsStore, useProjectsStore } from '@/store';
 import { useUrlPasteDetector } from '@/hooks/useUrlPasteDetector';
 
@@ -30,6 +37,11 @@ interface Project {
   averageScore?: number;
   /** True when the user has pinned this project to the top of the list. */
   isPinned?: boolean;
+  // Optional enrichment fields surfaced when available
+  channelName?: string;
+  sourceType?: string;
+  artifactCount?: number;
+  segmentCount?: number;
 }
 
 export default function HomePage() {
@@ -119,6 +131,10 @@ export default function HomePage() {
     [rawProjects],
   );
 
+  // Split pinned vs other for the filmstrip sections
+  const pinnedProjects = useMemo(() => projects.filter((p) => p.isPinned), [projects]);
+  const otherProjects = useMemo(() => projects.filter((p) => !p.isPinned), [projects]);
+
   // Dashboard stats (graceful fallback to local data when fields missing)
   const { data: stats } = useQuery({
     queryKey: ['dashboard-stats'],
@@ -178,10 +194,6 @@ export default function HomePage() {
     window.addEventListener('forge:open-oneclick', openOneClick);
     return () => window.removeEventListener('forge:open-oneclick', openOneClick);
   }, []);
-
-  // (Removed: redundant invalidate-on-lastUpdate effect that caused infinite loop
-  // with the setStoreProjects effect above. WebSocket handlers invalidate
-  // queries directly in store/websocket.ts.)
 
   const handleImport = async () => {
     if (!window.forge) {
@@ -249,9 +261,44 @@ export default function HomePage() {
     }
   };
 
+  // Common handlers shared with the filmstrip cards
+  const handleOpenProject = (p: Project) => navigate(`/project/${p.id}`);
+
+  const handlePinProject = async (p: Project) => {
+    try {
+      await api.pinProject(p.id, !p.isPinned);
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: 'Erreur',
+        message: err instanceof Error ? err.message : "Impossible d'épingler le projet",
+      });
+    }
+  };
+
+  const handleDeleteProject = async (p: Project) => {
+    if (!confirm(`Supprimer le projet "${p.name}" ?`)) return;
+    try {
+      await api.request(`/projects/${p.id}`, { method: 'DELETE' });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
+      addToast({ type: 'success', title: 'Projet supprimé', message: p.name });
+    } catch {
+      addToast({ type: 'error', title: 'Erreur', message: 'Échec de la suppression' });
+    }
+  };
+
+  // Aggregate stat values with graceful fallbacks
+  const clipsValue = stats?.total_clips ?? stats?.totalClips ?? stats?.clips_this_month ?? 0;
+  const topScoreRaw =
+    stats?.top_score ??
+    stats?.topScore ??
+    Math.round(projects.reduce((m, p) => Math.max(m, p.averageScore ?? 0), 0));
+  const topScoreValue: string | number = topScoreRaw && topScoreRaw > 0 ? Math.round(topScoreRaw) : '—';
+
   return (
     <div
-      className="h-full flex flex-col relative"
+      className="min-h-full flex flex-col relative"
       onDragOver={(e) => {
         e.preventDefault();
         if (!dragOver) setDragOver(true);
@@ -262,103 +309,120 @@ export default function HomePage() {
       }}
       onDrop={handleDrop}
     >
-      {dragOver && (
-        <div className="fixed inset-0 bg-viral-medium/10 border-4 border-dashed border-viral-medium z-50 flex items-center justify-center pointer-events-none">
-          <div className="text-center">
-            <p className="text-4xl mb-3">📥</p>
-            <p className="text-2xl font-bold">Lâchez vos VODs ici</p>
-            <p className="text-sm text-[var(--text-muted)] mt-2">MP4, MKV, AVI, MOV, WebM, FLV, WMV</p>
-          </div>
-        </div>
-      )}
-      {/* Header */}
-      <header className="px-8 py-6 border-b border-[var(--border-color)] bg-[var(--bg-card)]">
-        <div className="flex items-center justify-between">
+      {/* Cinematic vignette & grain layers above the starfield but behind content */}
+      <div
+        className="pointer-events-none fixed inset-0 z-0"
+        aria-hidden="true"
+        style={{
+          background:
+            'radial-gradient(ellipse at top, rgba(0, 212, 255, 0.06) 0%, transparent 55%), radial-gradient(ellipse at bottom right, rgba(255, 120, 0, 0.05) 0%, transparent 60%)',
+        }}
+      />
+
+      <AnimatePresence>
+        {dragOver && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none"
+          >
+            <div
+              className="absolute inset-6 border-4 border-dashed border-viral-medium rounded-3xl"
+              style={{ animation: 'pulse 1.5s ease-in-out infinite' }}
+            />
+            <div className="absolute inset-0 bg-viral-medium/5 backdrop-blur-sm" />
+            <motion.div
+              initial={{ scale: 0.8 }}
+              animate={{ scale: 1 }}
+              className="relative z-10 text-center"
+            >
+              <div className="text-8xl mb-4">📥</div>
+              <h2 className="text-4xl font-bold text-white">Lâchez vos VODs</h2>
+              <p className="text-sm text-white/60 mt-2">
+                MP4, MKV, MOV, WebM, AVI, FLV, WMV
+              </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Hero */}
+      <header className="relative z-10 px-12 pt-16 pb-8">
+        <div className="flex items-start justify-between gap-10 flex-wrap">
           <div>
-            <h1 className="text-2xl font-semibold text-[var(--text-primary)]">Projets</h1>
-            <p className="text-sm text-[var(--text-muted)] mt-1">
-              Gérez vos VODs et créez des clips viraux
+            <div className="text-xs uppercase tracking-[0.3em] text-white/40 mb-3">
+              The Forge Floor
+            </div>
+            <h1 className="text-6xl font-bold tracking-tight bg-gradient-to-r from-white to-white/70 bg-clip-text text-transparent">
+              FORGE LAB
+            </h1>
+            <p className="text-sm text-white/50 mt-3 max-w-md">
+              Transforme tes VODs en clips viraux. Pipeline IA end-to-end.
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <Button
-              variant="primary"
-              size="lg"
-              onClick={() => {
-                setOneClickUrl(undefined);
-                setShowOneClick(true);
-              }}
-              className="bg-gradient-to-r from-viral-medium to-viral-high"
-            >
-              <Zap className="w-5 h-5 mr-2" />
-              One-click TikTok
-            </Button>
-            <Button variant="secondary" onClick={() => setUrlModalOpen(true)}>
-              <Link2 className="w-4 h-4 mr-2" />
-              Import URL
-            </Button>
-            <Button onClick={handleImport} loading={importing}>
-              <Plus className="w-4 h-4 mr-2" />
-              Importer fichier
-            </Button>
+          {/* Stats strip */}
+          <div className="flex items-start gap-8">
+            <StatBlock label="Projets" value={projects.length} />
+            <StatBlock label="Clips" value={clipsValue} />
+            <StatBlock label="Top score" value={topScoreValue} highlight />
           </div>
         </div>
 
-        {/* Search */}
-        <div className="mt-4 relative max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]" />
-          <input
-            type="text"
-            placeholder="Rechercher un projet..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-          />
+        {/* CTAs */}
+        <div className="flex items-center gap-3 mt-10 flex-wrap">
+          <button
+            onClick={() => {
+              setOneClickUrl(undefined);
+              setShowOneClick(true);
+            }}
+            className="relative group px-6 py-3.5 rounded-xl bg-gradient-to-r from-viral-medium to-viral-high text-black font-bold text-sm flex items-center gap-2 transition-transform hover:scale-[1.02]"
+          >
+            <div className="absolute inset-0 rounded-xl bg-gradient-to-r from-viral-medium to-viral-high blur-xl opacity-50 -z-10 group-hover:opacity-80 transition-opacity" />
+            <Zap className="w-4 h-4" />
+            One-click TikTok
+            <kbd className="ml-2 px-1.5 py-0.5 bg-black/20 rounded text-[10px]">⌘K</kbd>
+          </button>
+          <button
+            onClick={() => setUrlModalOpen(true)}
+            className="px-5 py-3.5 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 text-sm flex items-center gap-2 text-white transition-colors"
+          >
+            <Link2 className="w-4 h-4" />
+            URL
+            <kbd className="ml-2 px-1.5 py-0.5 bg-black/20 rounded text-[10px]">⌘U</kbd>
+          </button>
+          <button
+            onClick={handleImport}
+            disabled={importing}
+            className="px-5 py-3.5 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 text-sm flex items-center gap-2 text-white transition-colors disabled:opacity-50"
+          >
+            <Upload className="w-4 h-4" />
+            Fichier
+          </button>
+
+          {/* Inline search — keeps the legacy search functionality */}
+          <div className="relative ml-auto w-full max-w-xs">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/40" />
+            <input
+              type="text"
+              placeholder="Rechercher..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl text-sm text-white placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-viral-medium/30"
+            />
+          </div>
         </div>
+
+        <p className="text-[11px] text-white/30 mt-6">
+          Astuce : colle une URL n'importe où dans l'app pour démarrer un import.
+        </p>
       </header>
 
-      {/* Content */}
-      <div className="flex-1 overflow-auto p-8">
-        {/* Dashboard stats */}
-        {!loading && projects.length > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-            <StatCard
-              label="Projets"
-              value={stats?.total_projects ?? projects.length}
-            />
-            <StatCard
-              label="Clips ce mois"
-              value={stats?.clips_this_month ?? 0}
-            />
-            <StatCard
-              label="Score moyen"
-              value={`${Number(
-                (stats?.avg_score ??
-                  projects.reduce((acc, p) => acc + (p.averageScore ?? 0), 0) /
-                    Math.max(1, projects.filter((p) => (p.averageScore ?? 0) > 0).length)) ||
-                  0,
-              ).toFixed(0)}%`}
-            />
-            <StatCard
-              label="Top score"
-              value={
-                (stats?.top_score ??
-                  Math.round(
-                    projects.reduce((m, p) => Math.max(m, p.averageScore ?? 0), 0),
-                  )) ||
-                '—'
-              }
-            />
-          </div>
-        )}
-
+      {/* Body */}
+      <div className="flex-1 relative z-10 pb-12">
         {loading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {[...Array(8)].map((_, i) => (
-              <SkeletonProjectCard key={i} />
-            ))}
-          </div>
+          <FilmstripSkeleton />
         ) : projects.length === 0 ? (
           <EmptyState
             onImport={handleImport}
@@ -366,26 +430,35 @@ export default function HomePage() {
             importing={importing}
           />
         ) : (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
-          >
-            {projects.map((project, index) => (
-              <ProjectCard
-                key={project.id}
-                project={project}
-                index={index}
-                onClick={() => navigate(`/project/${project.id}`)}
-                onDelete={() => {
-                  queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
-                }}
+          <>
+            {pinnedProjects.length > 0 && (
+              <section>
+                <SectionHeader title="Épinglés" meta={`${pinnedProjects.length}`} />
+                <ProjectFilmstrip
+                  projects={pinnedProjects}
+                  onOpen={handleOpenProject}
+                  onPin={handlePinProject}
+                  onDelete={handleDeleteProject}
+                />
+              </section>
+            )}
+
+            <section>
+              <SectionHeader
+                title={pinnedProjects.length > 0 ? 'Tous les projets' : 'Projets'}
+                meta={`${otherProjects.length}`}
               />
-            ))}
-          </motion.div>
+              <ProjectFilmstrip
+                projects={otherProjects}
+                onOpen={handleOpenProject}
+                onPin={handlePinProject}
+                onDelete={handleDeleteProject}
+              />
+            </section>
+          </>
         )}
       </div>
-      
+
       {/* URL Import Modal */}
       <UrlImportModal
         isOpen={urlModalOpen}
@@ -419,96 +492,124 @@ export default function HomePage() {
   );
 }
 
-function ProjectCard({
+// ---------------------------------------------------------------------------
+// Filmstrip helpers
+// ---------------------------------------------------------------------------
+
+function SectionHeader({ title, meta }: { title: string; meta?: string }) {
+  return (
+    <div className="px-12 mt-12 mb-4">
+      <div className="flex items-baseline justify-between mb-2">
+        <h2 className="text-2xl font-bold tracking-tight text-white">{title}</h2>
+        {meta && (
+          <span className="text-xs text-white/40 uppercase tracking-wider">{meta}</span>
+        )}
+      </div>
+      <div className="h-px bg-gradient-to-r from-white/20 via-white/5 to-transparent" />
+    </div>
+  );
+}
+
+function StatBlock({
+  label,
+  value,
+  highlight = false,
+}: {
+  label: string;
+  value: string | number;
+  highlight?: boolean;
+}) {
+  return (
+    <div>
+      <div
+        className={`text-4xl font-bold tabular-nums ${
+          highlight
+            ? 'bg-gradient-to-r from-viral-medium to-viral-high bg-clip-text text-transparent'
+            : 'text-white'
+        }`}
+      >
+        {value}
+      </div>
+      <div className="text-[10px] uppercase tracking-wider text-white/40 mt-1">{label}</div>
+    </div>
+  );
+}
+
+function ProjectFilmstrip({
+  projects,
+  onOpen,
+  onPin,
+  onDelete,
+}: {
+  projects: Project[];
+  onOpen: (p: Project) => void;
+  onPin: (p: Project) => void;
+  onDelete: (p: Project) => void;
+}) {
+  if (projects.length === 0) return null;
+  return (
+    <div className="relative">
+      {/* Horizontal scroll container */}
+      <div
+        className="flex gap-6 overflow-x-auto snap-x snap-mandatory px-12 pb-6 scroll-smooth"
+        style={{ scrollbarWidth: 'thin' }}
+      >
+        {projects.map((project, i) => (
+          <ProjectFilmstripCard
+            key={project.id}
+            project={project}
+            index={i}
+            onOpen={onOpen}
+            onPin={onPin}
+            onDelete={onDelete}
+          />
+        ))}
+      </div>
+      {/* Edge fade */}
+      <div className="absolute left-0 top-0 bottom-0 w-12 bg-gradient-to-r from-[#0A0A0F] to-transparent pointer-events-none" />
+      <div className="absolute right-0 top-0 bottom-0 w-12 bg-gradient-to-l from-[#0A0A0F] to-transparent pointer-events-none" />
+    </div>
+  );
+}
+
+function ProjectFilmstripCard({
   project,
   index,
-  onClick,
+  onOpen,
+  onPin,
   onDelete,
 }: {
   project: Project;
   index: number;
-  onClick: () => void;
-  onDelete: () => void;
+  onOpen: (p: Project) => void;
+  onPin: (p: Project) => void;
+  onDelete: (p: Project) => void;
 }) {
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const { addToast } = useToastStore();
+  const isAnalyzing =
+    project.status === 'analyzing' ||
+    project.status === 'ingesting' ||
+    project.status === 'downloading';
+  const [hovered, setHovered] = useState(false);
+  const [videoFailed, setVideoFailed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [pinning, setPinning] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
-  const togglePin = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (pinning) return;
-    setPinning(true);
-    try {
-      await api.pinProject(project.id, !project.isPinned);
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
-    } catch (err) {
-      addToast({
-        type: 'error',
-        title: 'Erreur',
-        message: err instanceof Error ? err.message : 'Impossible d\'épingler le projet',
-      });
-    } finally {
-      setPinning(false);
-    }
-  };
-  
-  const statusLabels: Record<string, string> = {
-    created: 'Nouveau',
-    ingesting: 'Importation...',
-    ingested: 'Prêt',
-    analyzing: 'Analyse...',
-    analyzed: 'Analysé',
-    ready: 'Prêt',
-    error: 'Erreur',
-  };
+  const segmentCount = project.segmentCount ?? project.segmentsCount;
+  const posterUrl = `${ENGINE_BASE_URL}/v1/projects/${project.id}/thumbnail?time=${
+    (project.duration || 60) / 2
+  }&width=560&height=720`;
+  const videoUrl = `${ENGINE_BASE_URL}/v1/projects/${project.id}/media/proxy`;
 
-  const statusColors: Record<string, string> = {
-    created: 'bg-gray-500/10 text-gray-400',
-    ingesting: 'bg-amber-500/10 text-amber-500',
-    ingested: 'bg-blue-500/10 text-blue-400',
-    analyzing: 'bg-amber-500/10 text-amber-500',
-    analyzed: 'bg-green-500/10 text-green-400',
-    ready: 'bg-green-500/10 text-green-400',
-    error: 'bg-red-500/10 text-red-400',
+  const handleMouseEnter = () => {
+    setHovered(true);
+    videoRef.current?.play().catch(() => {});
   };
-  
-  // Primary action based on status
-  const getPrimaryAction = () => {
-    switch (project.status) {
-      case 'created':
-        return { label: 'Ingérer', icon: Play, action: async () => {
-          await api.ingestProject(project.id);
-          onClick();
-        }};
-      case 'ingested':
-        return { label: 'Analyser', icon: Play, action: async () => {
-          await api.analyzeProject(project.id);
-          onClick();
-        }};
-      case 'analyzed':
-      case 'ready':
-        return { label: 'Forge', icon: Layers, action: () => navigate(`/project/${project.id}`) };
-      default:
-        return null;
-    }
-  };
-  
-  const handleDelete = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!confirm(`Supprimer le projet "${project.name}" ?`)) return;
-    
-    try {
-      await api.request(`/projects/${project.id}`, { method: 'DELETE' });
-      onDelete();
-      addToast({ type: 'success', title: 'Projet supprimé', message: project.name });
-    } catch (error) {
-      addToast({ type: 'error', title: 'Erreur', message: 'Échec de la suppression' });
-    }
+  const handleMouseLeave = () => {
+    setHovered(false);
     setMenuOpen(false);
+    videoRef.current?.pause();
   };
-  
+
   const handleOpenFolder = (e: React.MouseEvent) => {
     e.stopPropagation();
     const projectDir = project.thumbnailPath?.replace(/[/\\]thumbnail\.jpg$/, '') || '';
@@ -517,101 +618,143 @@ function ProjectCard({
     }
     setMenuOpen(false);
   };
-  
-  const primaryAction = getPrimaryAction();
-
-  // Format date relative
-  const formatRelativeDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    
-    if (days === 0) return "Aujourd'hui";
-    if (days === 1) return 'Hier';
-    if (days < 7) return `Il y a ${days} jours`;
-    if (days < 30) return `Il y a ${Math.floor(days / 7)} sem.`;
-    return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-  };
-
-  // Use API endpoint for thumbnails (works in both web and Electron)
-  const thumbUrl = `${ENGINE_BASE_URL}/v1/projects/${project.id}/thumbnail?time=${(project.duration || 60) / 2}&width=320&height=180`;
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: index * 0.05 }}
+      transition={{ delay: index * 0.04 }}
+      className="snap-start flex-shrink-0 w-[280px] h-[420px] relative rounded-2xl overflow-hidden cursor-pointer group ring-1 ring-white/5 hover:ring-white/20 transition-shadow"
+      onClick={() => onOpen(project)}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
     >
-      <Card
-        className="cursor-pointer hover:shadow-lg hover:scale-[1.02] transition-all group bg-[var(--bg-card)] border border-[var(--border-color)] overflow-hidden"
-        onClick={onClick}
-      >
-        {/* Thumbnail */}
-        <div className="aspect-video bg-[var(--bg-tertiary)] relative overflow-hidden flex items-center justify-center">
-          <img
-            src={thumbUrl}
-            alt={project.name}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-            onError={(e) => {
-              // Fallback to placeholder on error
-              e.currentTarget.style.display = 'none';
-            }}
-          />
-          <Film className="w-12 h-12 text-[var(--text-muted)] opacity-30 absolute" />
-          
-          {/* Duration badge */}
-          {project.duration && (
-            <div className="absolute bottom-2 right-2 px-1.5 py-0.5 bg-black/70 rounded text-[10px] font-medium text-white z-10">
-              {formatDuration(project.duration)}
-            </div>
-          )}
-          
-          {/* Score badge */}
-          {project.averageScore !== undefined && project.averageScore > 0 && (
-            <div className="absolute top-2 right-2 px-1.5 py-0.5 bg-gradient-to-r from-amber-500 to-orange-500 rounded text-[10px] font-bold text-white flex items-center gap-0.5 z-10">
-              <TrendingUp className="w-2.5 h-2.5" />
-              {Math.round(project.averageScore)}
-            </div>
-          )}
-          
-          {/* Global progress overlay for active projects */}
-          <ProjectProgress projectId={project.id} projectStatus={project.status} />
-          
-          {/* Hover overlay with actions */}
-          <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-            {primaryAction && (
-              <button
-                onClick={(e) => { e.stopPropagation(); primaryAction.action(); }}
-                className="px-3 py-1.5 bg-[var(--accent-color)] text-white rounded-lg text-xs font-medium flex items-center gap-1.5 hover:brightness-110 transition-all"
-              >
-                <primaryAction.icon className="w-3.5 h-3.5" />
-                {primaryAction.label}
-              </button>
-            )}
-          </div>
-          
-          {/* Context menu button */}
-          <div className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity">
+      {/* Poster/thumbnail layer — works even before video loads */}
+      <img
+        src={posterUrl}
+        alt={project.name}
+        className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+        loading="lazy"
+        onError={(e) => {
+          e.currentTarget.style.display = 'none';
+        }}
+      />
+
+      {/* Video preview — plays on hover, falls back silently on error */}
+      {!videoFailed && (
+        <video
+          ref={videoRef}
+          src={videoUrl}
+          className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+          muted
+          loop
+          playsInline
+          preload="metadata"
+          onError={() => setVideoFailed(true)}
+        />
+      )}
+
+      {/* Film placeholder behind it all */}
+      <div className="absolute inset-0 flex items-center justify-center bg-[#0d0d14] -z-10">
+        <Film className="w-16 h-16 text-white/10" />
+      </div>
+
+      {/* Darken overlay */}
+      <div
+        className={`absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent transition-opacity duration-500 ${
+          hovered ? 'opacity-80' : 'opacity-95'
+        }`}
+      />
+
+      {/* Film-sprocket stripes — top & bottom, for the filmstrip aesthetic */}
+      <div className="absolute inset-x-0 top-0 h-4 bg-black/60 flex items-center gap-1 px-2 pointer-events-none">
+        {Array.from({ length: 10 }).map((_, i) => (
+          <div key={i} className="w-3 h-2 rounded-sm bg-white/10" />
+        ))}
+      </div>
+      <div className="absolute inset-x-0 bottom-0 h-4 bg-black/60 flex items-center gap-1 px-2 pointer-events-none z-10">
+        {Array.from({ length: 10 }).map((_, i) => (
+          <div key={i} className="w-3 h-2 rounded-sm bg-white/10" />
+        ))}
+      </div>
+
+      {/* Pulsing ring if analyzing */}
+      {isAnalyzing && (
+        <motion.div
+          className="absolute inset-0 rounded-2xl border-2 border-viral-medium pointer-events-none"
+          animate={{ opacity: [0.3, 1, 0.3] }}
+          transition={{ duration: 2, repeat: Infinity }}
+        />
+      )}
+
+      {/* Pin badge */}
+      {project.isPinned && (
+        <div className="absolute top-6 left-3 w-7 h-7 rounded-full bg-viral-medium/20 border border-viral-medium flex items-center justify-center backdrop-blur-md">
+          <Pin className="w-3.5 h-3.5 text-viral-medium fill-viral-medium" />
+        </div>
+      )}
+
+      {/* Frame number (film aesthetic) */}
+      <div className="absolute top-6 right-3 text-xs font-mono text-white/40 tracking-wider tabular-nums">
+        #{String(index + 1).padStart(3, '0')}
+      </div>
+
+      {/* Hover action row — pin toggle + context menu */}
+      <AnimatePresence>
+        {hovered && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            className="absolute top-7 right-10 flex items-center gap-2"
+          >
+            <button
+              className="p-2 rounded-full bg-black/50 hover:bg-white/10 backdrop-blur-md transition-colors"
+              onClick={(e) => {
+                e.stopPropagation();
+                onPin(project);
+              }}
+              title={project.isPinned ? 'Désépingler' : 'Épingler'}
+              aria-label={project.isPinned ? 'Désépingler' : 'Épingler'}
+            >
+              <Pin
+                className={`w-4 h-4 ${
+                  project.isPinned
+                    ? 'text-viral-medium fill-viral-medium'
+                    : 'text-white/70'
+                }`}
+              />
+            </button>
+
             <div className="relative">
               <button
-                onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }}
-                className="p-1.5 bg-black/70 hover:bg-black/90 rounded-lg transition-colors"
+                className="p-2 rounded-full bg-black/50 hover:bg-white/10 backdrop-blur-md transition-colors"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuOpen((v) => !v);
+                }}
+                aria-label="Plus d'actions"
               >
-                <MoreVertical className="w-4 h-4 text-white" />
+                <MoreVertical className="w-4 h-4 text-white/70" />
               </button>
-              
               {menuOpen && (
-                <div className="absolute top-full left-0 mt-1 w-40 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-lg shadow-xl overflow-hidden z-10">
+                <div
+                  className="absolute top-full right-0 mt-1 w-44 bg-[#14141b] border border-white/10 rounded-lg shadow-xl overflow-hidden z-20"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <button
                     onClick={handleOpenFolder}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-white/80 hover:bg-white/5 transition-colors"
                   >
                     <FolderIcon className="w-4 h-4" />
                     Ouvrir dossier
                   </button>
                   <button
-                    onClick={handleDelete}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMenuOpen(false);
+                      onDelete(project);
+                    }}
                     className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -620,69 +763,74 @@ function ProjectCard({
                 </div>
               )}
             </div>
-          </div>
-        </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-        {/* Info */}
-        <div className="p-3">
-          <div className="flex items-start justify-between gap-2">
-            <h3 className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent-color)] truncate flex-1 text-sm flex items-center gap-1.5">
-              {project.isPinned && (
-                <Pin
-                  className="w-3 h-3 text-viral-medium fill-current shrink-0"
-                  aria-hidden="true"
-                />
-              )}
-              <span className="truncate">{project.name}</span>
-            </h3>
-            <button
-              onClick={togglePin}
-              disabled={pinning}
-              title={project.isPinned ? 'Désépingler' : 'Épingler'}
-              aria-label={project.isPinned ? 'Désépingler le projet' : 'Épingler le projet'}
-              className={`p-1 rounded-md hover:bg-white/10 transition-colors shrink-0 ${
-                project.isPinned ? 'text-viral-medium' : 'text-[var(--text-muted)]'
-              } ${pinning ? 'opacity-50 cursor-wait' : ''}`}
-            >
-              <Pin className={`w-3.5 h-3.5 ${project.isPinned ? 'fill-current' : ''}`} />
-            </button>
-            <span
-              className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${
-                statusColors[project.status] || statusColors.created
-              }`}
-            >
-              {statusLabels[project.status] || project.status}
-            </span>
-          </div>
+      {/* Hover "play" cue */}
+      <AnimatePresence>
+        {hovered && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.8 }}
+            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-14 h-14 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center pointer-events-none"
+          >
+            <Play className="w-6 h-6 text-white fill-white ml-0.5" />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-          {/* Meta row */}
-          <div className="flex items-center gap-3 mt-2 text-[10px] text-[var(--text-muted)]">
-            <span className="flex items-center gap-1">
-              <Calendar className="w-3 h-3" />
-              {formatRelativeDate(project.createdAt)}
-            </span>
-            
-            {project.segmentsCount !== undefined && project.segmentsCount > 0 && (
-              <span className="flex items-center gap-1">
-                <Layers className="w-3 h-3" />
-                {project.segmentsCount} clip{project.segmentsCount > 1 ? 's' : ''}
-              </span>
-            )}
-          </div>
+      {/* Info bottom */}
+      <div className="absolute bottom-4 inset-x-0 px-5 text-white">
+        <div className="text-[10px] uppercase tracking-wider text-white/50 mb-1">
+          {project.channelName || project.sourceType || 'VOD'}
         </div>
-      </Card>
+        <h3 className="text-lg font-bold leading-tight mb-2 line-clamp-2">
+          {project.name}
+        </h3>
+        <div className="flex items-center justify-between text-xs text-white/60">
+          <span className="flex items-center gap-1.5">
+            <Layers className="w-3 h-3" />
+            {segmentCount ?? '—'} segments
+          </span>
+          {isAnalyzing ? (
+            <span className="text-viral-medium font-semibold flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-viral-medium animate-pulse" />
+              {project.status}
+            </span>
+          ) : (
+            <span>{project.artifactCount ?? 0} clips</span>
+          )}
+        </div>
+      </div>
     </motion.div>
   );
 }
 
-function StatCard({ label, value }: { label: string; value: string | number }) {
+function FilmstripSkeleton() {
   return (
-    <div className="bg-white/5 border border-white/10 rounded-lg p-3">
-      <p className="text-xs text-[var(--text-muted)]">{label}</p>
-      <p className="text-xl font-bold">{value}</p>
+    <div className="space-y-12">
+      {[0, 1].map((row) => (
+        <div key={row}>
+          <SectionHeader title={row === 0 ? 'Épinglés' : 'Projets'} />
+          <div className="flex gap-6 overflow-hidden px-12 pb-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div
+                key={i}
+                className="flex-shrink-0 w-[280px] h-[420px] rounded-2xl bg-gradient-to-b from-white/5 to-white/[0.02] border border-white/5 animate-pulse"
+              />
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Empty state
+// ---------------------------------------------------------------------------
 
 function OnboardingStep({
   number,
@@ -696,15 +844,15 @@ function OnboardingStep({
   desc: string;
 }) {
   return (
-    <div className="p-4 rounded-lg bg-white/5 border border-white/10">
+    <div className="p-4 rounded-xl bg-white/5 border border-white/10">
       <div className="text-3xl mb-2">{emoji}</div>
       <div className="flex items-center gap-2 justify-center mb-1">
         <span className="w-5 h-5 rounded-full bg-viral-medium/20 text-viral-medium text-xs flex items-center justify-center font-bold">
           {number}
         </span>
-        <span className="font-semibold text-sm">{label}</span>
+        <span className="font-semibold text-sm text-white">{label}</span>
       </div>
-      <p className="text-xs text-[var(--text-muted)]">{desc}</p>
+      <p className="text-xs text-white/50">{desc}</p>
     </div>
   );
 }
@@ -719,14 +867,11 @@ function EmptyState({
   importing: boolean;
 }) {
   return (
-    <div className="text-center py-16">
+    <div className="text-center py-16 px-12 relative z-10">
       <div className="text-6xl mb-4">🎬</div>
-      <h2 className="text-2xl font-bold mb-2 text-[var(--text-primary)]">
-        Bienvenue dans FORGE LAB
-      </h2>
-      <p className="text-[var(--text-muted)] mb-8 max-w-md mx-auto">
-        Transformez vos VODs en clips viraux en 3 étapes : importez, analysez,
-        exportez.
+      <h2 className="text-2xl font-bold mb-2 text-white">Bienvenue dans FORGE LAB</h2>
+      <p className="text-white/50 mb-8 max-w-md mx-auto">
+        Transformez vos VODs en clips viraux en 3 étapes : importez, analysez, exportez.
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl mx-auto mb-8">
@@ -751,26 +896,26 @@ function EmptyState({
       </div>
 
       <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-        <Button variant="primary" size="lg" onClick={onImportUrl}>
-          <Link2 className="w-5 h-5 mr-2" />
-          Importer une URL
-        </Button>
-        <Button
-          variant="secondary"
-          size="lg"
-          onClick={onImport}
-          loading={importing}
+        <button
+          onClick={onImportUrl}
+          className="px-6 py-3 rounded-xl bg-gradient-to-r from-viral-medium to-viral-high text-black font-bold text-sm flex items-center gap-2 hover:scale-[1.02] transition-transform"
         >
-          <Upload className="w-5 h-5 mr-2" />
+          <Link2 className="w-5 h-5" />
+          Importer une URL
+        </button>
+        <button
+          onClick={onImport}
+          disabled={importing}
+          className="px-6 py-3 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 text-sm flex items-center gap-2 text-white disabled:opacity-50"
+        >
+          <Upload className="w-5 h-5" />
           Importer un fichier
-        </Button>
+        </button>
       </div>
 
-      <p className="text-xs text-[var(--text-muted)] mt-6">
+      <p className="text-xs text-white/40 mt-6">
         Astuce : collez une URL n'importe où dans l'app pour démarrer un import.
       </p>
     </div>
   );
 }
-
-

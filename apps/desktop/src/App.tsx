@@ -7,6 +7,9 @@ import ShortcutsOverlay from '@/components/ui/ShortcutsOverlay';
 import CommandPalette from '@/components/ui/CommandPalette';
 import BackendDownOverlay from '@/components/layout/BackendDownOverlay';
 import FurnaceHUD from '@/components/floating/FurnaceHUD';
+import KeyboardHints from '@/components/floating/KeyboardHints';
+import Starfield from '@/components/ambient/Starfield';
+import RocketLaunch from '@/components/ambient/RocketLaunch';
 import Layout from '@/components/layout/Layout';
 import HomePage from '@/pages/HomePage';
 import ProjectPage from '@/pages/ProjectPage';
@@ -54,6 +57,8 @@ export default function App() {
 
   return (
     <ErrorBoundary>
+      {/* Ambient starfield — renders behind everything, on every route */}
+      <Starfield />
       <Layout>
         <AnimatePresence mode="wait">
           <Suspense fallback={<PageLoader />}>
@@ -77,6 +82,8 @@ export default function App() {
       <CommandPalette />
       <BackendDownOverlay />
       <FurnaceHUD />
+      <KeyboardHints />
+      <RocketLaunch />
       <Toaster />
     </ErrorBoundary>
   );

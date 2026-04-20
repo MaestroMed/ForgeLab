@@ -1544,6 +1544,114 @@ async def batch_export_all_clips(
     }
 
 
+@router.get("/{project_id}/audio-peaks")
+async def get_audio_peaks(
+    project_id: str,
+    bars: int = Query(200, ge=20, le=2000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get audio waveform peaks (amplitude values normalized 0-1) for the VodSpine."""
+    from forge_engine.core.config import settings
+
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Prefer the extracted/normalized audio asset, then proxy, then raw source.
+    audio_source: str | None = None
+    lib = settings.LIBRARY_PATH / "projects" / str(project.id)
+    if lib.exists():
+        for candidate in lib.rglob("audio.*"):
+            if candidate.suffix.lower() in (".wav", ".mp3", ".m4a", ".aac"):
+                audio_source = str(candidate)
+                break
+    if not audio_source:
+        proxy = lib / "proxy" / "proxy.mp4"
+        if proxy.exists():
+            audio_source = str(proxy)
+    if not audio_source and project.source_path and Path(project.source_path).exists():
+        audio_source = project.source_path
+
+    if not audio_source:
+        return {"peaks": [], "bars": 0, "duration": project.duration or 0}
+
+    try:
+        import subprocess
+
+        duration = project.duration or 0
+        if duration <= 0:
+            # Probe duration from ffmpeg stderr.
+            probe = subprocess.run(
+                [settings.FFMPEG_PATH, "-i", audio_source, "-f", "null", "-"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            import re
+
+            m = re.search(r"Duration: (\d+):(\d+):(\d+\.\d+)", probe.stderr)
+            if m:
+                duration = (
+                    int(m.group(1)) * 3600
+                    + int(m.group(2)) * 60
+                    + float(m.group(3))
+                )
+
+        if duration <= 0:
+            return {"peaks": [], "bars": 0, "duration": 0}
+
+        # Downsample to mono 8 kHz s16le; compute peak per bucket in Python.
+        result = subprocess.run(
+            [
+                settings.FFMPEG_PATH,
+                "-i", audio_source,
+                "-ac", "1",
+                "-ar", "8000",
+                "-f", "s16le",
+                "-",
+            ],
+            capture_output=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            return {"peaks": [], "bars": 0, "duration": duration}
+
+        import struct
+
+        raw = result.stdout
+        sample_count = len(raw) // 2
+        if sample_count == 0:
+            return {"peaks": [], "bars": 0, "duration": duration}
+
+        actual_samples_per_bar = max(1, sample_count // bars)
+        peaks: list[float] = []
+        max_abs = 32767.0
+        for i in range(bars):
+            start_idx = i * actual_samples_per_bar
+            end_idx = min(start_idx + actual_samples_per_bar, sample_count)
+            if start_idx >= sample_count:
+                peaks.append(0.0)
+                continue
+
+            chunk = raw[start_idx * 2 : end_idx * 2]
+            if len(chunk) < 2:
+                peaks.append(0.0)
+                continue
+
+            fmt = f"<{len(chunk) // 2}h"
+            try:
+                samples = struct.unpack(fmt, chunk[: (len(chunk) // 2) * 2])
+                max_val = max(abs(s) for s in samples)
+                peaks.append(round(max_val / max_abs, 3))
+            except Exception:
+                peaks.append(0.0)
+
+        return {"peaks": peaks, "bars": len(peaks), "duration": duration}
+    except Exception as e:
+        logger.warning("Audio peaks failed for project %s: %s", project_id, e)
+        return {"peaks": [], "bars": 0, "duration": project.duration or 0}
+
+
 @router.get("/{project_id}/thumbnail")
 async def get_project_thumbnail(
     project_id: str,
