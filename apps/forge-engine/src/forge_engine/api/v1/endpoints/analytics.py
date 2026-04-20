@@ -49,10 +49,35 @@ async def get_dashboard(
 
 @router.get("/overview")
 async def get_overview():
-    """Get quick analytics overview."""
+    """Get quick analytics overview (aggregated from cached metrics)."""
     service = AnalyticsService.get_instance()
-
-    return await service.get_overview()
+    try:
+        metrics = service.get_cached_metrics()
+        summary = await service.get_summary(metrics)
+        return {
+            "total_projects": 0,  # Filled by frontend from separate call
+            "total_clips": summary.total_videos,
+            "total_views": summary.total_views,
+            "total_likes": summary.total_likes,
+            "avg_engagement": round(summary.avg_engagement_rate, 2),
+            "avg_completion": round(summary.avg_completion_rate, 2),
+            "avg_score": 0,
+            "top_score": summary.best_performing.viral_score if summary.best_performing else 0,
+            "platform_breakdown": summary.platform_breakdown,
+        }
+    except Exception:
+        # Graceful empty state when no data yet
+        return {
+            "total_projects": 0,
+            "total_clips": 0,
+            "total_views": 0,
+            "total_likes": 0,
+            "avg_engagement": 0,
+            "avg_completion": 0,
+            "avg_score": 0,
+            "top_score": 0,
+            "platform_breakdown": {},
+        }
 
 
 @router.get("/clips/{clip_id}/stats")

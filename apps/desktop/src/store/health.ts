@@ -35,7 +35,7 @@ export const useHealthStore = create<HealthState>((set, get) => ({
   check: async () => {
     set({ loading: true });
     try {
-      const res = await fetch(`${ENGINE_BASE_URL}/v1/capabilities/health`, {
+      const res = await fetch(`${ENGINE_BASE_URL}/v1/health`, {
         signal: AbortSignal.timeout(5000),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

@@ -295,12 +295,20 @@ def create_app() -> FastAPI:
             trace_id, request.method, request.url.path, exc,
             traceback.format_exc(),
         )
+        # Add CORS headers manually — exception responses bypass CORSMiddleware
+        origin = request.headers.get("origin", "")
+        allowed = ["*"] if settings.DEBUG else settings.CORS_ORIGINS
+        cors_origin = origin if (origin in allowed or "*" in allowed) else allowed[0] if allowed else "*"
         return JSONResponse(
             status_code=500,
             content={
                 "error": "Internal server error",
                 "detail": str(exc)[:200],
                 "trace_id": trace_id,
+            },
+            headers={
+                "Access-Control-Allow-Origin": cors_origin,
+                "Access-Control-Allow-Credentials": "true",
             },
         )
 

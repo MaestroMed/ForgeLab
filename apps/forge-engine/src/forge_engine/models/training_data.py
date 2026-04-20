@@ -37,8 +37,8 @@ class SegmentFeedback(Base):
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    # Relationships
-    segment = relationship("Segment", back_populates="feedback")
+    # Relationships (one-way; Segment doesn't need reverse access)
+    segment = relationship("Segment")
 
 
 class MLModelVersion(Base):
