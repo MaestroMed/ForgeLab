@@ -24,7 +24,17 @@ router = APIRouter()
 
 
 def recommend_whisper_model() -> str:
-    """Recommend Whisper model based on available GPU VRAM."""
+    """Recommend Whisper model based on available GPU VRAM.
+
+    Benchmark-based tiers:
+    - ≥16 GB VRAM: large-v3 (best quality)
+    - 10-16 GB (RTX 4070 Ti 12GB): medium — large-v3 + batch=16 thrashes
+      VRAM on 12GB; medium with the hotwords dictionary gives near-large-v3
+      quality at 3-4× the speed
+    - 6-10 GB: medium (reduced batch)
+    - 3-6 GB: small
+    - CPU: base
+    """
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
@@ -32,7 +42,7 @@ def recommend_whisper_model() -> str:
         )
         if result.returncode == 0:
             vram_mb = int(result.stdout.strip().split("\n")[0])
-            if vram_mb >= 10_000:
+            if vram_mb >= 16_000:
                 return "large-v3"
             elif vram_mb >= 6_000:
                 return "medium"

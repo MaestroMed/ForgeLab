@@ -18,31 +18,46 @@ from forge_engine.core.config import settings
 logger = logging.getLogger(__name__)
 
 
-def auto_detect_batch_size(vram_gb: float) -> int:
-    """Automatically detect optimal batch_size based on VRAM.
+def auto_detect_batch_size(vram_gb: float, model_name: str = "medium") -> int:
+    """Automatically detect optimal batch_size based on VRAM AND model size.
 
-    Batch size recommendations based on testing:
-    - 32GB (RTX 5090): batch_size=48-64
-    - 24GB (RTX 4090): batch_size=32
-    - 16GB (RTX 5080): batch_size=24
-    - 12GB (RTX 4070 Ti): batch_size=16
-    - 8GB (RTX 3070): batch_size=8
-    - 6GB or less: batch_size=4
+    large-v3 has a much bigger VRAM footprint than medium/small, so batch_size
+    must be reduced proportionally. On a 12GB card, large-v3 + batch_size=16
+    caused VRAM thrashing (99% GPU util but only 64W power draw).
 
-    Formula: ~2.5 batch per GB, capped by model size requirements.
+    Benchmark-based recommendations:
+    - 32GB (RTX 5090): large=32, medium=64
+    - 24GB (RTX 4090): large=24, medium=32
+    - 16GB (RTX 5080): large=16, medium=24
+    - 12GB (RTX 4070 Ti): large=8, medium=16, small=24   ← avoids thrashing
+    -  8GB (RTX 3070):  large=4, medium=8,  small=16
+    -  6GB or less: large=N/A, medium=4, small=8
     """
+    is_large = "large" in (model_name or "").lower()
+    is_medium = "medium" in (model_name or "").lower()
+
     if vram_gb >= 30:
-        return 64  # RTX 5090 (32GB)
+        return 32 if is_large else 64
     elif vram_gb >= 22:
-        return 32  # RTX 4090 (24GB)
+        return 24 if is_large else 32
     elif vram_gb >= 14:
-        return 24  # RTX 5080 (16GB)
+        return 16 if is_large else 24
     elif vram_gb >= 10:
-        return 16  # RTX 4070 Ti (12GB)
+        if is_large:
+            return 8     # 12GB safe limit for large-v3
+        elif is_medium:
+            return 16
+        return 24        # small/base can go higher
     elif vram_gb >= 7:
-        return 8   # RTX 3070 (8GB)
+        if is_large:
+            return 4
+        elif is_medium:
+            return 8
+        return 16
     else:
-        return 4   # Low VRAM
+        if is_large:
+            return 2     # extremely tight
+        return 4
 
 
 def auto_detect_num_workers(vram_gb: float) -> int:
@@ -112,8 +127,12 @@ class TranscriptionService:
                 vram_mb = float(result.stdout.strip().split('\n')[0])
                 self._detected_vram_gb = vram_mb / 1024
 
-                # Auto-detect optimal settings
-                self._auto_batch_size = auto_detect_batch_size(self._detected_vram_gb)
+                # Auto-detect optimal settings — pass model_name so batch_size
+                # gets reduced for heavy models (large-v3 on 12GB would thrash).
+                self._auto_batch_size = auto_detect_batch_size(
+                    self._detected_vram_gb,
+                    self.model_name,
+                )
                 self._auto_num_workers = auto_detect_num_workers(self._detected_vram_gb)
 
                 # Update batch_size if auto-detected is better than default

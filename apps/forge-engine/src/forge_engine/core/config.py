@@ -31,19 +31,24 @@ class Settings(BaseSettings):
     FFPROBE_PATH: str = "ffprobe"
     FORCE_CPU: bool = False
 
-    # Performance optimizations
+    # Performance optimizations — tuned for Ada Lovelace (RTX 4070+)
     SKIP_PROXY_IF_NVENC: bool = True  # Skip proxy creation if NVENC available (faster final render)
     USE_HWACCEL: bool = True  # Use GPU hardware acceleration for decode/encode
-    FFMPEG_NVENC_PRESET: str = "p4"  # NVENC preset (p1=fastest, p7=best quality)
+    FFMPEG_NVENC_PRESET: str = "p5"  # p5 = higher quality on Ada (vs p4), still fast
     FFMPEG_PROXY_PRESET: str = "p1"  # Ultra-fast for proxy
+    FFMPEG_NVENC_TUNING: str = "hq"  # hq = high quality (vs ll=low latency)
+    FFMPEG_NVENC_RC: str = "vbr"  # Variable bitrate for better quality/size
+    FFMPEG_NVENC_MULTIPASS: str = "qres"  # Quarter-res first pass (fast, better quality)
+    FFMPEG_NVENC_B_REF_MODE: str = "middle"  # B-frames as reference on Ada (+compression)
 
-    # Whisper TURBO - Auto-optimized based on GPU VRAM
-    WHISPER_MODEL: str = "large-v3"  # Use FORGE_WHISPER_MODEL=small in .env for fast testing
+    # Whisper TURBO - Tuned for 12GB VRAM (RTX 4070 Ti)
+    # large-v3 + batch=16 thrashes VRAM on 12GB cards → defaults to medium
+    WHISPER_MODEL: str = "medium"  # Best speed/quality balance on 12GB; override via FORGE_WHISPER_MODEL
     WHISPER_DEVICE: str = "cuda"  # GPU enabled
     WHISPER_COMPUTE_TYPE: str = "int8_float16"  # INT8 quantization (faster + less VRAM)
     WHISPER_LANGUAGE: str = "fr"  # Default language (FR for streaming content)
     WHISPER_NUM_WORKERS: int = 2  # Default, auto-detected based on VRAM
-    WHISPER_BATCH_SIZE: int = 16  # Default, auto-detected based on VRAM
+    WHISPER_BATCH_SIZE: int = 16  # Safe for medium on 12GB; large-v3 gets auto-reduced to 8
     WHISPER_TURBO_MODE: bool = True  # Enable batched inference for maximum speed
     WHISPER_AUTO_OPTIMIZE: bool = True  # Auto-detect optimal batch_size/workers from VRAM
 
@@ -53,14 +58,15 @@ class Settings(BaseSettings):
     PROXY_CRF: int = 28
     AUDIO_SAMPLE_RATE: int = 16000
 
-    # Job queue
-    MAX_CONCURRENT_JOBS: int = 2
-    BATCH_MAX_WORKERS: int = 2  # Parallel job workers (1-4)
+    # Job queue — 32 threads CPU + 64 GB RAM tolerate more concurrency
+    # (but GPU is the bottleneck so we stay conservative on GPU-bound jobs)
+    MAX_CONCURRENT_JOBS: int = 3  # Up from 2: allows 1 GPU job + 2 CPU jobs
+    BATCH_MAX_WORKERS: int = 3  # Parallel job workers (was 2)
     JOB_TIMEOUT: int = 3600  # 1 hour
 
-    # Parallel downloads (quick win for 1Gbps connection)
-    MAX_PARALLEL_DOWNLOADS: int = 4  # 4-6 simultaneous downloads
-    DOWNLOAD_CHUNK_CONNECTIONS: int = 8  # yt-dlp aria2c connections per download
+    # Parallel downloads — 32 cores can handle way more, network-bound
+    MAX_PARALLEL_DOWNLOADS: int = 6  # Up from 4
+    DOWNLOAD_CHUNK_CONNECTIONS: int = 16  # aria2c conns per download (was 8)
 
     # Output
     OUTPUT_WIDTH: int = 1080
@@ -112,9 +118,12 @@ class Settings(BaseSettings):
     CLOUD_MODAL_TOKEN_SECRET: str = ""
 
     # Local LLM (Ollama)
+    # qwen3:8b (5.2GB) chosen over 14b (9.3GB) so it can coexist with Whisper
+    # medium (2.5GB) on 12GB VRAM without thrashing. Upgrade to qwen3:14b
+    # only when Whisper runs on CPU or large-v3 isn't active.
     LLM_ENABLED: bool = True
     LLM_OLLAMA_URL: str = "http://127.0.0.1:11434"
-    LLM_MODEL: str = "qwen3:14b-q4_K_M"  # Best quality for 12GB+ VRAM; override with FORGE_LLM_MODEL
+    LLM_MODEL: str = "qwen3:8b"  # Co-exists with Whisper medium on 12GB VRAM
     LLM_TIMEOUT: int = 120
     LLM_MAX_CONCURRENT: int = 3
 

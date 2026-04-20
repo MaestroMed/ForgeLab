@@ -227,9 +227,23 @@ class PipelineSinglePass:
         else:
             out_audio_label = "final_a"
 
-        # Codec selection
+        # Codec selection — tuned for Ada Lovelace (RTX 4070+)
         if cfg.use_nvenc:
-            vcodec = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", str(cfg.crf)]
+            from forge_engine.core.config import settings as _s
+            # p5 + hq tuning + VBR + quarter-res multipass + b-ref middle
+            # gives ~10-15% better quality than p4 at ~20% slower speed on Ada.
+            vcodec = [
+                "-c:v", "h264_nvenc",
+                "-preset", getattr(_s, "FFMPEG_NVENC_PRESET", "p5"),
+                "-tune", getattr(_s, "FFMPEG_NVENC_TUNING", "hq"),
+                "-rc", getattr(_s, "FFMPEG_NVENC_RC", "vbr"),
+                "-cq", str(cfg.crf),
+                "-b:v", "0",  # VBR mode: 0 = driven by cq
+                "-multipass", getattr(_s, "FFMPEG_NVENC_MULTIPASS", "qres"),
+                "-b_ref_mode", getattr(_s, "FFMPEG_NVENC_B_REF_MODE", "middle"),
+                "-spatial_aq", "1",  # Adaptive quantization by region
+                "-temporal_aq", "1",  # AQ across frames
+            ]
         elif cfg.platform == "youtube_shorts":
             # H.265 for best quality/size ratio on YouTube Shorts (CPU encode)
             vcodec = ["-c:v", "libx265", "-preset", "medium", "-crf", str(cfg.crf), "-tag:v", "hvc1"]
