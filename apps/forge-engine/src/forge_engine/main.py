@@ -91,6 +91,28 @@ async def cleanup_old_hook_cache():
         logger.debug("Hook LLM cache cleanup failed: %s", e)
 
 
+async def prewarm_whisper():
+    """Preload the Whisper model into VRAM at startup.
+
+    Without prewarm, the FIRST transcription pays a ~10-30s model-load
+    penalty on top of the actual transcription. Doing it in the background
+    at startup means the first real job starts transcribing immediately.
+    """
+    try:
+        # Don't preload if user wants CPU-only (heavy memory on CPU)
+        if settings.FORCE_CPU:
+            return
+        from forge_engine.services.transcription import TranscriptionService
+        svc = TranscriptionService.get_instance()
+        # Triggers model load via is_available() + first call
+        if svc.is_available():
+            # Just touching _load_model preloads into VRAM
+            await asyncio.to_thread(lambda: getattr(svc, "_ensure_loaded", lambda: None)())
+            logger.info("Whisper model preloaded into VRAM")
+    except Exception as e:
+        logger.debug("Whisper prewarm skipped: %s", e)
+
+
 async def prewarm_llm():
     """Prewarm the LLM by loading the model with a dummy request.
 
@@ -215,10 +237,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Job manager started")
 
     # Background housekeeping — never block startup on these.
-    # Preview files: 24h TTL. Hook LLM cache: 7 days. Ollama prewarm: fire-and-forget.
+    # Preview files: 24h TTL. Hook LLM cache: 7 days. Ollama/Whisper prewarm: fire-and-forget.
     asyncio.create_task(cleanup_old_previews())
     asyncio.create_task(cleanup_old_hook_cache())
     asyncio.create_task(prewarm_llm())
+    asyncio.create_task(prewarm_whisper())
 
     # Check FFmpeg
     from forge_engine.services.ffmpeg import FFmpegService
@@ -274,6 +297,11 @@ def create_app() -> FastAPI:
         docs_url="/docs" if settings.DEBUG else None,
         redoc_url="/redoc" if settings.DEBUG else None,
     )
+
+    # GZip compression — shrinks JSON responses (segments, jobs, artifacts)
+    # by ~70-85%. Only compress responses >= 500 bytes (smaller wastes CPU).
+    from fastapi.middleware.gzip import GZipMiddleware
+    app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=6)
 
     # CORS middleware
     app.add_middleware(

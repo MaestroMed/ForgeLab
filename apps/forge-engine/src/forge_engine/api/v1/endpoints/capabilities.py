@@ -35,11 +35,27 @@ _nvml_import_tried = False
 
 
 def _try_init_nvml() -> bool:
-    """Try to initialize pynvml for fast GPU queries."""
+    """Try to initialize pynvml for fast GPU queries.
+
+    On Windows, nvml.dll lives in C:\\Windows\\System32. Python 3.8+ requires
+    explicit `os.add_dll_directory` to find DLLs outside PATH; without this,
+    `pynvml.nvmlInit()` fails with "NVML Shared Library Not Found".
+    """
     global _nvml_initialized, _nvml_handle, _nvml_import_tried
     if _nvml_import_tried:
         return _nvml_initialized
     _nvml_import_tried = True
+    # Windows: hint the System32 location for nvml.dll
+    try:
+        import os as _os
+        import platform as _platform
+        if _platform.system() == "Windows" and hasattr(_os, "add_dll_directory"):
+            try:
+                _os.add_dll_directory(r"C:\Windows\System32")
+            except Exception:
+                pass
+    except Exception:
+        pass
     try:
         import pynvml
         pynvml.nvmlInit()
