@@ -16,12 +16,10 @@ async function createWindow() {
     minHeight: 700,
     frame: false,
     titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#FAFAF8',
-      symbolColor: '#1A1A1A',
-      height: 40,
-    },
-    backgroundColor: '#FAFAF8',
+    // Fully custom titlebar rendered in React (see src/components/layout/TitleBar.tsx).
+    // We deliberately do NOT set titleBarOverlay because that would draw the native
+    // Windows window controls over our custom buttons.
+    backgroundColor: '#0A0A0F',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -48,6 +46,15 @@ async function createWindow() {
 
   mainWindow.on('leave-full-screen', () => {
     mainWindow?.webContents.send('fullscreen-changed', false);
+  });
+
+  // Maximize state change events - notify renderer so titlebar icon stays in sync
+  mainWindow.on('maximize', () => {
+    mainWindow?.webContents.send('maximize-changed', true);
+  });
+
+  mainWindow.on('unmaximize', () => {
+    mainWindow?.webContents.send('maximize-changed', false);
   });
 }
 
@@ -259,6 +266,10 @@ ipcMain.handle('window:maximize', () => {
 
 ipcMain.handle('window:close', () => {
   mainWindow?.close();
+});
+
+ipcMain.handle('window:getState', () => {
+  return mainWindow?.isMaximized() || false;
 });
 
 // App lifecycle

@@ -90,6 +90,7 @@ apps/desktop/resources/python/
 apps/desktop/resources/python-*/
 apps/desktop/resources/ffmpeg/
 apps/desktop/resources/ffmpeg-*/
+apps/desktop/resources/*.zip
 
 # Installer graphics (optional, user-provided)
 # apps/desktop/build-resources/installer-header.bmp

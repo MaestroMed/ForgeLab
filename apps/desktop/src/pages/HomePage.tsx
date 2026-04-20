@@ -591,7 +591,13 @@ function ProjectFilmstripCard({
   const [hovered, setHovered] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [hoverProgress, setHoverProgress] = useState<number>(0);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const hoverIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Cycle through 4 evenly-spaced moments so the hover preview samples the
+  // whole VOD instead of just the opening seconds.
+  const keyframePoints = [0.15, 0.35, 0.6, 0.85];
 
   const segmentCount = project.segmentCount ?? project.segmentsCount;
   const posterUrl = `${ENGINE_BASE_URL}/v1/projects/${project.id}/thumbnail?time=${
@@ -601,13 +607,48 @@ function ProjectFilmstripCard({
 
   const handleMouseEnter = () => {
     setHovered(true);
-    videoRef.current?.play().catch(() => {});
+    const video = videoRef.current;
+    if (!video) return;
+
+    const cycle = () => {
+      const v = videoRef.current;
+      if (!v || !v.duration || !isFinite(v.duration)) return;
+      // Rotate through the keyframe points based on wall-clock time so the
+      // card feels alive even before interval fires.
+      const idx = Math.floor((Date.now() / 2500) % keyframePoints.length);
+      const pct = keyframePoints[idx];
+      const target = pct * v.duration;
+      if (Math.abs(v.currentTime - target) > 0.5) {
+        try {
+          v.currentTime = target;
+        } catch {
+          // ignore — buffer not ready yet
+        }
+      }
+      setHoverProgress(pct);
+    };
+
+    video.play().catch(() => {});
+    cycle();
+    hoverIntervalRef.current = setInterval(cycle, 2500);
   };
   const handleMouseLeave = () => {
     setHovered(false);
     setMenuOpen(false);
     videoRef.current?.pause();
+    if (hoverIntervalRef.current) {
+      clearInterval(hoverIntervalRef.current);
+      hoverIntervalRef.current = null;
+    }
+    setHoverProgress(0);
   };
+
+  // Safety net: clear the interval if the card unmounts mid-hover
+  useEffect(() => {
+    return () => {
+      if (hoverIntervalRef.current) clearInterval(hoverIntervalRef.current);
+    };
+  }, []);
 
   const handleOpenFolder = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -779,6 +820,20 @@ function ProjectFilmstripCard({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Keyframe progress dots — "which moment" is being sampled */}
+      {hovered && (
+        <div className="absolute bottom-14 left-4 right-4 flex gap-1 z-10 pointer-events-none">
+          {keyframePoints.map((p) => (
+            <div
+              key={p}
+              className={`flex-1 h-0.5 rounded-full transition-colors ${
+                hoverProgress === p ? 'bg-white' : 'bg-white/20'
+              }`}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Info bottom */}
       <div className="absolute bottom-4 inset-x-0 px-5 text-white">

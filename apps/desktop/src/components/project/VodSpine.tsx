@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { celebrate } from '@/components/ambient/Celebration';
 import { sfxViral } from '@/lib/sfx';
+import { ENGINE_BASE_URL } from '@/lib/config';
 
 interface SpineSegment {
   id: string;
@@ -17,6 +18,7 @@ interface Props {
   duration: number;  // Total VOD duration in seconds
   audioPeaks?: number[];  // Optional waveform peaks (0-1 normalized)
   currentTime?: number;  // Playhead position
+  projectId?: string;  // When provided, enables the scrubbable hover preview
   onSegmentClick: (seg: SpineSegment) => void;
   onSegmentHover?: (seg: SpineSegment | null) => void;
   height?: number;
@@ -44,31 +46,72 @@ export default function VodSpine({
   duration,
   audioPeaks,
   currentTime = 0,
+  projectId,
   onSegmentClick,
   onSegmentHover,
   height = 180,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [scrubberPosition, setScrubberPosition] = useState(0);  // 0-1 within hovered gem
+  const [hoveredGemEl, setHoveredGemEl] = useState<HTMLElement | null>(null);
   const seenViralIdsRef = useRef<Set<string>>(new Set());
+  const knownIdsRef = useRef<Set<string>>(new Set());
+  const [freshIds, setFreshIds] = useState<Set<string>>(new Set());
   const firstRenderRef = useRef(true);
 
-  // Celebrate newly discovered viral segments (score ≥ 90). On first render we
-  // just mark everything as seen so we don't fire for segments that loaded from
-  // disk — the burst is reserved for segments that actually arrived live.
+  // Track newly discovered segments so they get an entrance animation + ripple.
+  // On first render we seed the known/seen sets so segments already on disk
+  // don't all animate at once — the ceremony is reserved for live arrivals.
   useEffect(() => {
     if (firstRenderRef.current) {
-      segments.forEach((s) => seenViralIdsRef.current.add(s.id));
+      segments.forEach((s) => {
+        seenViralIdsRef.current.add(s.id);
+        knownIdsRef.current.add(s.id);
+      });
       firstRenderRef.current = false;
       return;
     }
+
+    const newFresh = new Set<string>();
     for (const seg of segments) {
-      if (seg.score >= 90 && !seenViralIdsRef.current.has(seg.id)) {
+      if (!knownIdsRef.current.has(seg.id)) {
+        knownIdsRef.current.add(seg.id);
+        newFresh.add(seg.id);
+      }
+    }
+
+    if (newFresh.size === 0) return;
+
+    setFreshIds((prev) => {
+      const next = new Set(prev);
+      newFresh.forEach((id) => next.add(id));
+      return next;
+    });
+
+    // Celebrate newly discovered viral segments (score ≥ 90) that just arrived.
+    for (const seg of segments) {
+      if (
+        seg.score >= 90 &&
+        newFresh.has(seg.id) &&
+        !seenViralIdsRef.current.has(seg.id)
+      ) {
         seenViralIdsRef.current.add(seg.id);
         celebrate('viral');
         sfxViral();
       }
     }
+
+    // Clear the fresh flag after the ripple animation completes so the gem
+    // returns to its steady pulsing state.
+    const timeout = setTimeout(() => {
+      setFreshIds((prev) => {
+        const next = new Set(prev);
+        newFresh.forEach((id) => next.delete(id));
+        return next;
+      });
+    }, 1500);
+    return () => clearTimeout(timeout);
   }, [segments]);
 
   const spineY = height / 2;
@@ -97,9 +140,18 @@ export default function VodSpine({
     return result;
   }, [audioPeaks]);
 
-  const handleHover = (seg: SpineSegment | null) => {
+  const handleHover = (seg: SpineSegment | null, el?: HTMLElement | null) => {
     setHoveredId(seg?.id ?? null);
+    setHoveredGemEl(seg ? (el ?? null) : null);
+    if (!seg) setScrubberPosition(0);
     onSegmentHover?.(seg);
+  };
+
+  const onGemMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const pct = Math.max(0, Math.min(1, x / rect.width));
+    setScrubberPosition(pct);
   };
 
   const hoveredSeg = hoveredId ? segments.find((s) => s.id === hoveredId) : null;
@@ -172,6 +224,7 @@ export default function VodSpine({
         const segDuration = seg.endTime - seg.startTime;
         const widthPct = Math.max(0.5, (segDuration / duration) * 100);
         const isHovered = hoveredId === seg.id;
+        const isFresh = freshIds.has(seg.id);
         const pulseDuration = Math.max(0.8, 2 - (seg.score / 100) * 1.5);
 
         return (
@@ -180,8 +233,9 @@ export default function VodSpine({
             className="absolute top-0 bottom-5 group cursor-pointer"
             style={{ left: `${leftPct}%`, transform: 'translateX(-50%)', width: `${widthPct}%`, minWidth: 16 }}
             onClick={() => onSegmentClick(seg)}
-            onMouseEnter={() => handleHover(seg)}
+            onMouseEnter={(e) => handleHover(seg, e.currentTarget)}
             onMouseLeave={() => handleHover(null)}
+            onMouseMove={onGemMouseMove}
           >
             {/* Segment duration bar */}
             <div
@@ -195,6 +249,26 @@ export default function VodSpine({
                 opacity: isHovered ? 1 : 0.6,
               }}
             />
+
+            {/* Ripple ring for freshly discovered gems */}
+            {isFresh && (
+              <motion.div
+                className="absolute rounded-full pointer-events-none"
+                style={{
+                  top: spineY - gemRadius,
+                  left: '50%',
+                  width: gemRadius * 2,
+                  height: gemRadius * 2,
+                  marginLeft: -gemRadius,
+                  border: `2px solid ${color.fill}`,
+                  boxShadow: `0 0 20px ${color.glow}`,
+                }}
+                initial={{ scale: 1, opacity: 0.9 }}
+                animate={{ scale: 4, opacity: 0 }}
+                transition={{ duration: 1.2, ease: 'easeOut' }}
+              />
+            )}
+
             {/* The gem itself */}
             <motion.div
               className="absolute rounded-full"
@@ -207,13 +281,25 @@ export default function VodSpine({
                 backgroundColor: color.fill,
                 boxShadow: `0 0 ${12 + (seg.score / 100) * 20}px ${color.glow}, 0 0 2px ${color.fill}`,
               }}
+              initial={isFresh ? { scale: 0, opacity: 0 } : false}
               animate={{
                 scale: isHovered ? [1, 1.3, 1] : [1, 1.15, 1],
                 opacity: [0.7, 1, 0.7],
               }}
               transition={{
-                scale: { duration: isHovered ? 0.4 : pulseDuration, repeat: Infinity, ease: 'easeInOut' },
-                opacity: { duration: pulseDuration, repeat: Infinity, ease: 'easeInOut' },
+                scale: {
+                  duration: isHovered ? 0.4 : pulseDuration,
+                  repeat: Infinity,
+                  ease: 'easeInOut',
+                  // Let the pop-in animation run before the pulse kicks in.
+                  delay: isFresh ? 0.35 : 0,
+                },
+                opacity: {
+                  duration: pulseDuration,
+                  repeat: Infinity,
+                  ease: 'easeInOut',
+                  delay: isFresh ? 0.35 : 0,
+                },
               }}
             />
             {/* Score label on hover */}
@@ -235,18 +321,20 @@ export default function VodSpine({
         );
       })}
 
-      {/* Hover preview */}
+      {/* Hover text tooltip — repositioned BELOW gem when video preview is active, else above */}
       <AnimatePresence>
         {hoveredSeg && (
           <motion.div
-            initial={{ opacity: 0, y: 10 }}
+            initial={{ opacity: 0, y: projectId ? -10 : 10 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 10 }}
+            exit={{ opacity: 0, y: projectId ? -10 : 10 }}
             className="absolute z-10 bg-black/90 backdrop-blur-md border border-white/10 rounded-lg p-3 shadow-2xl pointer-events-none"
             style={{
               left: `${(((hoveredSeg.startTime + hoveredSeg.endTime) / 2) / duration) * 100}%`,
               transform: 'translateX(-50%)',
-              top: -90,
+              ...(projectId
+                ? { top: height - 5, marginTop: 8 }
+                : { top: -90 }),
               width: 240,
             }}
           >
@@ -277,6 +365,19 @@ export default function VodSpine({
         )}
       </AnimatePresence>
 
+      {/* Scrubbable video preview floats ABOVE the hovered gem */}
+      <AnimatePresence>
+        {hoveredSeg && projectId && (
+          <HoverVideoPreview
+            key={hoveredSeg.id}
+            segment={hoveredSeg}
+            projectId={projectId}
+            scrubberPosition={scrubberPosition}
+            parentEl={hoveredGemEl}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Empty state */}
       {segments.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center text-white/30 text-sm">
@@ -284,5 +385,95 @@ export default function VodSpine({
         </div>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Scrubbable hover video preview — 9:16 portrait thumbnail that seeks based
+// on mouse X position within the hovered gem.
+// ---------------------------------------------------------------------------
+
+function HoverVideoPreview({
+  segment,
+  projectId,
+  scrubberPosition,
+  parentEl,
+}: {
+  segment: SpineSegment;
+  projectId: string;
+  scrubberPosition: number;  // 0-1
+  parentEl: HTMLElement | null;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  // Position above the hovered gem. Recompute each render because the parent
+  // rect can change as the user moves across adjacent gems.
+  const rect = parentEl?.getBoundingClientRect();
+  const left = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
+  const rawTop = rect ? rect.top - 220 : 16;
+  const top = Math.max(8, rawTop);
+
+  // Seek to scrubber position whenever it changes (once metadata has loaded).
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !loaded) return;
+    const segDuration = segment.endTime - segment.startTime;
+    const targetTime = segment.startTime + scrubberPosition * segDuration;
+    if (Math.abs(video.currentTime - targetTime) > 0.1) {
+      try {
+        video.currentTime = targetTime;
+      } catch {
+        // Some browsers throw if the buffer isn't ready — ignore and retry next move.
+      }
+    }
+  }, [scrubberPosition, segment.startTime, segment.endTime, loaded]);
+
+  const currentTimeDisplay =
+    segment.startTime + scrubberPosition * (segment.endTime - segment.startTime);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10, scale: 0.9 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.9 }}
+      transition={{ duration: 0.15 }}
+      className="fixed z-[50] pointer-events-none"
+      style={{
+        left,
+        top,
+        transform: 'translate(-50%, 0)',
+      }}
+    >
+      <div className="relative w-[120px] h-[214px] rounded-lg overflow-hidden bg-black shadow-2xl ring-2 ring-white/10">
+        <video
+          ref={videoRef}
+          src={`${ENGINE_BASE_URL}/v1/projects/${projectId}/media/proxy`}
+          className="w-full h-full object-cover"
+          muted
+          playsInline
+          preload="auto"
+          onLoadedMetadata={() => {
+            const v = videoRef.current;
+            if (!v) return;
+            try {
+              v.currentTime = segment.startTime;
+            } catch {
+              // ignore
+            }
+            setLoaded(true);
+          }}
+        />
+        {/* Scrubber indicator */}
+        <div
+          className="absolute bottom-0 left-0 h-0.5 bg-viral-medium"
+          style={{ width: `${scrubberPosition * 100}%` }}
+        />
+        {/* Time label */}
+        <div className="absolute bottom-1 right-1 text-[8px] font-mono text-white/90 bg-black/60 px-1 rounded tabular-nums">
+          {formatTime(currentTimeDisplay)}
+        </div>
+      </div>
+    </motion.div>
   );
 }

@@ -29,11 +29,25 @@ contextBridge.exposeInMainWorld('forge', {
   maximize: () => ipcRenderer.invoke('window:maximize'),
   closeWindow: () => ipcRenderer.invoke('window:close'),
 
+  // Spec-named window controls (used by the custom TitleBar)
+  windowMinimize: () => ipcRenderer.invoke('window:minimize'),
+  windowMaximize: () => ipcRenderer.invoke('window:maximize'),
+  windowClose: () => ipcRenderer.invoke('window:close'),
+  getWindowState: () => ipcRenderer.invoke('window:getState'),
+
   // Fullscreen change listener
   onFullscreenChange: (callback: (isFullscreen: boolean) => void) => {
     ipcRenderer.on('fullscreen-changed', (_, isFullscreen) => callback(isFullscreen));
     return () => {
       ipcRenderer.removeAllListeners('fullscreen-changed');
+    };
+  },
+
+  // Maximize state change listener
+  onMaximizeChange: (callback: (isMaximized: boolean) => void) => {
+    ipcRenderer.on('maximize-changed', (_, isMaximized) => callback(isMaximized));
+    return () => {
+      ipcRenderer.removeAllListeners('maximize-changed');
     };
   },
 });
@@ -58,7 +72,12 @@ declare global {
       minimize: () => Promise<void>;
       maximize: () => Promise<void>;
       closeWindow: () => Promise<void>;
+      windowMinimize: () => Promise<void>;
+      windowMaximize: () => Promise<void>;
+      windowClose: () => Promise<void>;
+      getWindowState: () => Promise<boolean>;
       onFullscreenChange: (callback: (isFullscreen: boolean) => void) => () => void;
+      onMaximizeChange: (callback: (isMaximized: boolean) => void) => () => void;
     };
   }
 }

@@ -269,6 +269,40 @@ export default function ExportPanel({ project }: ExportPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupedArtifacts, project.id, selectedArtifactIds]);
 
+  // Listen for `forge:open-publish` dispatched by the ExportPremiere overlay.
+  // The event carries { id, projectId, filename, ... }. We locate the full
+  // artifact record from the already-loaded list and open the publish modal.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | { id?: string; projectId?: string; filename?: string }
+        | undefined;
+      if (!detail?.id) return;
+      if (detail.projectId && detail.projectId !== project.id) return;
+      const allVideos = Object.values(groupedArtifacts)
+        .flat()
+        .filter((a) => a.type === 'video');
+      const match = allVideos.find((a) => a.id === detail.id);
+      if (match) {
+        setPublishingArtifact(match);
+      } else if (detail.filename) {
+        // Artifact list hasn't caught up yet — publish with a minimal record.
+        setPublishingArtifact({
+          id: detail.id,
+          filename: detail.filename,
+          segmentId: '',
+          variant: '',
+          type: 'video',
+          path: '',
+          size: 0,
+          createdAt: new Date().toISOString(),
+        } as Artifact);
+      }
+    };
+    window.addEventListener('forge:open-publish', handler);
+    return () => window.removeEventListener('forge:open-publish', handler);
+  }, [groupedArtifacts, project.id]);
+
   return (
     <div className="h-full p-6 overflow-auto">
       <div className="max-w-4xl mx-auto">

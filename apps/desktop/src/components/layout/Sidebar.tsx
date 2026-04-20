@@ -1,10 +1,9 @@
+import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Home,
   Settings,
-  ChevronLeft,
-  ChevronRight,
   Eye,
   Terminal,
   BarChart3,
@@ -12,83 +11,71 @@ import {
   History,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useUIStore } from '@/store';
 import { useAuthStore } from '@/store/auth';
 import HealthStatusBadge from '@/components/layout/HealthStatusBadge';
 
-const navItems = [
+interface NavItem {
+  path: string;
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+}
+
+const primaryItems: NavItem[] = [
   { path: '/', icon: Home, label: 'Accueil' },
   { path: '/surveillance', icon: Eye, label: 'Surveillance' },
   { path: '/analytics', icon: BarChart3, label: 'Analytics' },
   { path: '/templates', icon: LayoutTemplate, label: 'Templates' },
   { path: '/history', icon: History, label: 'Historique' },
   { path: '/admin', icon: Terminal, label: "L'ŒIL" },
+];
+
+const secondaryItems: NavItem[] = [
   { path: '/settings', icon: Settings, label: 'Paramètres' },
 ];
 
 export default function Sidebar() {
   const location = useLocation();
-  const { sidebarCollapsed, toggleSidebar } = useUIStore();
   const { user, saasMode } = useAuthStore();
+  const [expanded, setExpanded] = useState(false);
 
   return (
-    <motion.aside
+    <motion.nav
       initial={false}
-      animate={{ width: sidebarCollapsed ? 60 : 200 }}
-      transition={{ duration: 0.2 }}
-      className="h-full bg-[var(--bg-card)] border-r border-[var(--border-color)] flex flex-col"
+      animate={{ width: expanded ? 200 : 56 }}
+      transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+      onMouseEnter={() => setExpanded(true)}
+      onMouseLeave={() => setExpanded(false)}
+      className="relative h-full flex flex-col bg-[#0A0A0F]/80 backdrop-blur-md overflow-hidden"
+      style={{
+        boxShadow: '4px 0 24px -12px rgba(0, 0, 0, 0.6)',
+      }}
     >
-      {/* Navigation */}
-      <nav className="flex-1 py-4">
-        <ul className="space-y-1 px-2">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.path;
-            const Icon = item.icon;
-
-            return (
-              <motion.li 
-                key={item.path}
-                whileHover={{ x: 2 }}
-                transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-              >
-                <Link
-                  to={item.path}
-                  className={cn(
-                    'relative flex items-center gap-3 px-3 py-2 rounded-lg transition-colors',
-                    isActive
-                      ? 'bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
-                      : 'text-[var(--text-muted)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]'
-                  )}
-                >
-                  {/* Active indicator bar */}
-                  {isActive && (
-                    <motion.div
-                      layoutId="sidebar-active-indicator"
-                      className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-4 bg-[var(--accent-color)] rounded-full"
-                      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-                    />
-                  )}
-                  <Icon className={cn(
-                    'w-4 h-4 flex-shrink-0 transition-colors',
-                    isActive && 'text-[var(--accent-color)]'
-                  )} />
-                  {!sidebarCollapsed && (
-                    <span className="text-sm font-medium">{item.label}</span>
-                  )}
-                </Link>
-              </motion.li>
-            );
-          })}
+      {/* Primary nav */}
+      <div className="flex-1 py-3">
+        <ul className="flex flex-col">
+          {primaryItems.map((item) => (
+            <NavLink
+              key={item.path}
+              item={item}
+              isActive={isActiveRoute(location.pathname, item.path)}
+              expanded={expanded}
+            />
+          ))}
         </ul>
-      </nav>
+      </div>
 
-      {/* Quota badge (SaaS mode only) */}
-      {saasMode && user && !sidebarCollapsed && (
-        <div className="p-4 border-t border-white/5">
-          <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider">
+      {/* Quota badge (SaaS mode, only visible when expanded) */}
+      {saasMode && user && (
+        <motion.div
+          initial={false}
+          animate={{ opacity: expanded ? 1 : 0 }}
+          transition={{ duration: 0.15 }}
+          className="px-4 py-3 border-t border-white/5 pointer-events-none"
+        >
+          <div className="text-[10px] text-white/40 uppercase tracking-wider">
             Plan {user.plan}
           </div>
-          <div className="mt-1 flex items-center justify-between text-xs">
+          <div className="mt-1 flex items-center justify-between text-xs text-white/70 whitespace-nowrap">
             <span>Exports</span>
             <span>
               {user.exports_this_month}
@@ -105,31 +92,81 @@ export default function Sidebar() {
               />
             </div>
           )}
-        </div>
+        </motion.div>
       )}
 
-      {/* System health badge */}
-      {!sidebarCollapsed && (
-        <div className="px-3 py-2 border-t border-white/5 flex justify-start">
-          <HealthStatusBadge />
-        </div>
-      )}
+      {/* Health badge — only visible when expanded */}
+      <motion.div
+        initial={false}
+        animate={{ opacity: expanded ? 1 : 0 }}
+        transition={{ duration: 0.15 }}
+        className="px-3 py-2 border-t border-white/5"
+      >
+        <HealthStatusBadge />
+      </motion.div>
 
-      {/* Collapse button */}
-      <div className="p-2 border-t border-[var(--border-color)]">
-        <button
-          onClick={toggleSidebar}
-          className="w-full flex items-center justify-center p-2 rounded-lg hover:bg-[var(--bg-secondary)] transition-colors"
-        >
-          {sidebarCollapsed ? (
-            <ChevronRight className="w-4 h-4 text-[var(--text-muted)]" />
-          ) : (
-            <ChevronLeft className="w-4 h-4 text-[var(--text-muted)]" />
-          )}
-        </button>
+      {/* Secondary nav (settings) */}
+      <div className="pb-3 border-t border-white/5 pt-3">
+        <ul className="flex flex-col">
+          {secondaryItems.map((item) => (
+            <NavLink
+              key={item.path}
+              item={item}
+              isActive={isActiveRoute(location.pathname, item.path)}
+              expanded={expanded}
+            />
+          ))}
+        </ul>
       </div>
-    </motion.aside>
+    </motion.nav>
   );
 }
 
+function NavLink({
+  item,
+  isActive,
+  expanded,
+}: {
+  item: NavItem;
+  isActive: boolean;
+  expanded: boolean;
+}) {
+  const Icon = item.icon;
+  return (
+    <li>
+      <Link
+        to={item.path}
+        className={cn(
+          'relative flex items-center gap-3 h-11 pl-[18px] pr-3 transition-colors group whitespace-nowrap',
+          isActive
+            ? 'text-viral-medium'
+            : 'text-white/50 hover:text-white/90'
+        )}
+      >
+        {/* Active indicator bar */}
+        {isActive && (
+          <motion.div
+            layoutId="sidebar-active-indicator"
+            className="absolute left-0 top-2 bottom-2 w-[2px] bg-viral-medium rounded-r"
+            style={{ boxShadow: '0 0 8px #F59E0B' }}
+            transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+          />
+        )}
+        <Icon className="w-[18px] h-[18px] flex-shrink-0" />
+        <span
+          className={cn(
+            'text-sm font-medium transition-opacity duration-150',
+            expanded ? 'opacity-100' : 'opacity-0'
+          )}
+        >
+          {item.label}
+        </span>
+      </Link>
+    </li>
+  );
+}
 
+function isActiveRoute(pathname: string, target: string): boolean {
+  if (target === '/') return pathname === '/';
+  return pathname === target || pathname.startsWith(`${target}/`);
+}

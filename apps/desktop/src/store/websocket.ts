@@ -8,10 +8,110 @@ import { useToastStore } from './toast';
 import { useProjectsStore } from './projects';
 import type { Project } from './projects';
 import { api } from '@/lib/api';
+import { usePremiereStore } from '@/components/ambient/ExportPremiere';
 
 // Track segments we've already kicked content-gen for, so a re-broadcast of the
 // same completed export doesn't fire the request twice in a session.
 const autoContentGenSeen = new Set<string>();
+
+// Track jobs we've already shown the premiere overlay for, so a re-broadcast
+// doesn't re-trigger the ceremony a second time in the same session.
+const premiereShownForJob = new Set<string>();
+
+interface ExportJobResult {
+  segment_id?: string;
+  segmentId?: string;
+  artifact_id?: string;
+  artifactId?: string;
+  score?: number;
+  segment_score?: number;
+  duration?: number;
+  output_path?: string;
+  filename?: string;
+  artifacts?: Array<{
+    id: string;
+    type: string;
+    filename?: string;
+    path?: string;
+  }>;
+}
+
+/** Resolve the "hero" video artifact from an export job result. */
+function pickVideoArtifact(
+  result: ExportJobResult | undefined,
+): { id: string; filename: string; path?: string } | null {
+  if (!result) return null;
+
+  // Explicit artifact_id wins if the backend bothered to set it.
+  const explicitId = result.artifact_id ?? result.artifactId;
+  const list = Array.isArray(result.artifacts) ? result.artifacts : [];
+  if (explicitId) {
+    const match = list.find((a) => a.id === explicitId);
+    if (match) {
+      return {
+        id: match.id,
+        filename: match.filename ?? result.filename ?? '',
+        path: match.path ?? result.output_path,
+      };
+    }
+    return {
+      id: explicitId,
+      filename: result.filename ?? '',
+      path: result.output_path,
+    };
+  }
+
+  // Otherwise pick the video artifact from the list.
+  const video = list.find((a) => a.type === 'video') ?? list[0];
+  if (!video) return null;
+  return {
+    id: video.id,
+    filename: video.filename ?? result.filename ?? '',
+    path: video.path ?? result.output_path,
+  };
+}
+
+async function triggerPremiereForExport(
+  jobId: string,
+  projectId: string,
+  result: ExportJobResult | undefined,
+) {
+  if (premiereShownForJob.has(jobId)) return;
+  premiereShownForJob.add(jobId);
+
+  const video = pickVideoArtifact(result);
+  if (!video) return;
+
+  const segmentId = result?.segment_id ?? result?.segmentId;
+
+  // Fetch the segment to enrich the premiere with its virality score. If the
+  // call fails we just fall back to whatever score was embedded in the result.
+  let score: number | undefined = result?.score ?? result?.segment_score;
+  if (segmentId && score == null) {
+    try {
+      const segRes = await api.getSegment(projectId, segmentId);
+      const seg: any = (segRes as any)?.data ?? segRes;
+      const total = seg?.score?.total ?? seg?.scoreTotal ?? seg?.score;
+      if (typeof total === 'number') score = total;
+    } catch {
+      /* non-fatal — the premiere still shows without a score */
+    }
+  }
+
+  // Small delay so the success toast / rocket animation clear the screen
+  // before the premiere takes over.
+  setTimeout(() => {
+    usePremiereStore.getState().show({
+      id: video.id,
+      projectId,
+      filename: video.filename,
+      filePath: video.path,
+      score,
+      duration: result?.duration,
+      segmentId,
+    });
+  }, 800);
+}
 
 async function kickContentGenForExportedSegment(projectId: string, segmentId: string) {
   const key = `${projectId}:${segmentId}`;
@@ -125,11 +225,16 @@ export const useWebSocketStore = create<WebSocketState>((set, _get) => {
           // hashtags and description are ready in the LLM cache before the user
           // asks. Fire-and-forget; backend caches the result.
           if (job.type === 'export') {
-            const result = (job as any).result as Record<string, unknown> | undefined;
-            const segmentId = (result?.segment_id ?? result?.segmentId) as string | undefined;
+            const result = (job as any).result as ExportJobResult | undefined;
+            const segmentId = result?.segment_id ?? result?.segmentId;
             const projectId = (job as any).projectId ?? (job as any).project_id;
             if (segmentId && projectId) {
               void kickContentGenForExportedSegment(projectId as string, segmentId);
+            }
+            // Fire the full-screen premiere ceremony for the freshly exported
+            // clip. This is intentionally a one-shot per job.
+            if (projectId) {
+              void triggerPremiereForExport(job.id, projectId as string, result);
             }
           }
 

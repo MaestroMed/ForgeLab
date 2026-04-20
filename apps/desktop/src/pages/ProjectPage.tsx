@@ -38,6 +38,7 @@ import VodSpine from '@/components/project/VodSpine';
 import IngestPanel from '@/components/project/IngestPanel';
 import AnalyzePanel from '@/components/project/AnalyzePanel';
 import ProgressOverlay from '@/components/project/ProgressOverlay';
+import SocialPublishModal from '@/components/export/SocialPublishModal';
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -362,6 +363,36 @@ function TopSegmentsCarousel({
         {top.map((seg, i) => {
           const videoUrl = `${ENGINE_BASE_URL}/v1/projects/${projectId}/media/proxy#t=${seg.startTime},${seg.endTime}`;
           const color = scoreColor(seg.score);
+
+          // Horizontal mouse position scrubs the card's video across its full
+          // duration, letting viewers skim the clip in under a second.
+          const handleCardMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+            const video = e.currentTarget.querySelector('video');
+            if (!video || !video.duration || !isFinite(video.duration)) return;
+            const rect = e.currentTarget.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const pct = Math.max(0, Math.min(1, x / rect.width));
+            const target = video.duration * pct;
+            if (Math.abs(video.currentTime - target) > 0.2) {
+              try {
+                video.currentTime = target;
+              } catch {
+                // ignore
+              }
+            }
+          };
+
+          const handleCardMouseLeave = (e: React.MouseEvent<HTMLDivElement>) => {
+            const video = e.currentTarget.querySelector('video');
+            if (!video) return;
+            video.pause();
+            try {
+              video.currentTime = seg.startTime;
+            } catch {
+              // ignore
+            }
+          };
+
           return (
             <motion.div
               key={seg.id}
@@ -371,6 +402,8 @@ function TopSegmentsCarousel({
               className="snap-start flex-shrink-0 w-[220px] group relative rounded-xl overflow-hidden cursor-pointer border border-white/5 hover:border-white/20 transition-colors"
               style={{ height: 390 }}
               onClick={() => onOpen(seg)}
+              onMouseMove={handleCardMouseMove}
+              onMouseLeave={handleCardMouseLeave}
             >
               <video
                 src={videoUrl}
@@ -381,11 +414,6 @@ function TopSegmentsCarousel({
                 onMouseEnter={(e) => {
                   const v = e.currentTarget;
                   v.play().catch(() => {});
-                }}
-                onMouseLeave={(e) => {
-                  const v = e.currentTarget;
-                  v.pause();
-                  v.currentTime = seg.startTime;
                 }}
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent pointer-events-none" />
@@ -815,6 +843,7 @@ export default function ProjectPage() {
   const { addToast } = useToastStore();
   const previousJobStatusRef = useRef<Record<string, string>>({});
   const [renameSuggestionShown, setRenameSuggestionShown] = useState(false);
+  const [publishingArtifact, setPublishingArtifact] = useState<Artifact | null>(null);
 
   // --- Data -----------------------------------------------------------------
   const { data: projectResponse, isLoading, isError } = useProject(id);
@@ -935,6 +964,39 @@ export default function ProjectPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeProject?.status]);
+
+  // Listen for `forge:open-publish` events dispatched by the ExportPremiere
+  // overlay. When the premiere's "Publier" button is clicked we look up the
+  // matching artifact and open the social publish modal here.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | { id?: string; projectId?: string; filename?: string }
+        | undefined;
+      if (!detail?.id) return;
+      if (detail.projectId && detail.projectId !== id) return;
+      const match = artifacts.find((a) => a.id === detail.id);
+      if (match) {
+        setPublishingArtifact(match);
+        return;
+      }
+      // Artifacts list hasn't refreshed yet — publish with a minimal record.
+      if (detail.filename) {
+        setPublishingArtifact({
+          id: detail.id,
+          filename: detail.filename,
+          segmentId: '',
+          variant: '',
+          type: 'video',
+          path: '',
+          size: 0,
+          createdAt: new Date().toISOString(),
+        });
+      }
+    };
+    window.addEventListener('forge:open-publish', handler);
+    return () => window.removeEventListener('forge:open-publish', handler);
+  }, [artifacts, id]);
 
   // Post-analyze rename suggestion
   useEffect(() => {
@@ -1155,7 +1217,20 @@ export default function ProjectPage() {
             title="Timeline"
             meta={`${spineSegments.length} moments détectés`}
           />
-          <div className="px-12 pb-4">
+          <div className="px-12 pb-4 relative">
+            {/* Live discovery counter — pulses while analysis is running */}
+            {projectJobs.some(
+              (j) => j.type === 'analyze' && j.status === 'running',
+            ) && (
+              <motion.div
+                className="absolute -top-4 left-12 text-xs text-viral-medium font-mono tabular-nums flex items-center gap-1.5 z-10"
+                animate={{ opacity: [0.4, 1, 0.4] }}
+                transition={{ duration: 1.5, repeat: Infinity }}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-viral-medium" />
+                {spineSegments.length} moments détectés
+              </motion.div>
+            )}
             {vodDuration > 0 && spineSegments.length > 0 ? (
               <VodSpine
                 segments={spineSegments.map((s) => ({
@@ -1167,6 +1242,7 @@ export default function ProjectPage() {
                   tags: s.tags,
                 }))}
                 duration={vodDuration}
+                projectId={project.id}
                 onSegmentClick={(seg) => {
                   const full = spineSegments.find((s) => s.id === seg.id);
                   if (full) handleOpenSegment(full);
@@ -1275,6 +1351,16 @@ export default function ProjectPage() {
             </div>
           </div>
         </section>
+      )}
+
+      {/* Social publish modal — triggered by the ExportPremiere overlay */}
+      {publishingArtifact && (
+        <SocialPublishModal
+          artifactId={publishingArtifact.id}
+          projectId={project.id}
+          defaultTitle={publishingArtifact.filename.replace(/\.[^.]+$/, '')}
+          onClose={() => setPublishingArtifact(null)}
+        />
       )}
 
       {/* Empty states / errors -- keep the page exiting cleanly */}

@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { AnimatePresence } from 'framer-motion';
 import { Maximize2, Minimize2 } from 'lucide-react';
 import Sidebar from './Sidebar';
 import TitleBar from './TitleBar';
@@ -62,17 +62,9 @@ export default function Layout({ children }: LayoutProps) {
           <Sidebar />
         </div>
 
-        {/* Main content */}
+        {/* Main content — page transitions are handled in App.tsx via AnimatePresence */}
         <main className="main-content flex-1 overflow-auto bg-[var(--bg-secondary)]">
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="h-full"
-          >
-            {children}
-          </motion.div>
+          {children}
         </main>
       </div>
 
