@@ -71,21 +71,36 @@ class LocalLLMService:
             response = await self.client.get("/api/tags")
             if response.status_code == 200:
                 data = response.json()
-                models = [m.get("name", "").split(":")[0] for m in data.get("models", [])]
+                # Full names (e.g. "qwen3:8b", "llama3.1:8b") for exact match,
+                # and base names (e.g. "qwen3", "llama3.1") for loose match.
+                installed_full = [m.get("name", "") for m in data.get("models", [])]
+                installed_base = [n.split(":")[0] for n in installed_full]
 
-                # Find best available model
+                # Find best available model. For each preferred, try:
+                # 1) exact match of full tag (e.g. "qwen3:8b" == "qwen3:8b")
+                # 2) base-name match (e.g. "qwen3:8b" base "qwen3" == base "qwen3")
                 for preferred in [self.DEFAULT_MODEL] + self.FALLBACK_MODELS:
-                    if any(preferred in m for m in models):
+                    pref_base = preferred.split(":")[0]
+                    # 1) Exact full-tag match
+                    if preferred in installed_full:
                         self._current_model = preferred
                         self._available = True
-                        logger.info(f"LLM service available with model: {self._current_model}")
+                        logger.info(f"LLM service: exact match {preferred}")
                         return True
+                    # 2) Base-name match — use the installed full tag so we call
+                    # the actual tag (not the ambiguous base name).
+                    for full, base in zip(installed_full, installed_base):
+                        if pref_base == base:
+                            self._current_model = full
+                            self._available = True
+                            logger.info(f"LLM service: base match {preferred} -> {full}")
+                            return True
 
-                # Use first available model
-                if models:
-                    self._current_model = models[0].split(":")[0]
+                # Fallback to first installed model (full tag)
+                if installed_full:
+                    self._current_model = installed_full[0]
                     self._available = True
-                    logger.info(f"LLM service using model: {self._current_model}")
+                    logger.info(f"LLM service: fallback to {self._current_model}")
                     return True
 
                 logger.warning("Ollama running but no models found")
