@@ -166,9 +166,70 @@ export const WORLD_CLASS_STYLE: SubtitleStyle = {
   enabled: true,
 };
 
+// Bottom-lower style — subtitles in the lower third, less intrusive
+export const BOTTOM_CLEAN_STYLE: SubtitleStyle = {
+  fontFamily: 'Anton',
+  fontSize: 80,           // Slightly smaller
+  fontWeight: 700,
+  color: '#FFFFFF',
+  backgroundColor: 'transparent',
+  outlineColor: '#000000',
+  outlineWidth: 6,
+  position: 'bottom',
+  positionY: 1450,        // 75% down (1920 * 0.755)
+  animation: 'pop',
+  highlightColor: '#FFFF00',
+  wordsPerLine: 3,        // Fewer per line since narrower bottom area
+  enabled: true,
+};
+
+// Minimal style — small, discrete, white with thin outline
+export const MINIMAL_STYLE: SubtitleStyle = {
+  fontFamily: 'Inter',
+  fontSize: 64,
+  fontWeight: 700,
+  color: '#FFFFFF',
+  backgroundColor: 'transparent',
+  outlineColor: '#000000',
+  outlineWidth: 4,
+  position: 'bottom',
+  positionY: 1550,        // 80% down
+  animation: 'fade',
+  highlightColor: '#00D4FF',  // Cyan highlight
+  wordsPerLine: 4,
+  enabled: true,
+};
+
+// Fire gaming style — orange, bigger, more aggressive
+export const FIRE_GAMING_STYLE: SubtitleStyle = {
+  fontFamily: 'Montserrat',
+  fontSize: 92,
+  fontWeight: 700,
+  color: '#FFFFFF',
+  backgroundColor: 'transparent',
+  outlineColor: '#000000',
+  outlineWidth: 7,
+  position: 'center',
+  positionY: 1100,        // Slightly below center
+  animation: 'pop',
+  highlightColor: '#FF6B00',  // Orange highlight
+  wordsPerLine: 3,
+  enabled: true,
+};
+
 export const SUBTITLE_PRESETS: Record<string, SubtitleStyle> = {
-  'default': WORLD_CLASS_STYLE,
-  'world_class': WORLD_CLASS_STYLE,
+  'default': BOTTOM_CLEAN_STYLE,         // New safer default
+  'world_class': WORLD_CLASS_STYLE,       // Hormozi mid-center
+  'bottom_clean': BOTTOM_CLEAN_STYLE,     // Lower-third classic
+  'minimal': MINIMAL_STYLE,               // Small & discrete
+  'fire_gaming': FIRE_GAMING_STYLE,       // Orange aggressive
+};
+
+export const SUBTITLE_PRESET_LABELS: Record<string, { label: string; desc: string }> = {
+  'bottom_clean': { label: 'Bas clean', desc: 'Anton 80pt blanc, bas écran' },
+  'world_class': { label: 'Hormozi', desc: 'Anton 96pt jaune, centre écran' },
+  'minimal': { label: 'Minimal', desc: 'Inter 64pt, bas écran, cyan' },
+  'fire_gaming': { label: 'Fire gaming', desc: 'Montserrat 92pt, orange' },
 };
 
 export const useSubtitleStyleStore = create<SubtitleStyleState>()(

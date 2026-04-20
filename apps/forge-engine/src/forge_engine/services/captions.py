@@ -77,6 +77,34 @@ class CaptionEngine:
             if words_per_line:
                 max_words_per_line = max(2, min(words_per_line, 8))
 
+            # Allow font family override (bundled fonts: Anton, Inter, Montserrat, SpaceGrotesk)
+            font_family = custom_style.get("fontFamily") or custom_style.get("font_family")
+            if font_family:
+                style["font_family"] = font_family
+
+            # Allow outline width override
+            outline = custom_style.get("outlineWidth") or custom_style.get("outline_width")
+            if outline:
+                style["outline_width"] = max(2, min(outline, 12))
+
+            # Allow custom primary color (hex → ASS &HAABBGGRR format)
+            primary_hex = custom_style.get("color")
+            if primary_hex and isinstance(primary_hex, str) and primary_hex.startswith("#") and len(primary_hex) == 7:
+                r, g, b = primary_hex[1:3], primary_hex[3:5], primary_hex[5:7]
+                style["primary_color"] = f"&H00{b}{g}{r}".upper()
+
+            # Allow custom highlight color
+            highlight_hex = custom_style.get("highlightColor") or custom_style.get("highlight_color")
+            if highlight_hex and isinstance(highlight_hex, str) and highlight_hex.startswith("#") and len(highlight_hex) == 7:
+                r, g, b = highlight_hex[1:3], highlight_hex[3:5], highlight_hex[5:7]
+                style["highlight_color"] = f"&H00{b}{g}{r}".upper()
+
+            # Allow custom outline color
+            outline_hex = custom_style.get("outlineColor") or custom_style.get("outline_color")
+            if outline_hex and isinstance(outline_hex, str) and outline_hex.startswith("#") and len(outline_hex) == 7:
+                r, g, b = outline_hex[1:3], outline_hex[3:5], outline_hex[5:7]
+                style["outline_color"] = f"&H00{b}{g}{r}".upper()
+
         logger.info(f"[Captions] World Class style: font={style['font_family']} size={style['font_size']} margin_v={style['margin_v']}")
 
         # Build ASS file
