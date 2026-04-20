@@ -35,7 +35,7 @@ export default function AnalyzePanel({ project, onJobStart, onComplete }: Analyz
 
   const [options, setOptions] = useState({
     transcribe: true,
-    whisperModel: 'large-v3',
+    whisperModel: 'medium',  // Safe default for most GPUs; auto-upgraded to large-v3 if ≥16GB VRAM
     language: '',
     detectScenes: true,
     analyzeAudio: true,
@@ -45,17 +45,17 @@ export default function AnalyzePanel({ project, onJobStart, onComplete }: Analyz
   });
   const [cpuWarning, setCpuWarning] = useState(false);
 
-  // Auto-detect the best Whisper model on mount based on available GPU VRAM
+  // Auto-detect the best Whisper model on mount based on available GPU VRAM.
+  // The capabilities router is mounted WITHOUT prefix, so the endpoint is
+  // /v1/whisper-recommendation (not /v1/capabilities/whisper-recommendation).
   useEffect(() => {
-    fetch(`${ENGINE_BASE_URL}/v1/capabilities/whisper-recommendation`)
+    fetch(`${ENGINE_BASE_URL}/v1/whisper-recommendation`)
       .then((r) => r.json())
       .then((data) => {
         if (data.recommended_model) {
-          setOptions((prev) =>
-            prev.whisperModel === 'large-v3'
-              ? { ...prev, whisperModel: data.recommended_model }
-              : prev
-          );
+          // Always apply the recommendation on mount (user can still override
+          // manually via the dropdown).
+          setOptions((prev) => ({ ...prev, whisperModel: data.recommended_model }));
         }
         if (data.cpu_warning) {
           setCpuWarning(true);

@@ -38,7 +38,9 @@ class IngestRequest(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     transcribe: bool = True
-    whisper_model: str = "large-v3"
+    # Default pulled from settings.WHISPER_MODEL (now "medium" — safer on 12GB).
+    # UI can still override via the payload when user picks a specific model.
+    whisper_model: str = "medium"
     language: str | None = None
     detect_scenes: bool = True
     analyze_audio: bool = True
