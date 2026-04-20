@@ -66,6 +66,9 @@ from forge_engine.api.v1.endpoints.whitelabel import router as whitelabel_router
 api_router.include_router(cloud_router, prefix="/cloud", tags=["cloud"])
 api_router.include_router(whitelabel_router, prefix="/enterprise", tags=["enterprise"])
 
+from forge_engine.api.v1.endpoints.pipeline import router as pipeline_router
+api_router.include_router(pipeline_router, prefix="/pipeline", tags=["pipeline"])
+
 
 
 

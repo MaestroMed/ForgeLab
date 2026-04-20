@@ -10,6 +10,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
+import { Skeleton } from '@/components/ui/Skeleton';
 import {
   LayoutTemplate,
   Search,
@@ -395,8 +396,15 @@ export default function TemplatesPage() {
             {Array.from({ length: 4 }).map((_, i) => (
               <div
                 key={i}
-                className="shrink-0 w-64 h-40 rounded-xl bg-white/5 border border-white/10 animate-pulse"
-              />
+                className="shrink-0 w-64 rounded-xl bg-white/5 border border-white/10 overflow-hidden"
+              >
+                <Skeleton className="h-28 w-full rounded-none" />
+                <div className="p-3 space-y-2">
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-3 w-full" />
+                  <Skeleton className="h-8 w-full mt-3 rounded-md" />
+                </div>
+              </div>
             ))}
           </div>
         ) : marketplace.length === 0 ? (

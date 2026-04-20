@@ -151,6 +151,10 @@ class ImportUrlRequest(BaseModel):
     custom_name: str | None = None  # Optional project name override (defaults to video title)
 
 
+class PinRequest(BaseModel):
+    pinned: bool
+
+
 # Endpoints
 @router.post("")
 async def create_project(
@@ -353,8 +357,8 @@ async def list_projects(
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
-    # Paginate
-    query = query.order_by(Project.updated_at.desc())
+    # Paginate — pinned projects surface first
+    query = query.order_by(Project.is_pinned.desc(), Project.updated_at.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
 
     result = await db.execute(query)
@@ -413,6 +417,26 @@ async def get_project(
         raise HTTPException(status_code=404, detail="Project not found")
 
     return {"success": True, "data": project.to_dict()}
+
+
+@router.patch("/{project_id}/pin")
+async def pin_project(
+    project_id: str,
+    request: PinRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Toggle the pinned / favorite status of a project.
+
+    Pinned projects surface first in the list endpoint regardless of
+    ``updated_at`` so recently-touched projects don't bury them.
+    """
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project.is_pinned = bool(request.pinned)
+    await db.commit()
+    return {"id": str(project.id), "is_pinned": project.is_pinned}
 
 
 @router.delete("/{project_id}")

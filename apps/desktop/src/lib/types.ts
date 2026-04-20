@@ -36,6 +36,8 @@ export interface ApiProject {
   errorMessage?: string;
   profileId?: string;
   metadata?: Record<string, unknown>;
+  /** True when the user has pinned this project to the top of the list. */
+  isPinned?: boolean;
   createdAt: string;
   updatedAt: string;
   /** Enriched by list endpoint -- not present on single-get. */

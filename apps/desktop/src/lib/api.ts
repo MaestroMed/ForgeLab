@@ -423,6 +423,16 @@ class ApiClient {
     );
   }
 
+  /**
+   * Pin or unpin a project. Pinned projects surface first in the list.
+   */
+  async pinProject(projectId: string, pinned: boolean) {
+    return this.request<{ id: string; is_pinned: boolean }>(`/projects/${projectId}/pin`, {
+      method: 'PATCH',
+      body: JSON.stringify({ pinned }),
+    });
+  }
+
   // System
   async getCapabilities() {
     return this.request<any>('/capabilities');
@@ -828,6 +838,45 @@ class ApiClient {
   // LLM / Assistant
   async getLLMStatus() {
     return this.request<{ available: boolean; model: string }>('/llm/status');
+  }
+
+  // ========================
+  // One-click Pipeline
+  // ========================
+
+  async listPipelinePresets() {
+    return this.request<{
+      presets: Array<{
+        id: string;
+        name: string;
+        platform: string;
+        target_count: number;
+        min_score: number;
+        min_duration?: number;
+        max_duration?: number;
+        schedule_publish?: boolean;
+      }>;
+    }>('/pipeline/presets');
+  }
+
+  async startPipeline(data: {
+    source_url?: string;
+    source_file?: string;
+    preset_id?: string;
+    channel_name?: string;
+  }) {
+    return this.request<{ run_id: string; status: string }>('/pipeline/start', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getPipelineRun(runId: string) {
+    return this.request<any>(`/pipeline/runs/${runId}`);
+  }
+
+  async listPipelineRuns() {
+    return this.request<{ runs: any[] }>('/pipeline/runs');
   }
 }
 

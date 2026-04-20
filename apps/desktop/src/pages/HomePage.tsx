@@ -4,11 +4,12 @@ import { motion } from 'framer-motion';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ENGINE_BASE_URL } from '@/lib/config';
-import { Plus, Search, Film, Layers, TrendingUp, Calendar, Link2, Upload, MoreVertical, Play, Trash2, FolderOpen as FolderIcon } from 'lucide-react';
+import { Plus, Search, Film, Layers, TrendingUp, Calendar, Link2, Upload, MoreVertical, Play, Trash2, FolderOpen as FolderIcon, Pin, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { SkeletonProjectCard } from '@/components/ui/Skeleton';
 import { UrlImportModal } from '@/components/import/UrlImportModal';
+import OneClickModal from '@/components/import/OneClickModal';
 import ProjectProgress from '@/components/project/ProjectProgress';
 import { api } from '@/lib/api';
 import { useProjects, QUERY_KEYS } from '@/lib/queries';
@@ -27,6 +28,8 @@ interface Project {
   thumbnailPath?: string;
   segmentsCount?: number;
   averageScore?: number;
+  /** True when the user has pinned this project to the top of the list. */
+  isPinned?: boolean;
 }
 
 export default function HomePage() {
@@ -40,6 +43,8 @@ export default function HomePage() {
   const [urlModalOpen, setUrlModalOpen] = useState(false);
   const [pastedUrl, setPastedUrl] = useState<string | undefined>(undefined);
   const [dragOver, setDragOver] = useState(false);
+  const [showOneClick, setShowOneClick] = useState(false);
+  const [oneClickUrl, setOneClickUrl] = useState<string | undefined>(undefined);
 
   // Auto-detect video URLs pasted anywhere on the page and open the import modal
   useUrlPasteDetector((url) => {
@@ -98,7 +103,15 @@ export default function HomePage() {
 
   // React Query: fetch projects
   const { data: projectsData, isLoading: loading, isError: projectsError } = useProjects(search || undefined);
-  const projects: Project[] = (projectsData?.data?.items || []) as Project[];
+  const rawProjects: Project[] = (projectsData?.data?.items || []) as Project[];
+
+  // Always surface pinned projects first — server already orders this way,
+  // but sorting client-side keeps optimistic updates stable when toggling.
+  const projects: Project[] = [...rawProjects].sort((a, b) => {
+    const pa = a.isPinned ? 1 : 0;
+    const pb = b.isPinned ? 1 : 0;
+    return pb - pa;
+  });
 
   // Dashboard stats (graceful fallback to local data when fields missing)
   const { data: stats } = useQuery({
@@ -141,6 +154,17 @@ export default function HomePage() {
     const openUrl = () => setUrlModalOpen(true);
     window.addEventListener('forge:open-url-import', openUrl);
     return () => window.removeEventListener('forge:open-url-import', openUrl);
+  }, []);
+
+  // Command palette / other callers can dispatch this to open the one-click modal.
+  useEffect(() => {
+    const openOneClick = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ url?: string }>).detail;
+      setOneClickUrl(detail?.url);
+      setShowOneClick(true);
+    };
+    window.addEventListener('forge:open-oneclick', openOneClick);
+    return () => window.removeEventListener('forge:open-oneclick', openOneClick);
   }, []);
 
   // Sync local state with store updates from WebSocket
@@ -250,6 +274,18 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-2">
+            <Button
+              variant="primary"
+              size="lg"
+              onClick={() => {
+                setOneClickUrl(undefined);
+                setShowOneClick(true);
+              }}
+              className="bg-gradient-to-r from-viral-medium to-viral-high"
+            >
+              <Zap className="w-5 h-5 mr-2" />
+              One-click TikTok
+            </Button>
             <Button variant="secondary" onClick={() => setUrlModalOpen(true)}>
               <Link2 className="w-4 h-4 mr-2" />
               Import URL
@@ -356,6 +392,21 @@ export default function HomePage() {
           navigate(`/project/${projectId}`);
         }}
       />
+
+      {/* One-click Pipeline Modal */}
+      {showOneClick && (
+        <OneClickModal
+          initialUrl={oneClickUrl}
+          onClose={() => {
+            setShowOneClick(false);
+            setOneClickUrl(undefined);
+          }}
+          onComplete={(projectId) => {
+            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
+            if (projectId) navigate(`/project/${projectId}`);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -372,8 +423,28 @@ function ProjectCard({
   onDelete: () => void;
 }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { addToast } = useToastStore();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pinning, setPinning] = useState(false);
+
+  const togglePin = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (pinning) return;
+    setPinning(true);
+    try {
+      await api.pinProject(project.id, !project.isPinned);
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: 'Erreur',
+        message: err instanceof Error ? err.message : 'Impossible d\'épingler le projet',
+      });
+    } finally {
+      setPinning(false);
+    }
+  };
   
   const statusLabels: Record<string, string> = {
     created: 'Nouveau',
@@ -547,9 +618,26 @@ function ProjectCard({
         {/* Info */}
         <div className="p-3">
           <div className="flex items-start justify-between gap-2">
-            <h3 className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent-color)] truncate flex-1 text-sm">
-              {project.name}
+            <h3 className="font-medium text-[var(--text-primary)] group-hover:text-[var(--accent-color)] truncate flex-1 text-sm flex items-center gap-1.5">
+              {project.isPinned && (
+                <Pin
+                  className="w-3 h-3 text-viral-medium fill-current shrink-0"
+                  aria-hidden="true"
+                />
+              )}
+              <span className="truncate">{project.name}</span>
             </h3>
+            <button
+              onClick={togglePin}
+              disabled={pinning}
+              title={project.isPinned ? 'Désépingler' : 'Épingler'}
+              aria-label={project.isPinned ? 'Désépingler le projet' : 'Épingler le projet'}
+              className={`p-1 rounded-md hover:bg-white/10 transition-colors shrink-0 ${
+                project.isPinned ? 'text-viral-medium' : 'text-[var(--text-muted)]'
+              } ${pinning ? 'opacity-50 cursor-wait' : ''}`}
+            >
+              <Pin className={`w-3.5 h-3.5 ${project.isPinned ? 'fill-current' : ''}`} />
+            </button>
             <span
               className={`px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${
                 statusColors[project.status] || statusColors.created

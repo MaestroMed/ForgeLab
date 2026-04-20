@@ -14,6 +14,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useUIStore } from '@/store';
 import { useAuthStore } from '@/store/auth';
+import HealthStatusBadge from '@/components/layout/HealthStatusBadge';
 
 const navItems = [
   { path: '/', icon: Home, label: 'Accueil' },
@@ -104,6 +105,13 @@ export default function Sidebar() {
               />
             </div>
           )}
+        </div>
+      )}
+
+      {/* System health badge */}
+      {!sidebarCollapsed && (
+        <div className="px-3 py-2 border-t border-white/5 flex justify-start">
+          <HealthStatusBadge />
         </div>
       )}
 

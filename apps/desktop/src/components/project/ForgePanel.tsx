@@ -14,6 +14,7 @@ import {
   Loader2,
   X,
   ChevronDown,
+  Columns,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { api } from '@/lib/api';
@@ -25,6 +26,7 @@ import { useSegmentNavigation } from '@/hooks/useSegmentNavigation';
 import { useDebounce } from '@/hooks/useDebounce';
 import { SegmentPreview } from '@/components/project/SegmentPreview';
 import { SegmentScoreCard } from '@/components/project/SegmentScoreCard';
+import SegmentComparisonModal from '@/components/project/SegmentComparisonModal';
 
 interface ForgePanelProps {
   project: {
@@ -132,6 +134,10 @@ export default function ForgePanel({ project }: ForgePanelProps) {
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [hasAutoSelected, setHasAutoSelected] = useState(false);
+
+  // A/B comparison state — populated when exactly two segments are checked
+  // and the user hits the "Comparer" button.
+  const [comparing, setComparing] = useState<{ a: Segment; b: Segment } | null>(null);
 
   // After segments load, auto-select top 5 high-score candidates
   // Handles both camelCase (score.total, startTime/endTime) and snake_case fallbacks
@@ -462,9 +468,28 @@ export default function ForgePanel({ project }: ForgePanelProps) {
   ]);
 
   if (loading) {
+    // Skeleton layout that mirrors the real 3-column view so there's no
+    // layout shift when data arrives.
     return (
-      <div className="h-full flex items-center justify-center bg-[var(--bg-primary)]">
-        <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+      <div className="h-full flex bg-[var(--bg-primary)]">
+        <div className="w-80 border-r border-[var(--border-color)] bg-[var(--bg-card)] p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="h-5 w-24 rounded bg-[var(--bg-tertiary)] animate-pulse" />
+            <div className="h-7 w-7 rounded-lg bg-[var(--bg-tertiary)] animate-pulse" />
+          </div>
+          <div className="space-y-2">
+            {[...Array(6)].map((_, i) => <SkeletonRow key={i} />)}
+          </div>
+        </div>
+        <div className="flex-1 flex items-center justify-center bg-black">
+          <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+        <div className="w-80 border-l border-[var(--border-color)] bg-[var(--bg-card)] p-4 space-y-3">
+          <div className="h-6 w-32 rounded bg-[var(--bg-tertiary)] animate-pulse" />
+          <div className="h-28 w-full rounded-lg bg-[var(--bg-tertiary)] animate-pulse" />
+          <div className="h-4 w-full rounded bg-[var(--bg-tertiary)] animate-pulse" />
+          <div className="h-4 w-2/3 rounded bg-[var(--bg-tertiary)] animate-pulse" />
+        </div>
       </div>
     );
   }
@@ -523,7 +548,22 @@ export default function ForgePanel({ project }: ForgePanelProps) {
               <span className="text-[var(--text-muted)]">
                 {selectedIds.length} sélectionné{selectedIds.length !== 1 ? 's' : ''}
               </span>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
+                {selectedIds.length === 2 && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="h-6 px-2 text-xs"
+                    onClick={() => {
+                      const a = segments.find((s) => s.id === selectedIds[0]);
+                      const b = segments.find((s) => s.id === selectedIds[1]);
+                      if (a && b) setComparing({ a, b });
+                    }}
+                  >
+                    <Columns className="w-3.5 h-3.5 mr-1" />
+                    Comparer A/B
+                  </Button>
+                )}
                 <button
                   onClick={selectAllSegments}
                   className="text-blue-500 hover:text-blue-400"
@@ -853,6 +893,16 @@ export default function ForgePanel({ project }: ForgePanelProps) {
         onNavigateToEditor={(segmentId) => navigate(`/editor/${project.id}?segment=${segmentId}`)}
         onPlaySegment={handleSegmentPlay}
       />
+
+      {/* A/B comparison overlay */}
+      {comparing && (
+        <SegmentComparisonModal
+          projectId={project.id}
+          segmentA={comparing.a as any}
+          segmentB={comparing.b as any}
+          onClose={() => setComparing(null)}
+        />
+      )}
     </div>
   );
 }

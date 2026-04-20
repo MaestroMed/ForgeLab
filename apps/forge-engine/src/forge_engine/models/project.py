@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Float, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from forge_engine.core.database import Base
@@ -45,6 +45,9 @@ class Project(Base):
     # Extra metadata
     project_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Pinning / favorites
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -83,6 +86,7 @@ class Project(Base):
             "errorMessage": self.error_message,
             "profileId": self.profile_id,
             "metadata": self.project_meta,
+            "isPinned": bool(self.is_pinned),
             "createdAt": self.created_at.isoformat(),
             "updatedAt": self.updated_at.isoformat(),
         }

@@ -23,6 +23,7 @@ import {
   Clock,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { Skeleton } from '@/components/ui/Skeleton';
 
 type Platform = 'tiktok' | 'youtube_shorts' | 'instagram' | 'twitter';
 
@@ -98,14 +99,18 @@ function accuracyColor(pct: number): { text: string; bg: string; border: string 
 export default function AnalyticsPage() {
   const [selectedPlatform, setSelectedPlatform] = useState<Platform>('tiktok');
 
-  const { data: summaryData, refetch: refetchSummary, isFetching: isSummaryFetching } =
-    useQuery({
-      queryKey: ['analytics-summary', selectedPlatform],
-      queryFn: () => api.getAnalyticsSummary(selectedPlatform, 10),
-      staleTime: 60_000,
-    });
+  const {
+    data: summaryData,
+    refetch: refetchSummary,
+    isFetching: isSummaryFetching,
+    isLoading: isSummaryLoading,
+  } = useQuery({
+    queryKey: ['analytics-summary', selectedPlatform],
+    queryFn: () => api.getAnalyticsSummary(selectedPlatform, 10),
+    staleTime: 60_000,
+  });
 
-  const { data: trendsData } = useQuery({
+  const { data: trendsData, isLoading: isTrendsLoading } = useQuery({
     queryKey: ['analytics-trends', selectedPlatform],
     queryFn: () => api.getPerformanceTrends(selectedPlatform, 8),
     staleTime: 60_000,
@@ -167,7 +172,9 @@ export default function AnalyticsPage() {
         })}
       </div>
 
-      {summary && summary.total_clips === 0 ? (
+      {isSummaryLoading ? (
+        <AnalyticsSkeleton showTrends={isTrendsLoading} />
+      ) : summary && summary.total_clips === 0 ? (
         <EmptyState />
       ) : (
         <>
@@ -258,13 +265,65 @@ export default function AnalyticsPage() {
         </>
       )}
 
-      {!summary && (
-        <div className="mt-8 text-center">
-          <RefreshCw className="w-8 h-8 text-gray-400 animate-spin mx-auto" />
-          <p className="text-gray-400 mt-2">Chargement des analytics…</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Skeleton state (shown while /analytics/summary is in flight)
+// ---------------------------------------------------------------------------
+
+function AnalyticsSkeleton({ showTrends }: { showTrends: boolean }) {
+  return (
+    <>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div
+            key={i}
+            className="bg-white/5 backdrop-blur-sm rounded-xl p-5 border border-white/10"
+          >
+            <Skeleton className="w-9 h-9 rounded-lg" />
+            <div className="mt-4 space-y-2">
+              <Skeleton className="h-7 w-24" />
+              <Skeleton className="h-3 w-20" />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {showTrends && (
+        <div className="bg-white/5 backdrop-blur-sm rounded-xl border border-white/10 p-5 mb-8">
+          <Skeleton className="h-5 w-56 mb-5" />
+          <div className="flex items-end gap-2 h-40">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton
+                key={i}
+                className="flex-1 rounded-md"
+                // randomish heights for visual texture
+              />
+            ))}
+          </div>
         </div>
       )}
-    </div>
+
+      <div className="bg-white/5 backdrop-blur-sm rounded-xl border border-white/10">
+        <div className="p-5 border-b border-white/10">
+          <Skeleton className="h-5 w-32" />
+        </div>
+        <div className="divide-y divide-white/5">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="p-4 flex items-center gap-4">
+              <Skeleton className="w-10 h-10 rounded-full" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-4 w-40" />
+                <Skeleton className="h-3 w-24" />
+              </div>
+              <Skeleton className="h-4 w-16" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
   );
 }
 

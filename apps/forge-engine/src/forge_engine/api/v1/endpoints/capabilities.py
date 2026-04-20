@@ -157,6 +157,165 @@ async def get_capabilities() -> dict:
     }
 
 
+@router.get("/health")
+async def get_full_health() -> dict:
+    """Complete system health check.
+
+    Returns per-subsystem status (ffmpeg/gpu/whisper/ollama/disk/system/library)
+    plus an overall_status aggregate. Designed to be resilient: any individual
+    probe failure is reported as a 'warning' or 'error' on that subsystem
+    rather than raising.
+    """
+    import time
+
+    checks: dict = {}
+    overall_status = "ok"
+
+    def _bump(level: str) -> None:
+        nonlocal overall_status
+        if level == "error":
+            overall_status = "error"
+        elif level == "warning" and overall_status == "ok":
+            overall_status = "warning"
+
+    # FFmpeg
+    try:
+        result = subprocess.run(
+            [settings.FFMPEG_PATH, "-version"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            first_line = result.stdout.splitlines()[0] if result.stdout else ""
+            # Check NVENC support via encoder listing
+            try:
+                result2 = subprocess.run(
+                    [settings.FFMPEG_PATH, "-hide_banner", "-encoders"],
+                    capture_output=True, text=True, timeout=5
+                )
+                has_nvenc = "nvenc" in (result2.stdout or "")
+            except Exception:
+                has_nvenc = False
+            checks["ffmpeg"] = {
+                "status": "ok",
+                "version": first_line[:100],
+                "nvenc": has_nvenc,
+            }
+        else:
+            checks["ffmpeg"] = {"status": "error", "message": "FFmpeg command failed"}
+            _bump("error")
+    except Exception as e:
+        checks["ffmpeg"] = {"status": "error", "message": f"FFmpeg not found: {e}"}
+        _bump("error")
+
+    # GPU (nvidia-smi probe; non-NVIDIA GPUs are treated as a warning, not error)
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total,memory.used,driver_version", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            first = result.stdout.strip().splitlines()[0]
+            parts = [p.strip() for p in first.split(",")]
+            if len(parts) >= 4:
+                try:
+                    checks["gpu"] = {
+                        "status": "ok",
+                        "name": parts[0],
+                        "vram_total_mb": int(parts[1]),
+                        "vram_used_mb": int(parts[2]),
+                        "driver": parts[3],
+                    }
+                except ValueError:
+                    checks["gpu"] = {"status": "warning", "message": "GPU output parse error"}
+            else:
+                checks["gpu"] = {"status": "warning", "message": "Unexpected nvidia-smi output"}
+        else:
+            checks["gpu"] = {"status": "warning", "message": "No NVIDIA GPU detected (CPU fallback)"}
+    except Exception as e:
+        checks["gpu"] = {"status": "warning", "message": f"GPU detection failed: {e}"}
+
+    # Whisper
+    try:
+        # Import guard — if faster-whisper/ctranslate2 aren't importable this fails.
+        from forge_engine.services.transcription import TranscriptionService  # noqa: F401
+        checks["whisper"] = {
+            "status": "ok",
+            "model": settings.WHISPER_MODEL,
+            "device": settings.WHISPER_DEVICE,
+        }
+    except Exception as e:
+        checks["whisper"] = {"status": "error", "message": str(e)}
+        _bump("error")
+
+    # Ollama (LLM — not running = warning, content generation disabled)
+    try:
+        from forge_engine.services.llm_local import LocalLLMService
+        llm = LocalLLMService.get_instance()
+        available = await llm.check_availability()
+        checks["ollama"] = {
+            "status": "ok" if available else "warning",
+            "model": llm._current_model if available else None,
+            "message": "" if available else "Ollama not running (content generation disabled)",
+        }
+        if not available:
+            _bump("warning")
+    except Exception as e:
+        checks["ollama"] = {"status": "warning", "message": str(e)}
+        _bump("warning")
+
+    # Disk space on LIBRARY_PATH
+    try:
+        usage = shutil.disk_usage(str(settings.LIBRARY_PATH))
+        free_gb = usage.free / (1024 ** 3)
+        total_gb = usage.total / (1024 ** 3)
+        disk_status = "ok" if free_gb > 10 else "warning" if free_gb > 2 else "error"
+        checks["disk"] = {
+            "status": disk_status,
+            "free_gb": round(free_gb, 1),
+            "total_gb": round(total_gb, 1),
+            "library_path": str(settings.LIBRARY_PATH),
+        }
+        _bump(disk_status)
+    except Exception as e:
+        checks["disk"] = {"status": "error", "message": str(e)}
+        _bump("error")
+
+    # System (RAM / CPU) — psutil may not be installed, skip gracefully
+    try:
+        import psutil  # type: ignore
+        vm = psutil.virtual_memory()
+        checks["system"] = {
+            "status": "ok",
+            "cpu_count": psutil.cpu_count(logical=True),
+            "ram_total_gb": round(vm.total / (1024 ** 3), 1),
+            "ram_used_percent": vm.percent,
+        }
+    except ImportError:
+        checks["system"] = {
+            "status": "warning",
+            "message": "psutil not installed (system metrics unavailable)",
+        }
+    except Exception as e:
+        checks["system"] = {"status": "warning", "message": str(e)}
+
+    # Library path sanity
+    try:
+        if Path(settings.LIBRARY_PATH).exists():
+            checks["library"] = {"status": "ok", "path": str(settings.LIBRARY_PATH)}
+        else:
+            checks["library"] = {"status": "error", "path": str(settings.LIBRARY_PATH)}
+            _bump("error")
+    except Exception as e:
+        checks["library"] = {"status": "error", "message": str(e)}
+        _bump("error")
+
+    return {
+        "overall_status": overall_status,
+        "checks": checks,
+        "timestamp": time.time(),
+    }
+
+
 @router.get("/whisper-recommendation")
 async def get_whisper_recommendation():
     """Return the recommended Whisper model for this machine."""

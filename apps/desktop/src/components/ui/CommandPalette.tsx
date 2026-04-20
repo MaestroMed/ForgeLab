@@ -119,6 +119,19 @@ export default function CommandPalette() {
         keywords: ['youtube', 'twitch', 'url', 'download'],
       },
       {
+        id: 'action-oneclick',
+        label: 'One-click TikTok pipeline',
+        icon: Zap,
+        action: () => {
+          navigate('/');
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('forge:open-oneclick'));
+          }, 0);
+        },
+        category: 'action',
+        keywords: ['rapide', 'auto', 'tiktok', 'pipeline', 'one-click'],
+      },
+      {
         id: 'action-shortcuts',
         label: 'Afficher les raccourcis clavier',
         icon: Zap,
