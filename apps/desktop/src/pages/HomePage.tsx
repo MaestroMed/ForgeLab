@@ -17,7 +17,7 @@ import {
   Layers,
   Film,
 } from 'lucide-react';
-import { UrlImportModal } from '@/components/import/UrlImportModal';
+import InlineUrlBar from '@/components/import/InlineUrlBar';
 import OneClickModal from '@/components/import/OneClickModal';
 import { api } from '@/lib/api';
 import { useProjects, QUERY_KEYS } from '@/lib/queries';
@@ -459,18 +459,17 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* URL Import Modal */}
-      <UrlImportModal
-        isOpen={urlModalOpen}
+      {/* URL Import — inline slide-down command bar */}
+      <InlineUrlBar
+        open={urlModalOpen}
+        initialUrl={pastedUrl}
         onClose={() => {
           setUrlModalOpen(false);
           setPastedUrl(undefined);
         }}
-        initialUrl={pastedUrl}
-        onImportComplete={(projectId) => {
-          queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
+        onImported={() => {
           setPastedUrl(undefined);
-          navigate(`/project/${projectId}`);
+          queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
         }}
       />
 

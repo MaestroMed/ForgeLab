@@ -17,9 +17,22 @@ interface ToastState {
 
 export const useToastStore = create<ToastState>((set) => ({
   toasts: [],
-  addToast: (toast) => set((state) => ({
-    toasts: [...state.toasts, { ...toast, id: crypto.randomUUID() }],
-  })),
+  addToast: (toast) => {
+    // Fire-and-forget sound cue. Dynamic import avoids pulling Web Audio into
+    // this store's module graph and keeps the circular dep off the table
+    // (sfx.ts imports from the store index).
+    try {
+      import('@/lib/sfx')
+        .then((m) => {
+          if (toast.type === 'error') m.sfxError();
+          else if (toast.type === 'success') m.sfxNotify();
+        })
+        .catch(() => {});
+    } catch {}
+    set((state) => ({
+      toasts: [...state.toasts, { ...toast, id: crypto.randomUUID() }],
+    }));
+  },
   removeToast: (id) => set((state) => ({
     toasts: state.toasts.filter((t) => t.id !== id),
   })),

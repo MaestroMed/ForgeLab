@@ -7,6 +7,8 @@ import { api } from '@/lib/api';
 import { ENGINE_BASE_URL } from '@/lib/config';
 import { useToastStore } from '@/store';
 import { useRocketStore } from '@/components/ambient/RocketLaunch';
+import { celebrate } from '@/components/ambient/Celebration';
+import { sfxApprove, sfxReject, sfxRocket } from '@/lib/sfx';
 
 export default function ReviewModePage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -27,6 +29,14 @@ export default function ReviewModePage() {
   const segments = (segmentsData as any)?.data?.data?.items ?? (segmentsData as any)?.data?.items ?? [];
   const current = segments[idx];
   const done = idx >= segments.length && segments.length > 0;
+  const doneCelebrationFiredRef = useRef(false);
+
+  useEffect(() => {
+    if (done && !doneCelebrationFiredRef.current) {
+      doneCelebrationFiredRef.current = true;
+      celebrate('bigwin');
+    }
+  }, [done]);
 
   const advance = useCallback((direction: 'left' | 'right') => {
     if (!current) return;
@@ -39,8 +49,11 @@ export default function ReviewModePage() {
         window.innerHeight / 2,
         '🚀 Approuvé',
       );
+      sfxApprove();
+      celebrate('approve', window.innerWidth / 2, window.innerHeight / 2);
     } else {
       setSkippedIds((prev) => [...prev, current.id]);
+      sfxReject();
     }
     setTimeout(() => {
       setIdx((i) => i + 1);
@@ -103,6 +116,7 @@ export default function ReviewModePage() {
           window.innerHeight - 80,
           `🚀 #${i + 1}`,
         );
+        sfxRocket();
       }, i * 120);
     });
     for (const id of approvedIds) {

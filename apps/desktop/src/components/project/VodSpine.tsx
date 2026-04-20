@@ -1,5 +1,7 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { celebrate } from '@/components/ambient/Celebration';
+import { sfxViral } from '@/lib/sfx';
 
 interface SpineSegment {
   id: string;
@@ -48,6 +50,26 @@ export default function VodSpine({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const seenViralIdsRef = useRef<Set<string>>(new Set());
+  const firstRenderRef = useRef(true);
+
+  // Celebrate newly discovered viral segments (score ≥ 90). On first render we
+  // just mark everything as seen so we don't fire for segments that loaded from
+  // disk — the burst is reserved for segments that actually arrived live.
+  useEffect(() => {
+    if (firstRenderRef.current) {
+      segments.forEach((s) => seenViralIdsRef.current.add(s.id));
+      firstRenderRef.current = false;
+      return;
+    }
+    for (const seg of segments) {
+      if (seg.score >= 90 && !seenViralIdsRef.current.has(seg.id)) {
+        seenViralIdsRef.current.add(seg.id);
+        celebrate('viral');
+        sfxViral();
+      }
+    }
+  }, [segments]);
 
   const spineY = height / 2;
   const gemRadius = 8;

@@ -12,6 +12,7 @@ import { formatDuration } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { useToastStore } from '@/store';
 import { launchFromEvent } from '@/components/ambient/RocketLaunch';
+import { sfxRocket } from '@/lib/sfx';
 
 interface Segment {
   id: string;
@@ -184,6 +185,7 @@ export function SegmentScoreCard({
             e.stopPropagation();
             // Fire the rocket FIRST so it feels instant regardless of network latency.
             launchFromEvent(e, '🚀 TikTok');
+            sfxRocket();
             try {
               await api.exportSegment(projectId, {
                 segmentId: segment.id,
@@ -227,6 +229,7 @@ export function SegmentScoreCard({
             onClick={async (e) => {
               e.stopPropagation();
               launchFromEvent(e, '🚀 Export');
+              sfxRocket();
               try {
                 await api.exportSegment(projectId, {
                   segmentId: segment.id,

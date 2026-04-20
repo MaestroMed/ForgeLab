@@ -30,6 +30,7 @@ import { SegmentScoreCard } from '@/components/project/SegmentScoreCard';
 import SegmentComparisonModal from '@/components/project/SegmentComparisonModal';
 import VodSpine from '@/components/project/VodSpine';
 import { launchFromElement, useRocketStore } from '@/components/ambient/RocketLaunch';
+import { sfxRocket } from '@/lib/sfx';
 
 interface ForgePanelProps {
   project: {
@@ -406,6 +407,7 @@ export default function ForgePanel({ project }: ForgePanelProps) {
         '🚀 TikTok',
       );
     }
+    sfxRocket();
 
     try {
       await api.exportSegment(project.id, {

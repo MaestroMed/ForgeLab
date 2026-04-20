@@ -10,7 +10,10 @@ import FurnaceHUD from '@/components/floating/FurnaceHUD';
 import KeyboardHints from '@/components/floating/KeyboardHints';
 import Starfield from '@/components/ambient/Starfield';
 import RocketLaunch from '@/components/ambient/RocketLaunch';
+import Celebration from '@/components/ambient/Celebration';
+import FFmpegPoetry from '@/components/ambient/FFmpegPoetry';
 import Layout from '@/components/layout/Layout';
+import QuickSettings from '@/components/layout/QuickSettings';
 import HomePage from '@/pages/HomePage';
 import ProjectPage from '@/pages/ProjectPage';
 import OnboardingPage from '@/pages/OnboardingPage';
@@ -84,6 +87,9 @@ export default function App() {
       <FurnaceHUD />
       <KeyboardHints />
       <RocketLaunch />
+      <Celebration />
+      <FFmpegPoetry />
+      <QuickSettings />
       <Toaster />
     </ErrorBoundary>
   );
