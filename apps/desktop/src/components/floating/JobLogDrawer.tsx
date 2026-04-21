@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Terminal } from 'lucide-react';
-import { useJobLogs } from '@/lib/hooks/useJobLogs';
+import { useJobLogStream } from '@/lib/hooks/useJobLogStream';
 
 interface Props {
   jobId: string;
@@ -12,9 +12,11 @@ export default function JobLogDrawer({ jobId, onClose }: Props) {
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Shared job logs query — dedups across any other drawer/overlay tailing
-  // the same job (e.g. FFmpegPoetry for cinema mode).
-  const { data: lines = [] } = useJobLogs(jobId, 500);
+  // SSE stream of log lines — near-zero latency, persistent connection.
+  // Any other component tailing the same job simply opens its own
+  // EventSource; the backend keeps the ring buffer in memory so both
+  // connections see the same lines.
+  const lines = useJobLogStream(jobId, true);
 
   // Auto-scroll to the bottom when new lines arrive (unless the user scrolled up).
   useEffect(() => {

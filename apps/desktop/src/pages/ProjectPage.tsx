@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -40,6 +40,7 @@ import IngestPanel from '@/components/project/IngestPanel';
 import AnalyzePanel from '@/components/project/AnalyzePanel';
 import ProgressOverlay from '@/components/project/ProgressOverlay';
 import SocialPublishModal from '@/components/export/SocialPublishModal';
+import LazyMount from '@/components/ui/LazyMount';
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -896,12 +897,11 @@ function PipelineProgress({
 
 export default function ProjectPage() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
-  // Use the native View Transitions API (Chromium 111+) for prominent
-  // visual jumps (back to home, opening the editor) so the page smoothly
-  // crossfades instead of snapping. Falls back to plain navigate() where
+  // All navigations from this page use the native View Transitions API
+  // (Chromium 111+) so jumps back home or into the editor smoothly
+  // crossfade instead of snapping. Falls back to plain navigate() where
   // unsupported — see useSmoothNavigate.
-  const smoothNavigate = useSmoothNavigate();
+  const navigate = useSmoothNavigate();
   const queryClient = useQueryClient();
   const { addToast } = useToastStore();
   const previousJobStatusRef = useRef<Record<string, string>>({});
@@ -1244,10 +1244,10 @@ export default function ProjectPage() {
           total: stats?.total ?? segments.length,
         }}
         segmentsCount={stats?.total ?? segments.length}
-        onReview={() => smoothNavigate(`/review/${project.id}`)}
+        onReview={() => navigate(`/review/${project.id}`)}
         onTopTikTok={handleTopTikTok}
-        onEditor={() => smoothNavigate(`/editor/${project.id}`)}
-        onBack={() => smoothNavigate('/')}
+        onEditor={() => navigate(`/editor/${project.id}`)}
+        onBack={() => navigate('/')}
       />
 
       {/* When pipeline isn't done yet, promote the controls right under the hero */}
@@ -1340,12 +1340,17 @@ export default function ProjectPage() {
             meta={`${segments.length} au total`}
           />
           <div className="px-12 pb-16">
-            <AllSegmentsGrid
-              segments={remainingSegments}
-              projectId={project.id}
-              onSelect={handleOpenSegment}
-              onExtract={handleExtract}
-            />
+            {/* Defer mounting the full segments grid until it nears the
+               viewport — by far the heaviest DOM section on the page, so
+               lazy-mounting cuts first-paint cost noticeably on long VODs. */}
+            <LazyMount fallback={<div className="h-64" />}>
+              <AllSegmentsGrid
+                segments={remainingSegments}
+                projectId={project.id}
+                onSelect={handleOpenSegment}
+                onExtract={handleExtract}
+              />
+            </LazyMount>
           </div>
         </section>
       )}

@@ -1,7 +1,10 @@
 """Job endpoints."""
 
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from forge_engine.core.jobs import JobManager
 
@@ -81,6 +84,52 @@ async def get_job_logs(job_id: str, lines: int = Query(100, ge=1, le=500)) -> di
             "total": len(all_lines),
         },
     }
+
+
+@router.get("/{job_id}/stream-logs")
+async def stream_job_logs(job_id: str):
+    """SSE stream of log lines for a job.
+
+    Pushes all existing lines on connect, then streams new lines as they
+    arrive in the ring buffer. Max 1h of streaming per connection.
+    """
+    async def event_gen():
+        manager = JobManager.get_instance()
+
+        # Snapshot existing
+        existing = []
+        if hasattr(manager, "get_logs"):
+            existing = manager.get_logs(job_id)
+        for line in existing[-200:]:
+            # SSE data lines can't contain newlines; split + encode safely
+            for sub in line.split("\n"):
+                yield f"data: {sub}\n"
+            yield "\n"
+
+        seen = len(existing)
+        # Poll the ring buffer; it's in-memory so this is very cheap.
+        # Cap the stream at 1 hour so stale connections don't accumulate.
+        for _ in range(14400):  # 14400 * 0.25s = 1 hour
+            await asyncio.sleep(0.25)
+            if not hasattr(manager, "get_logs"):
+                continue
+            current = manager.get_logs(job_id)
+            if len(current) > seen:
+                for line in current[seen:]:
+                    for sub in line.split("\n"):
+                        yield f"data: {sub}\n"
+                    yield "\n"
+                seen = len(current)
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/stats/summary")

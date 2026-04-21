@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useJobsStore } from '@/store';
-import { useJobLogs } from '@/lib/hooks/useJobLogs';
+import { useJobLogStream } from '@/lib/hooks/useJobLogStream';
 
 /**
  * Cinema-mode ambient decoration: streams the FFmpeg log lines of the currently
@@ -36,13 +36,13 @@ export default function FFmpegPoetry() {
     return () => observer.disconnect();
   }, []);
 
-  // Shared job logs query — the same `useJobLogs` hook powers JobLogDrawer,
-  // so both subscribers share a single polling stream per job id (React
-  // Query dedups via the query key). We still track `seenLines` locally
-  // because we only surface newly-arrived lines as ambient text.
-  const { data: fetchedLines = [] } = useJobLogs(
+  // SSE stream of log lines — near-zero latency. JobLogDrawer opens its
+  // own EventSource when a user taps to tail; these two streams read from
+  // the same in-memory ring buffer on the backend, so they stay in sync
+  // without any client-side coordination. We still track `seenLines`
+  // locally because we only surface newly-arrived lines as ambient text.
+  const fetchedLines = useJobLogStream(
     activeJob?.id,
-    50,
     Boolean(activeJob && cinemaActive),
   );
 

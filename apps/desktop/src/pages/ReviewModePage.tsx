@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence, PanInfo } from 'framer-motion';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
+import { useSmoothNavigate } from '@/lib/hooks/useSmoothNavigate';
 import { X, Check, Edit, Rocket } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
@@ -12,7 +13,9 @@ import { sfxApprove, sfxReject, sfxRocket } from '@/lib/sfx';
 
 export default function ReviewModePage() {
   const { projectId } = useParams<{ projectId: string }>();
-  const navigate = useNavigate();
+  // Close-back to project wrapped in a native View Transition so the
+  // swipe deck smoothly crossfades into the project hero.
+  const navigate = useSmoothNavigate();
   const { addToast } = useToastStore();
   const [idx, setIdx] = useState(0);
   const [approvedIds, setApprovedIds] = useState<string[]>([]);

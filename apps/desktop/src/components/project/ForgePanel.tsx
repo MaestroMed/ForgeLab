@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useSmoothNavigate } from '@/lib/hooks/useSmoothNavigate';
 import { useQuery } from '@tanstack/react-query';
 import { ENGINE_BASE_URL } from '@/lib/config';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -65,7 +65,10 @@ interface Segment {
 type SortMode = 'score' | 'duration' | 'time';
 
 export default function ForgePanel({ project }: ForgePanelProps) {
-  const navigate = useNavigate();
+  // Smooth navigate wraps the Review Mode / editor jumps in a native
+  // View Transition (Chromium 111+) so the panel crossfades into the
+  // destination page. Falls back to plain navigate() where unsupported.
+  const navigate = useSmoothNavigate();
   useToastStore();
   const videoRef = useRef<HTMLVideoElement>(null);
 

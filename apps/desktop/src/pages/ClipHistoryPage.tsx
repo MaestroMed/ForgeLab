@@ -81,7 +81,7 @@ export default function ClipHistoryPage() {
               {artifacts.map((a) => (
                 <div
                   key={a.id}
-                  className="cv-auto-card bg-white/5 border border-white/10 rounded-lg p-4 hover:bg-white/10 transition-colors"
+                  className="cv-auto-card-compact bg-white/5 border border-white/10 rounded-lg p-4 hover:bg-white/10 transition-colors"
                 >
                   <div className="aspect-[9/16] bg-black rounded mb-3 overflow-hidden">
                     <video
