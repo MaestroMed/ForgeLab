@@ -3,7 +3,7 @@
 import logging
 from collections.abc import AsyncGenerator
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -18,6 +18,40 @@ engine = create_async_engine(
     echo=False,  # Disabled SQL echo to avoid flooding logs and blocking requests
     future=True,
 )
+
+
+# ---------------------------------------------------------------------------
+# SQLite PRAGMA tuning — applied on every new DBAPI connection. Scoped to
+# this engine's sync_engine so any other Engine in the process (e.g. tests
+# or bundled tooling) stays on defaults.
+# ---------------------------------------------------------------------------
+@event.listens_for(engine.sync_engine, "connect")
+def _configure_sqlite_pragmas(dbapi_connection, connection_record):
+    """Apply aggressive SQLite tuning for this backend's workload.
+
+    - journal_mode=WAL: concurrent readers + single writer (vs. DELETE mode
+      where writers block readers). Survives across connections once set.
+    - synchronous=NORMAL: skip fsync on every commit; WAL checkpoints still
+      flush. Safe against power loss for our use case (no financial data).
+    - cache_size=-65536: 64 MB page cache (default is ~2 MB) — fits the
+      entire DB in memory for typical FORGE installs.
+    - temp_store=MEMORY: sort/group scratch stays in RAM.
+    - mmap_size=256 MB: reads served via mmap instead of read() syscalls.
+    - busy_timeout=5000: wait up to 5s instead of instantly raising
+      "database is locked" when the writer is holding the lock.
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA cache_size=-65536")
+        cursor.execute("PRAGMA temp_store=MEMORY")
+        cursor.execute("PRAGMA mmap_size=268435456")
+        cursor.execute("PRAGMA busy_timeout=5000")
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("SQLite PRAGMA tuning failed: %s", exc)
+    finally:
+        cursor.close()
 
 # Session factory
 async_session_maker = async_sessionmaker(

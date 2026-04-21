@@ -4,7 +4,7 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1608,12 +1608,15 @@ async def get_audio_peaks(
         return {"peaks": [], "bars": 0, "duration": project.duration or 0}
 
     try:
+        import asyncio
         import subprocess
 
         duration = project.duration or 0
         if duration <= 0:
-            # Probe duration from ffmpeg stderr.
-            probe = subprocess.run(
+            # Probe duration from ffmpeg stderr — offloaded so the ~100ms
+            # ffmpeg launch doesn't block the event loop.
+            probe = await asyncio.to_thread(
+                subprocess.run,
                 [settings.FFMPEG_PATH, "-i", audio_source, "-f", "null", "-"],
                 capture_output=True,
                 text=True,
@@ -1633,7 +1636,10 @@ async def get_audio_peaks(
             return {"peaks": [], "bars": 0, "duration": 0}
 
         # Downsample to mono 8 kHz s16le; compute peak per bucket in Python.
-        result = subprocess.run(
+        # Offloaded to a worker thread — ffmpeg can run for seconds and would
+        # otherwise block every other incoming request.
+        result = await asyncio.to_thread(
+            subprocess.run,
             [
                 settings.FFMPEG_PATH,
                 "-i", audio_source,
@@ -1747,6 +1753,7 @@ async def get_project_thumbnail(
 
     if not thumb_path.exists():
         try:
+            import asyncio as _asyncio
             cmd = [
                 "ffmpeg", "-y",
                 "-ss", str(max(0, time)),
@@ -1756,7 +1763,11 @@ async def get_project_thumbnail(
                 "-q:v", "3",
                 str(thumb_path)
             ]
-            subprocess.run(cmd, capture_output=True, timeout=10)
+            # Offload to a worker thread so the ffmpeg launch doesn't stall
+            # the event loop (decoding one frame can still take ~100-500 ms).
+            await _asyncio.to_thread(
+                subprocess.run, cmd, capture_output=True, timeout=10
+            )
         except Exception as e:
             logger.error(f"Failed to generate thumbnail: {e}")
             raise HTTPException(status_code=500, detail="Failed to generate thumbnail")
@@ -1816,13 +1827,20 @@ async def get_artifact_qc(
 async def serve_artifact_file(
     project_id: str,
     artifact_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
-    """Serve an artifact file (video, cover, etc.)."""
+    """Serve an artifact file (video, cover, etc.).
+
+    Adds HTTP caching so the Electron shell / browser can 304 cheaply:
+    - ETag from inode + mtime + size (cheap stat; changes when the file does)
+    - Cache-Control: private, max-age=86400 (1 day on the client)
+    """
+    import hashlib
     from pathlib import Path
 
     from fastapi import HTTPException
-    from fastapi.responses import FileResponse
+    from fastapi.responses import FileResponse, Response
 
     result = await db.execute(
         select(Artifact)
@@ -1838,6 +1856,23 @@ async def serve_artifact_file(
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
 
+    # Build a weak-ish ETag from filesystem metadata. st_ino is 0 on Windows
+    # without dev_t support; mtime + size alone is still a safe invalidator.
+    stat = file_path.stat()
+    etag_raw = f"{getattr(stat, 'st_ino', 0)}-{stat.st_mtime}-{stat.st_size}"
+    etag = f'"{hashlib.md5(etag_raw.encode()).hexdigest()[:16]}"'
+
+    # Conditional request: If-None-Match → 304 Not Modified.
+    if_none_match = request.headers.get("if-none-match", "")
+    if if_none_match and if_none_match.strip() == etag:
+        return Response(
+            status_code=304,
+            headers={
+                "ETag": etag,
+                "Cache-Control": "private, max-age=86400",
+            },
+        )
+
     # Determine media type based on artifact type
     media_types = {
         "video": "video/mp4",
@@ -1850,7 +1885,11 @@ async def serve_artifact_file(
     return FileResponse(
         file_path,
         media_type=media_type,
-        filename=artifact.filename
+        filename=artifact.filename,
+        headers={
+            "ETag": etag,
+            "Cache-Control": "private, max-age=86400",  # 1 day client cache
+        },
     )
 
 

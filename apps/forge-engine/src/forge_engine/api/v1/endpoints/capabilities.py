@@ -256,6 +256,8 @@ async def get_full_health() -> dict:
     from forge_engine.core.cache import health_cache
 
     async def compute():
+        import asyncio
+
         checks: dict = {}
         overall_status = "ok"
 
@@ -266,9 +268,11 @@ async def get_full_health() -> dict:
             elif level == "warning" and overall_status == "ok":
                 overall_status = "warning"
 
-        # FFmpeg
+        # FFmpeg — subprocess launches offloaded to a worker thread so the
+        # event loop stays responsive (each ffmpeg spawn is ~50-150 ms cold).
         try:
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                subprocess.run,
                 [settings.FFMPEG_PATH, "-version"],
                 capture_output=True, text=True, timeout=5
             )
@@ -276,7 +280,8 @@ async def get_full_health() -> dict:
                 first_line = result.stdout.splitlines()[0] if result.stdout else ""
                 # Check NVENC support via encoder listing
                 try:
-                    result2 = subprocess.run(
+                    result2 = await asyncio.to_thread(
+                        subprocess.run,
                         [settings.FFMPEG_PATH, "-hide_banner", "-encoders"],
                         capture_output=True, text=True, timeout=5
                     )
@@ -297,7 +302,8 @@ async def get_full_health() -> dict:
 
         # GPU (nvidia-smi probe; non-NVIDIA GPUs are treated as a warning, not error)
         try:
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                subprocess.run,
                 ["nvidia-smi", "--query-gpu=name,memory.total,memory.used,driver_version", "--format=csv,noheader,nounits"],
                 capture_output=True, text=True, timeout=5
             )
@@ -409,11 +415,16 @@ async def get_full_health() -> dict:
 @router.get("/whisper-recommendation")
 async def get_whisper_recommendation():
     """Return the recommended Whisper model for this machine."""
-    model = recommend_whisper_model()
+    import asyncio
+
+    # recommend_whisper_model spawns nvidia-smi; run it in a worker so we
+    # don't block the event loop on the Windows subprocess startup cost.
+    model = await asyncio.to_thread(recommend_whisper_model)
     has_gpu = False
     vram_mb = 0
     try:
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=5
         )
@@ -493,14 +504,18 @@ async def get_gpu_stats():
     from forge_engine.core.cache import gpu_stats_cache
 
     async def compute():
+        import asyncio
+
         # Fast path: pynvml (10-50x faster than nvidia-smi subprocess)
         stats = _gpu_stats_via_nvml()
         if stats is not None:
             return stats
 
-        # Slow fallback: nvidia-smi subprocess
+        # Slow fallback: nvidia-smi subprocess — offloaded so the blocking
+        # spawn doesn't stall the event loop (Windows: ~1-2s cold).
         try:
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                subprocess.run,
                 ["nvidia-smi",
                  "--query-gpu=utilization.gpu,memory.used,memory.total,power.draw,power.max_limit,temperature.gpu",
                  "--format=csv,noheader,nounits"],

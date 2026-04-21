@@ -551,6 +551,41 @@ body {
   font-family: 'JetBrains Mono', 'Menlo', 'Monaco', monospace;
 }
 
+/* ===== PERF: content-visibility for off-screen grid items =====
+ * `content-visibility: auto` lets the browser skip layout, paint, and even
+ * style-resolution for cards that aren't in the viewport. Huge win on long
+ * scrollable lists (segments grid, filmstrip, history). The companion
+ * `contain-intrinsic-size` reserves vertical space so scroll doesn't jitter
+ * when items promote in/out. Only apply to grid ITEMS (cards), never to the
+ * grid container itself — applying to a sized container would defeat the
+ * purpose by hiding the whole section.
+ */
+.cv-auto-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 360px;
+}
+
+.cv-auto-card-filmstrip {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 420px;
+}
+
+.cv-auto-card-compact {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
+}
+
+/* ===== PERF: GPU layer promotion for always-animating elements =====
+ * `will-change: transform, opacity` tells the browser to hoist this element
+ * onto its own compositing layer. Use ONLY on elements that animate
+ * constantly (VodSpine gems pulsing, Starfield canvas, Furnace heartbeat) —
+ * over-application is worse than none because each layer costs memory and
+ * the compositor has to manage more surfaces.
+ */
+.gpu-layer {
+  will-change: transform, opacity;
+}
+
 /* ===== CINEMA MODE — hide UI chrome for immersive editing ===== */
 body.cinema-mode {
   background: #000;
@@ -573,4 +608,36 @@ body.cinema-mode .cinema-bar-reveal:hover {
   opacity: 1;
 }
 
+/* ===== NATIVE VIEW TRANSITIONS (Chromium 111+) =====
+ * Styles applied when a navigation is wrapped in `document.startViewTransition`.
+ * Guarded by `@supports` so unsupported browsers simply ignore this block.
+ */
+@supports (view-transition-name: foo) {
+  ::view-transition-group(root) {
+    animation-duration: 0.28s;
+  }
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+    mix-blend-mode: normal;
+  }
+  ::view-transition-old(root) {
+    animation: vt-fade-out 0.28s ease-out forwards;
+  }
+  ::view-transition-new(root) {
+    animation: vt-fade-in 0.28s ease-out forwards;
+  }
+  @keyframes vt-fade-out {
+    to {
+      opacity: 0;
+      transform: scale(1.02);
+    }
+  }
+  @keyframes vt-fade-in {
+    from {
+      opacity: 0;
+      transform: scale(0.98);
+    }
+  }
+}
 

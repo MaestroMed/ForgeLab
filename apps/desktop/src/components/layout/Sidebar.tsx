@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Home,
   Settings,
@@ -13,6 +14,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth';
 import HealthStatusBadge from '@/components/layout/HealthStatusBadge';
+import { preloadAnalytics, preloadClipHistory } from '@/lib/routePreload';
 
 interface NavItem {
   path: string;
@@ -37,6 +39,22 @@ export default function Sidebar() {
   const location = useLocation();
   const { user, saasMode } = useAuthStore();
   const [expanded, setExpanded] = useState(false);
+  const queryClient = useQueryClient();
+
+  // Route preload triggered on nav-item hover. Fire-and-forget; React Query
+  // dedupes repeat calls so this is safe to call per-hover.
+  const handlePreload = (path: string) => {
+    switch (path) {
+      case '/analytics':
+        preloadAnalytics(queryClient);
+        break;
+      case '/history':
+        preloadClipHistory(queryClient);
+        break;
+      default:
+        break;
+    }
+  };
 
   return (
     <motion.nav
@@ -59,6 +77,7 @@ export default function Sidebar() {
               item={item}
               isActive={isActiveRoute(location.pathname, item.path)}
               expanded={expanded}
+              onHover={() => handlePreload(item.path)}
             />
           ))}
         </ul>
@@ -126,16 +145,20 @@ function NavLink({
   item,
   isActive,
   expanded,
+  onHover,
 }: {
   item: NavItem;
   isActive: boolean;
   expanded: boolean;
+  onHover?: () => void;
 }) {
   const Icon = item.icon;
   return (
     <li>
       <Link
         to={item.path}
+        onMouseEnter={onHover}
+        onFocus={onHover}
         className={cn(
           'relative flex items-center gap-3 h-11 pl-[18px] pr-3 transition-colors group whitespace-nowrap',
           isActive

@@ -209,6 +209,8 @@ export default function InlineUrlBar({ open, initialUrl = '', onClose, onImporte
                         <img
                           src={thumbnail}
                           alt=""
+                          loading="lazy"
+                          decoding="async"
                           className="w-20 h-11 object-cover rounded"
                         />
                       )}

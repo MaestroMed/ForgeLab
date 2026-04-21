@@ -848,6 +848,7 @@ function ExportCard({
                 alt="Thumbnail"
                 className="w-full h-full object-cover"
                 loading="lazy"
+                decoding="async"
               />
             ) : coverUrl ? (
               <img
@@ -855,6 +856,7 @@ function ExportCard({
                 alt="Cover"
                 className="w-full h-full object-cover"
                 loading="lazy"
+                decoding="async"
               />
             ) : (
               <video

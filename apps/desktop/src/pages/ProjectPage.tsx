@@ -33,6 +33,7 @@ import {
 } from '@/lib/queries';
 import { api } from '@/lib/api';
 import { ENGINE_BASE_URL } from '@/lib/config';
+import { useSmoothNavigate } from '@/lib/hooks/useSmoothNavigate';
 import type { ApiProject, ApiSegment } from '@/lib/types';
 import VodSpine from '@/components/project/VodSpine';
 import IngestPanel from '@/components/project/IngestPanel';
@@ -453,7 +454,7 @@ function TopSegmentsCarousel({
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.05 }}
-              className="snap-start flex-shrink-0 w-[220px] group relative rounded-xl overflow-hidden cursor-pointer border border-white/5 hover:border-white/20 transition-colors"
+              className="cv-auto-card-filmstrip snap-start flex-shrink-0 w-[220px] group relative rounded-xl overflow-hidden cursor-pointer border border-white/5 hover:border-white/20 transition-colors"
               style={{ height: 390 }}
               onClick={() => onOpen(seg)}
               onMouseMove={(e) => handleCardMouseMove(e, seg.id)}
@@ -562,13 +563,14 @@ function AllSegmentsGrid({
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: Math.min(i * 0.02, 0.4) }}
             onClick={() => onSelect(seg)}
-            className="group relative rounded-xl overflow-hidden cursor-pointer border border-white/5 hover:border-white/25 bg-white/[0.02] transition-all hover:shadow-[0_8px_30px_rgba(0,0,0,0.4)]"
+            className="cv-auto-card group relative rounded-xl overflow-hidden cursor-pointer border border-white/5 hover:border-white/25 bg-white/[0.02] transition-all hover:shadow-[0_8px_30px_rgba(0,0,0,0.4)]"
           >
             <div className="relative aspect-video bg-black/60">
               <img
                 src={thumb}
                 alt=""
                 loading="lazy"
+                decoding="async"
                 className="absolute inset-0 w-full h-full object-cover"
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.display = 'none';
@@ -735,13 +737,15 @@ function ExportsRail({
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: Math.min(i * 0.04, 0.3) }}
-              className="snap-start flex-shrink-0 w-[200px] group relative rounded-xl overflow-hidden cursor-default border border-white/5 hover:border-white/20 bg-black/40 transition-colors"
+              className="cv-auto-card-filmstrip snap-start flex-shrink-0 w-[200px] group relative rounded-xl overflow-hidden cursor-default border border-white/5 hover:border-white/20 bg-black/40 transition-colors"
               style={{ height: 356 }}
             >
               {thumbUrl ? (
                 <img
                   src={thumbUrl}
                   alt=""
+                  loading="lazy"
+                  decoding="async"
                   className="absolute inset-0 w-full h-full object-cover"
                 />
               ) : (
@@ -893,6 +897,11 @@ function PipelineProgress({
 export default function ProjectPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  // Use the native View Transitions API (Chromium 111+) for prominent
+  // visual jumps (back to home, opening the editor) so the page smoothly
+  // crossfades instead of snapping. Falls back to plain navigate() where
+  // unsupported — see useSmoothNavigate.
+  const smoothNavigate = useSmoothNavigate();
   const queryClient = useQueryClient();
   const { addToast } = useToastStore();
   const previousJobStatusRef = useRef<Record<string, string>>({});
@@ -1235,10 +1244,10 @@ export default function ProjectPage() {
           total: stats?.total ?? segments.length,
         }}
         segmentsCount={stats?.total ?? segments.length}
-        onReview={() => navigate(`/review/${project.id}`)}
+        onReview={() => smoothNavigate(`/review/${project.id}`)}
         onTopTikTok={handleTopTikTok}
-        onEditor={() => navigate(`/editor/${project.id}`)}
-        onBack={() => navigate('/')}
+        onEditor={() => smoothNavigate(`/editor/${project.id}`)}
+        onBack={() => smoothNavigate('/')}
       />
 
       {/* When pipeline isn't done yet, promote the controls right under the hero */}

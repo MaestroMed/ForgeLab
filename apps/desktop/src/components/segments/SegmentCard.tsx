@@ -60,7 +60,13 @@ export function SegmentCard({
       {/* Thumbnail area */}
       <div className="relative aspect-video bg-gray-900">
         {thumbnailUrl ? (
-          <img src={thumbnailUrl} alt="" className="w-full h-full object-cover" />
+          <img
+            src={thumbnailUrl}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="w-full h-full object-cover"
+          />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-gray-600">
             <Play className="w-8 h-8" />

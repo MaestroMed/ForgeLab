@@ -417,7 +417,7 @@ const Gem = memo(function Gem({
 
       {/* The gem itself */}
       <motion.div
-        className="absolute rounded-full"
+        className="absolute rounded-full gpu-layer"
         style={{
           top: spineY - gemRadius,
           left: '50%',

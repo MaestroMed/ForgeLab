@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ENGINE_BASE_URL } from '@/lib/config';
+import { useSmoothNavigate } from '@/lib/hooks/useSmoothNavigate';
 import {
   Search,
   Link2,
@@ -21,6 +21,7 @@ import InlineUrlBar from '@/components/import/InlineUrlBar';
 import OneClickModal from '@/components/import/OneClickModal';
 import { api } from '@/lib/api';
 import { useProjects, QUERY_KEYS } from '@/lib/queries';
+import { preloadProject } from '@/lib/routePreload';
 import { useToastStore, useJobsStore, useProjectsStore } from '@/store';
 import { useUrlPasteDetector } from '@/hooks/useUrlPasteDetector';
 
@@ -45,7 +46,10 @@ interface Project {
 }
 
 export default function HomePage() {
-  const navigate = useNavigate();
+  // Smooth navigate wraps eligible navigations in a native View Transition
+  // (Chromium 111+). Used for the visually-prominent home→project jump so
+  // the filmstrip card smoothly crossfades into the project page.
+  const smoothNavigate = useSmoothNavigate();
   const queryClient = useQueryClient();
   const { addToast } = useToastStore();
   const { addJob } = useJobsStore();
@@ -249,7 +253,7 @@ export default function HomePage() {
       }
 
       // Navigate to project
-      navigate(`/project/${project.id}`);
+      smoothNavigate(`/project/${project.id}`);
     } catch (error) {
       addToast({
         type: 'error',
@@ -262,7 +266,7 @@ export default function HomePage() {
   };
 
   // Common handlers shared with the filmstrip cards
-  const handleOpenProject = (p: Project) => navigate(`/project/${p.id}`);
+  const handleOpenProject = (p: Project) => smoothNavigate(`/project/${p.id}`);
 
   const handlePinProject = async (p: Project) => {
     try {
@@ -483,7 +487,7 @@ export default function HomePage() {
           }}
           onComplete={(projectId) => {
             queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
-            if (projectId) navigate(`/project/${projectId}`);
+            if (projectId) smoothNavigate(`/project/${projectId}`);
           }}
         />
       )}
@@ -594,6 +598,7 @@ function ProjectFilmstripCard({
   const [hoverProgress, setHoverProgress] = useState<number>(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hoverIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const queryClient = useQueryClient();
 
   // Cycle through 4 evenly-spaced moments so the hover preview samples the
   // whole VOD instead of just the opening seconds.
@@ -607,6 +612,9 @@ function ProjectFilmstripCard({
 
   const handleMouseEnter = () => {
     setHovered(true);
+    // Warm the ProjectPage's query caches so clicking the card feels instant.
+    // Background prefetch; errors are swallowed by React Query.
+    preloadProject(queryClient, project.id);
     const video = videoRef.current;
     if (!video) return;
 
@@ -664,7 +672,7 @@ function ProjectFilmstripCard({
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.04 }}
-      className="snap-start flex-shrink-0 w-[280px] h-[420px] relative rounded-2xl overflow-hidden cursor-pointer group ring-1 ring-white/5 hover:ring-white/20 transition-shadow"
+      className="cv-auto-card-filmstrip snap-start flex-shrink-0 w-[280px] h-[420px] relative rounded-2xl overflow-hidden cursor-pointer group ring-1 ring-white/5 hover:ring-white/20 transition-shadow"
       onClick={() => onOpen(project)}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
@@ -675,6 +683,7 @@ function ProjectFilmstripCard({
         alt={project.name}
         className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
         loading="lazy"
+        decoding="async"
         onError={(e) => {
           e.currentTarget.style.display = 'none';
         }}

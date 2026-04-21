@@ -257,6 +257,8 @@ export default function SurveillancePage() {
                             <img
                               src={channel.profileImageUrl}
                               alt={channel.channelName}
+                              loading="lazy"
+                              decoding="async"
                               className="w-full h-full object-cover"
                             />
                           ) : (
@@ -357,6 +359,8 @@ export default function SurveillancePage() {
                               <img
                                 src={vod.thumbnailUrl}
                                 alt={vod.title}
+                                loading="lazy"
+                                decoding="async"
                                 className="w-full h-full object-cover"
                               />
                             ) : (

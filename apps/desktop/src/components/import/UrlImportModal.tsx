@@ -268,6 +268,8 @@ export function UrlImportModal({ isOpen, onClose, onImportComplete, initialUrl }
                     <img
                       src={videoInfo.thumbnailUrl}
                       alt={videoInfo.title}
+                      loading="lazy"
+                      decoding="async"
                       className="w-full h-full object-cover"
                     />
                   ) : (

@@ -9,8 +9,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from forge_engine.api.v1.router import api_router
 from forge_engine.api.v2.router import v2_router
@@ -24,6 +25,131 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# orjson fast-path: 3-5× faster JSON serialization than stdlib.
+# Falls back to FastAPI's default JSONResponse if orjson is missing.
+# ---------------------------------------------------------------------------
+try:
+    import orjson  # type: ignore
+
+    class ORJSONResponse(JSONResponse):
+        """FastAPI response using orjson.
+
+        - OPT_SERIALIZE_NUMPY: numpy arrays/scalars serialize without .tolist()
+        - OPT_NAIVE_UTC: naive datetimes are treated as UTC (matches the stdlib
+          json behavior Pydantic models historically expect).
+        """
+
+        media_type = "application/json"
+
+        def render(self, content) -> bytes:
+            return orjson.dumps(
+                content,
+                option=orjson.OPT_SERIALIZE_NUMPY | orjson.OPT_NAIVE_UTC,
+            )
+
+    _HAS_ORJSON = True
+    logger.info("orjson available - using ORJSONResponse as default")
+except ImportError:  # pragma: no cover - defensive fallback
+    ORJSONResponse = JSONResponse  # type: ignore[assignment,misc]
+    _HAS_ORJSON = False
+    logger.info("orjson not installed - falling back to stdlib json")
+
+
+# ---------------------------------------------------------------------------
+# Brotli compression: ~20-30% smaller than gzip on JSON; supported by every
+# modern browser. GZip middleware stays registered as fallback for clients
+# that don't advertise "br" in Accept-Encoding.
+# ---------------------------------------------------------------------------
+try:
+    import brotli  # type: ignore
+    _HAS_BROTLI = True
+except ImportError:  # pragma: no cover
+    _HAS_BROTLI = False
+
+
+class BrotliMiddleware(BaseHTTPMiddleware):
+    """Compress eligible responses with Brotli when the client accepts it.
+
+    Only touches text-ish content types (json/js/text/xml/html). Responses
+    already encoded upstream (e.g. via GZipMiddleware registered later in the
+    stack) are left alone so we don't double-compress.
+    """
+
+    def __init__(self, app, minimum_size: int = 500, quality: int = 4):
+        super().__init__(app)
+        self.minimum_size = minimum_size
+        self.quality = quality  # 0-11; 4 balances speed vs. ratio.
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+
+        accept_encoding = request.headers.get("accept-encoding", "").lower()
+        if "br" not in accept_encoding:
+            return response
+
+        # Don't re-encode streams already compressed by another middleware.
+        if response.headers.get("content-encoding"):
+            return response
+
+        content_type = response.headers.get("content-type", "")
+        if not any(
+            marker in content_type
+            for marker in ("json", "javascript", "text", "xml", "html")
+        ):
+            return response
+
+        # Buffer body so we can decide on a single compressed payload.
+        body = b""
+        async for chunk in response.body_iterator:
+            body += chunk
+
+        # Tiny payloads: compression overhead isn't worth it.
+        if len(body) < self.minimum_size:
+            headers = dict(response.headers)
+            headers.pop("content-length", None)
+            headers["content-length"] = str(len(body))
+            return Response(
+                content=body,
+                status_code=response.status_code,
+                headers=headers,
+                media_type=response.media_type,
+            )
+
+        try:
+            compressed = brotli.compress(body, quality=self.quality)
+        except Exception as exc:
+            logger.debug("Brotli compression failed, returning raw: %s", exc)
+            headers = dict(response.headers)
+            headers.pop("content-length", None)
+            headers["content-length"] = str(len(body))
+            return Response(
+                content=body,
+                status_code=response.status_code,
+                headers=headers,
+                media_type=response.media_type,
+            )
+
+        headers = dict(response.headers)
+        headers["content-encoding"] = "br"
+        headers["content-length"] = str(len(compressed))
+        # Caches must vary on Accept-Encoding when we compress conditionally.
+        existing_vary = headers.get("vary", "")
+        if "accept-encoding" not in existing_vary.lower():
+            headers["vary"] = (
+                f"{existing_vary}, Accept-Encoding".lstrip(", ")
+                if existing_vary
+                else "Accept-Encoding"
+            )
+
+        return Response(
+            content=compressed,
+            status_code=response.status_code,
+            headers=headers,
+            media_type=response.media_type,
+        )
 
 
 async def cleanup_orphan_ffmpeg():
@@ -289,7 +415,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
-    app = FastAPI(
+    app_kwargs = dict(
         title="FORGE Engine",
         description="Viral clip processing backend for FORGE/LAB",
         version=settings.VERSION,
@@ -297,11 +423,20 @@ def create_app() -> FastAPI:
         docs_url="/docs" if settings.DEBUG else None,
         redoc_url="/redoc" if settings.DEBUG else None,
     )
+    if _HAS_ORJSON:
+        app_kwargs["default_response_class"] = ORJSONResponse
+    app = FastAPI(**app_kwargs)
 
-    # GZip compression — shrinks JSON responses (segments, jobs, artifacts)
-    # by ~70-85%. Only compress responses >= 500 bytes (smaller wastes CPU).
+    # Compression stack — Brotli is preferred when the client advertises "br"
+    # (~20-30% smaller than gzip on JSON); GZip handles everything else.
+    # Middleware dispatches outer→inner in registration order, so add GZip
+    # FIRST (outer wrapper) and Brotli SECOND (inner): GZip sees the already-
+    # encoded response when Brotli ran and skips it; otherwise it compresses.
     from fastapi.middleware.gzip import GZipMiddleware
     app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=6)
+    if _HAS_BROTLI:
+        app.add_middleware(BrotliMiddleware, minimum_size=500, quality=4)
+        logger.info("Brotli middleware registered (quality=4)")
 
     # CORS middleware
     app.add_middleware(

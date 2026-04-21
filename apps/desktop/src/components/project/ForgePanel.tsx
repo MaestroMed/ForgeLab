@@ -1046,6 +1046,8 @@ function SegmentCardCompact({
         <img
           src={`${baseUrl}/v1/projects/${projectId}/thumbnail?time=${segment.startTime + 1}&width=160&height=90`}
           alt=""
+          loading="lazy"
+          decoding="async"
           className="absolute inset-0 w-full h-full object-cover"
           onError={(e) => {
             (e.target as HTMLImageElement).style.display = 'none';

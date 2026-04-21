@@ -109,7 +109,7 @@ export default function FurnaceHUD() {
         <motion.div
           animate={{ scale: [1, 1.3, 1] }}
           transition={{ duration: beatDuration, repeat: Infinity, ease: 'easeInOut' }}
-          className="w-2.5 h-2.5 rounded-full"
+          className="w-2.5 h-2.5 rounded-full gpu-layer"
           style={{ backgroundColor: flameColor, boxShadow: `0 0 8px ${flameColor}` }}
         />
         <div className="flex-1">
