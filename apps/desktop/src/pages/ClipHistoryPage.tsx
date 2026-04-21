@@ -8,6 +8,7 @@ import { History, Search } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '@/lib/api';
 import { ENGINE_BASE_URL } from '@/lib/config';
+import { SegmentCardSkeleton } from '@/components/ui/Skeleton';
 
 type Artifact = {
   id: string;
@@ -73,7 +74,11 @@ export default function ClipHistoryPage() {
           </div>
 
           {isLoading ? (
-            <p className="text-center text-[var(--text-muted)] mt-12">Chargement...</p>
+            <div className="grid grid-cols-3 gap-4 mt-4">
+              {Array.from({ length: 9 }).map((_, i) => (
+                <SegmentCardSkeleton key={i} />
+              ))}
+            </div>
           ) : artifacts.length === 0 ? (
             <p className="text-center text-[var(--text-muted)] mt-12">Aucun clip exporté.</p>
           ) : (

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useHotkeys } from 'react-hotkeys-hook';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ENGINE_BASE_URL } from '@/lib/config';
 import { useSmoothNavigate } from '@/lib/hooks/useSmoothNavigate';
 import {
@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import InlineUrlBar from '@/components/import/InlineUrlBar';
 import OneClickModal from '@/components/import/OneClickModal';
+import { FilmstripCardSkeleton } from '@/components/ui/Skeleton';
 import { api } from '@/lib/api';
 import { useProjects, QUERY_KEYS } from '@/lib/queries';
 import { preloadProject } from '@/lib/routePreload';
@@ -268,17 +269,50 @@ export default function HomePage() {
   // Common handlers shared with the filmstrip cards
   const handleOpenProject = (p: Project) => smoothNavigate(`/project/${p.id}`);
 
-  const handlePinProject = async (p: Project) => {
-    try {
-      await api.pinProject(p.id, !p.isPinned);
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
-    } catch (err) {
+  // Optimistic pin toggle: the filmstrip re-orders immediately, and rolls
+  // back only if the backend rejects the change.
+  const togglePin = useMutation({
+    mutationFn: async ({ id, pin }: { id: string; pin: boolean }) =>
+      api.pinProject(id, pin),
+    onMutate: async ({ id, pin }) => {
+      // Cancel outstanding fetches for the projects list so they don't
+      // overwrite the optimistic value.
+      await queryClient.cancelQueries({ queryKey: QUERY_KEYS.projects });
+      const previous = queryClient.getQueriesData({ queryKey: QUERY_KEYS.projects });
+      // Projects are cached per search term — update every matching entry.
+      queryClient.setQueriesData<any>(
+        { queryKey: QUERY_KEYS.projects },
+        (old: any) => {
+          if (!old) return old;
+          const items = (old.data?.items ?? []).map((p: any) =>
+            p.id === id ? { ...p, isPinned: pin } : p,
+          );
+          return { ...old, data: { ...old.data, items } };
+        },
+      );
+      return { previous };
+    },
+    onError: (err, _vars, context) => {
+      // Restore every previously-cached variant of the projects query.
+      if (context?.previous) {
+        for (const [key, data] of context.previous) {
+          queryClient.setQueryData(key, data);
+        }
+      }
       addToast({
         type: 'error',
         title: 'Erreur',
-        message: err instanceof Error ? err.message : "Impossible d'épingler le projet",
+        message:
+          err instanceof Error ? err.message : "Impossible d'épingler le projet",
       });
-    }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.projects });
+    },
+  });
+
+  const handlePinProject = (p: Project) => {
+    togglePin.mutate({ id: p.id, pin: !p.isPinned });
   };
 
   const handleDeleteProject = async (p: Project) => {
@@ -878,11 +912,8 @@ function FilmstripSkeleton() {
         <div key={row}>
           <SectionHeader title={row === 0 ? 'Épinglés' : 'Projets'} />
           <div className="flex gap-6 overflow-hidden px-12 pb-6">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div
-                key={i}
-                className="flex-shrink-0 w-[280px] h-[420px] rounded-2xl bg-gradient-to-b from-white/5 to-white/[0.02] border border-white/5 animate-pulse"
-              />
+            {Array.from({ length: 4 }).map((_, i) => (
+              <FilmstripCardSkeleton key={i} />
             ))}
           </div>
         </div>

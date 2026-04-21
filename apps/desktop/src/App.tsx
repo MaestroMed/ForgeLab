@@ -8,13 +8,17 @@ import CommandPalette from '@/components/ui/CommandPalette';
 import BackendDownOverlay from '@/components/layout/BackendDownOverlay';
 import FurnaceHUD from '@/components/floating/FurnaceHUD';
 import KeyboardHints from '@/components/floating/KeyboardHints';
+import PerfOverlay from '@/components/floating/PerfOverlay';
 import Starfield from '@/components/ambient/Starfield';
 import RocketLaunch from '@/components/ambient/RocketLaunch';
 import Celebration from '@/components/ambient/Celebration';
 import ExportPremiere from '@/components/ambient/ExportPremiere';
 import FFmpegPoetry from '@/components/ambient/FFmpegPoetry';
+import AudioVuMeter from '@/components/ambient/AudioVuMeter';
+import TopProgressBar from '@/components/ambient/TopProgressBar';
 import Layout from '@/components/layout/Layout';
 import QuickSettings from '@/components/layout/QuickSettings';
+import ScrollRestoration from '@/components/layout/ScrollRestoration';
 import HomePage from '@/pages/HomePage';
 import ProjectPage from '@/pages/ProjectPage';
 import OnboardingPage from '@/pages/OnboardingPage';
@@ -59,6 +63,7 @@ function AnimatedRoutes() {
 
   return (
     <AnimatePresence mode="wait">
+      <ScrollRestoration />
       <Suspense key={location.pathname} fallback={<PageLoader />}>
         <Routes location={location} key={location.pathname}>
           <Route
@@ -199,6 +204,8 @@ export default function App() {
     <ErrorBoundary>
       {/* Ambient starfield — renders behind everything, on every route */}
       <Starfield />
+      {/* Route-transition progress bar (thin nprogress-style line) */}
+      <TopProgressBar />
       <Layout>
         <AnimatedRoutes />
       </Layout>
@@ -207,10 +214,13 @@ export default function App() {
       <BackendDownOverlay />
       <FurnaceHUD />
       <KeyboardHints />
+      <PerfOverlay />
       <RocketLaunch />
       <Celebration />
       <ExportPremiere />
       <FFmpegPoetry />
+      {/* Audio-reactive VU meter at the top edge when a video is playing */}
+      <AudioVuMeter />
       <QuickSettings />
       <Toaster />
     </ErrorBoundary>

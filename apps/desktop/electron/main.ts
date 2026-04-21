@@ -2,6 +2,22 @@ import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 
+// ─── GPU acceleration flags ────────────────────────────────────────────
+// Force GPU compositing (on Windows, helps with jank on mixed DPI).
+app.commandLine.appendSwitch('enable-gpu-rasterization');
+app.commandLine.appendSwitch('enable-zero-copy');
+app.commandLine.appendSwitch('ignore-gpu-blocklist');
+// WebGPU (Chromium 113+) for future video filters
+app.commandLine.appendSwitch('enable-unsafe-webgpu');
+// Smoother scrolling / animations
+app.commandLine.appendSwitch('smooth-scrolling');
+// Enable features that help video playback
+app.commandLine.appendSwitch('enable-features', 'CanvasOopRasterization,UseSkiaRenderer');
+// Force hardware-accelerated video decode (Windows)
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('enable-hardware-overlays');
+}
+
 let mainWindow: BrowserWindow | null = null;
 let engineProcess: ChildProcess | null = null;
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
@@ -24,6 +40,8 @@ async function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
+      backgroundThrottling: false,  // Keep animations smooth when window is not focused (for ambient effects)
+      v8CacheOptions: 'code',  // cache v8 compile output
     },
   });
 

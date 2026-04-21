@@ -17,7 +17,7 @@ import {
   Settings,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
-import { Skeleton } from '@/components/ui/Skeleton';
+import { Skeleton, VodSpineSkeleton, SegmentCardSkeleton } from '@/components/ui/Skeleton';
 import {
   useJobsStore,
   useToastStore,
@@ -1208,6 +1208,8 @@ export default function ProjectPage() {
   if (isLoading) {
     return (
       <div className="h-full w-full bg-[#0A0A0F] text-white">
+        {/* Hero skeleton — matches ProjectHero's footprint so the switch
+           once data arrives doesn't reflow the page. */}
         <div className="min-h-[60vh] w-full flex flex-col gap-4 p-12 justify-end">
           <Skeleton className="h-4 w-32" />
           <Skeleton className="h-16 w-2/3" />
@@ -1217,9 +1219,17 @@ export default function ProjectPage() {
             <Skeleton className="h-12 w-40 rounded-lg" />
           </div>
         </div>
-        <div className="px-12 pb-12 space-y-6">
-          <Skeleton className="h-52 w-full rounded-xl" />
-          <Skeleton className="h-32 w-full rounded-xl" />
+        {/* Timeline skeleton mirrors VodSpine proportions */}
+        <div className="px-12 pb-6">
+          <VodSpineSkeleton />
+        </div>
+        {/* Segment grid skeleton mirrors the top-segments carousel */}
+        <div className="px-12 pb-12">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <SegmentCardSkeleton key={i} />
+            ))}
+          </div>
         </div>
       </div>
     );
