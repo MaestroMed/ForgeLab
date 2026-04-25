@@ -2,36 +2,60 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 // UI state store
+export type AppMode = 'creator' | 'operator';
+
 interface UIState {
   sidebarCollapsed: boolean;
   currentPanel: 'ingest' | 'analyze' | 'forge' | 'export';
   jobDrawerOpen: boolean;
   shortcutsModalOpen: boolean;
   isFullscreen: boolean;
+  /**
+   * UI mode:
+   *  - 'creator' = animations, ceremony, SFX, ambient effects (default)
+   *  - 'operator' = dense, keyboard-first, zero-ceremony for power users
+   */
+  mode: AppMode;
   toggleSidebar: () => void;
   setCurrentPanel: (panel: UIState['currentPanel']) => void;
   setJobDrawerOpen: (open: boolean) => void;
   setShortcutsModalOpen: (open: boolean) => void;
   setFullscreen: (fullscreen: boolean) => void;
   toggleFullscreen: () => Promise<void>;
+  setMode: (mode: AppMode) => void;
+  toggleMode: () => void;
 }
 
-export const useUIStore = create<UIState>((set) => ({
-  sidebarCollapsed: false,
-  currentPanel: 'ingest',
-  jobDrawerOpen: false,
-  shortcutsModalOpen: false,
-  isFullscreen: false,
-  toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
-  setCurrentPanel: (panel) => set({ currentPanel: panel }),
-  setJobDrawerOpen: (open) => set({ jobDrawerOpen: open }),
-  setShortcutsModalOpen: (open) => set({ shortcutsModalOpen: open }),
-  setFullscreen: (fullscreen) => set({ isFullscreen: fullscreen }),
-  toggleFullscreen: async () => {
-    const result = await (window.forge as any)?.toggleFullscreen();
-    set({ isFullscreen: result });
-  },
-}));
+export const useUIStore = create<UIState>()(
+  persist(
+    (set) => ({
+      sidebarCollapsed: false,
+      currentPanel: 'ingest',
+      jobDrawerOpen: false,
+      shortcutsModalOpen: false,
+      isFullscreen: false,
+      mode: 'creator',
+      toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+      setCurrentPanel: (panel) => set({ currentPanel: panel }),
+      setJobDrawerOpen: (open) => set({ jobDrawerOpen: open }),
+      setShortcutsModalOpen: (open) => set({ shortcutsModalOpen: open }),
+      setFullscreen: (fullscreen) => set({ isFullscreen: fullscreen }),
+      toggleFullscreen: async () => {
+        const result = await (window.forge as any)?.toggleFullscreen();
+        set({ isFullscreen: result });
+      },
+      setMode: (mode) => set({ mode }),
+      toggleMode: () =>
+        set((state) => ({ mode: state.mode === 'operator' ? 'creator' : 'operator' })),
+    }),
+    {
+      name: 'forge-ui',
+      // Only persist the user's mode preference — sidebar/fullscreen/etc.
+      // are session-scoped.
+      partialize: (state) => ({ mode: state.mode }),
+    },
+  ),
+);
 
 // Batch selection store for segments
 interface BatchSelectionState {

@@ -39,14 +39,36 @@ async def get_job(job_id: str) -> dict:
 
 @router.post("/{job_id}/cancel")
 async def cancel_job(job_id: str) -> dict:
-    """Cancel a job."""
-    job_manager = JobManager.get_instance()
-    cancelled = await job_manager.cancel_job(job_id)
+    """Cancel a job.
 
-    if not cancelled:
+    Signals both the legacy JobManager AND the new cooperative cancellation
+    context. The latter kills any bound subprocess (ffmpeg, yt-dlp) via
+    taskkill /T on Windows or killpg(SIGTERM) on POSIX, so long-running
+    external processes actually stop instead of zombie-ing.
+    """
+    from forge_engine.core.cancellation import cancel_job as coop_cancel
+
+    # 1) Cooperative signal — raises JobCancelled in any awaiting handler
+    coop_cancelled = coop_cancel(job_id)
+
+    # 2) Legacy JobManager cancel (marks DB record)
+    job_manager = JobManager.get_instance()
+    try:
+        legacy_cancelled = await job_manager.cancel_job(job_id)
+    except Exception:
+        legacy_cancelled = False
+
+    if not coop_cancelled and not legacy_cancelled:
         raise HTTPException(status_code=400, detail="Job cannot be cancelled")
 
-    return {"success": True, "data": {"cancelled": True}}
+    return {
+        "success": True,
+        "data": {
+            "cancelled": True,
+            "cooperative": coop_cancelled,
+            "legacy": legacy_cancelled,
+        },
+    }
 
 
 @router.post("/{job_id}/retry")

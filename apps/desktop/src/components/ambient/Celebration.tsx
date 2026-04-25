@@ -1,5 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { create } from 'zustand';
+import { useAppMode } from '@/lib/hooks/useAppMode';
 
 export type CelebrationType = 'viral' | 'export' | 'approve' | 'bigwin';
 
@@ -88,6 +89,11 @@ const PRESETS: Record<
 
 export default function Celebration() {
   const active = useCelebrationStore((s) => s.active);
+  const { isOperator } = useAppMode();
+
+  // Operator mode: keep the store firing (other subsystems may listen) but
+  // don't render particles.
+  if (isOperator) return null;
 
   return (
     <div className="fixed inset-0 pointer-events-none z-[210]">

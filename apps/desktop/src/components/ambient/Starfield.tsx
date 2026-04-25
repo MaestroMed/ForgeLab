@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useAppMode } from '@/lib/hooks/useAppMode';
 
 interface Props {
   density?: number;        // 0-1 (default 0.6)
@@ -25,9 +26,13 @@ export default function Starfield({
   color = '#00D4FF',
   particleCount = 50,
 }: Props) {
+  const { isOperator } = useAppMode();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const workerRef = useRef<Worker | null>(null);
   const rafRef = useRef<number | null>(null);
+
+  // Operator mode: no ambient particles, period.
+  if (isOperator) return null;
 
   useEffect(() => {
     const canvas = canvasRef.current;

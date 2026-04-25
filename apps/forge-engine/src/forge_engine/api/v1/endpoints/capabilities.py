@@ -596,3 +596,31 @@ async def set_transcription_provider(request: ProviderSettingRequest) -> dict:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# FORGE LAB 2.0 — resource scheduler + media cache introspection
+# ---------------------------------------------------------------------------
+
+
+@router.get("/resources/slots")
+async def get_resource_slots() -> dict:
+    """Return current resource scheduler slot availability (gpu/nvenc/cpu/network)."""
+    from forge_engine.core.resource_scheduler import ResourceScheduler
+    scheduler = ResourceScheduler.get_instance()
+    return scheduler.snapshot()
+
+
+@router.get("/cache/media")
+async def get_media_cache_stats() -> dict:
+    """Return content-addressed media cache statistics."""
+    from forge_engine.services import media_cache
+    return media_cache.cache_stats()
+
+
+@router.post("/cache/media/gc")
+async def garbage_collect_media_cache(max_age_days: int = 30) -> dict:
+    """Delete cached media files older than max_age_days."""
+    from forge_engine.services import media_cache
+    deleted = media_cache.garbage_collect(max_age_days=max_age_days)
+    return {"deleted": deleted, "max_age_days": max_age_days}

@@ -92,6 +92,11 @@ apps/desktop/resources/ffmpeg/
 apps/desktop/resources/ffmpeg-*/
 apps/desktop/resources/*.zip
 
+# Generated test fixtures — regenerate via fixtures/media/generate.sh
+fixtures/media/*.mp4
+fixtures/media/*.mkv
+fixtures/media/*.webm
+
 # Installer graphics (optional, user-provided)
 # apps/desktop/build-resources/installer-header.bmp
 # apps/desktop/build-resources/installer-sidebar.bmp
