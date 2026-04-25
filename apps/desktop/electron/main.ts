@@ -1,6 +1,8 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import path from 'path';
 import { spawn, ChildProcess } from 'child_process';
+import { EngineSupervisor } from './engineSupervisor';
+import { registerSecureVaultIpc } from './secureVault';
 
 // ─── GPU acceleration flags ────────────────────────────────────────────
 // Force GPU compositing (on Windows, helps with jank on mixed DPI).
@@ -20,7 +22,9 @@ if (process.platform === 'win32') {
 
 let mainWindow: BrowserWindow | null = null;
 let engineProcess: ChildProcess | null = null;
+let supervisor: EngineSupervisor | null = null;
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+const USE_SUPERVISOR = process.env.FORGE_USE_SUPERVISOR === '1';
 
 const ENGINE_PORT = 8420;
 
@@ -143,13 +147,40 @@ async function startEngine() {
 
   // Set PYTHONPATH correctly for the module structure
   const pythonSrcPath = path.join(enginePath, 'src');
-  
+
   console.log('Engine config:', {
     pythonPath,
     enginePath,
     pythonSrcPath,
     cwd: enginePath,
+    useSupervisor: USE_SUPERVISOR,
   });
+
+  // Opt-in supervised engine path (FORGE_USE_SUPERVISOR=1)
+  if (USE_SUPERVISOR) {
+    try {
+      supervisor = new EngineSupervisor({
+        pythonPath,
+        pythonSrcPath,
+        extraEnv: { PATH: enhancedPath },
+        onLog: (line, stream) => {
+          if (stream === 'stderr') console.error('[Engine]', line);
+          else console.log('[Engine]', line);
+          mainWindow?.webContents.send('engine:log', { stream, line });
+        },
+        onStatusChange: (info) => {
+          mainWindow?.webContents.send('engine:status', info);
+        },
+      });
+      const info = await supervisor.start();
+      console.log('Supervised engine started on port', info.port);
+      return true;
+    } catch (e) {
+      console.error('Supervisor start failed:', e);
+      supervisor = null;
+      return false;
+    }
+  }
 
   engineProcess = spawn(pythonPath, ['-m', 'uvicorn', 'forge_engine.main:app', '--host', '0.0.0.0', '--port', ENGINE_PORT.toString()], {
     cwd: pythonSrcPath,  // Run from src directory
@@ -195,6 +226,14 @@ function stopEngine() {
     console.log('Stopping FORGE Engine...');
     engineProcess.kill();
     engineProcess = null;
+  }
+}
+
+async function stopSupervisor() {
+  if (supervisor) {
+    console.log('Stopping supervised FORGE Engine...');
+    try { await supervisor.stop(); } catch (e) { console.error('Supervisor stop error:', e); }
+    supervisor = null;
   }
 }
 
@@ -255,8 +294,11 @@ ipcMain.handle('engine:start', async () => {
 
 ipcMain.handle('engine:stop', async () => {
   stopEngine();
+  await stopSupervisor();
   return true;
 });
+
+ipcMain.handle('engine:getInfo', () => supervisor?.getInfo() ?? null);
 
 // Window controls
 ipcMain.handle('window:toggle-fullscreen', () => {
@@ -292,6 +334,10 @@ ipcMain.handle('window:getState', () => {
 
 // App lifecycle
 app.whenReady().then(async () => {
+  // Register the secure credential vault IPC handlers early, so the renderer
+  // can query availability even before the engine is up.
+  registerSecureVaultIpc();
+
   await startEngine();
   await createWindow();
 
@@ -304,12 +350,22 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   stopEngine();
+  void stopSupervisor();
   if (process.platform !== 'darwin') {
     app.quit();
   }
 });
 
-app.on('before-quit', () => {
+let quitting = false;
+app.on('before-quit', async (event) => {
+  if (supervisor && !quitting) {
+    event.preventDefault();
+    quitting = true;
+    await stopSupervisor();
+    stopEngine();
+    app.quit();
+    return;
+  }
   stopEngine();
 });
 

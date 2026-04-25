@@ -19,6 +19,22 @@ contextBridge.exposeInMainWorld('forge', {
   startEngine: () => ipcRenderer.invoke('engine:start'),
   stopEngine: () => ipcRenderer.invoke('engine:stop'),
 
+  // Engine supervisor info (opt-in path)
+  getEngineInfo: () => ipcRenderer.invoke('engine:getInfo'),
+
+  // Secure credential vault (keytar-backed — OS keychain)
+  vault: {
+    set: (namespace: string, account: string, value: string) =>
+      ipcRenderer.invoke('vault:set', { namespace, account, value }),
+    get: (namespace: string, account: string) =>
+      ipcRenderer.invoke('vault:get', { namespace, account }),
+    delete: (namespace: string, account: string) =>
+      ipcRenderer.invoke('vault:delete', { namespace, account }),
+    list: (namespace: string) =>
+      ipcRenderer.invoke('vault:list', { namespace }),
+    available: () => ipcRenderer.invoke('vault:available'),
+  },
+
   // Platform info
   platform: process.platform,
 
@@ -65,6 +81,20 @@ declare global {
       getEngineStatus: () => Promise<{ running: boolean; port: number }>;
       startEngine: () => Promise<boolean>;
       stopEngine: () => Promise<boolean>;
+      getEngineInfo: () => Promise<{
+        pid: number;
+        port: number;
+        version: string;
+        started_at: string;
+        status: 'starting' | 'healthy' | 'unhealthy' | 'stopped';
+      } | null>;
+      vault: {
+        set: (namespace: string, account: string, value: string) => Promise<void>;
+        get: (namespace: string, account: string) => Promise<string | null>;
+        delete: (namespace: string, account: string) => Promise<boolean>;
+        list: (namespace: string) => Promise<Array<{ account: string }>>;
+        available: () => Promise<boolean>;
+      };
       platform: NodeJS.Platform;
       // Window controls
       toggleFullscreen: () => Promise<boolean>;

@@ -1,5 +1,19 @@
 /// <reference types="vite/client" />
 
+// Explicit ImportMeta augmentation so TS picks up env regardless of whether
+// the triple-slash reference above resolves in all contexts.
+interface ImportMetaEnv {
+  readonly DEV: boolean;
+  readonly PROD: boolean;
+  readonly MODE: string;
+  readonly VITE_CHANNEL?: string;
+  readonly [key: string]: string | boolean | undefined;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+
 interface Window {
   forge: {
     getVersion: () => Promise<string>;

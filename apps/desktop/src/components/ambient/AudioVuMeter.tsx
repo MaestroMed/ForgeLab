@@ -1,8 +1,10 @@
 import { useEffect, useState, useRef } from 'react';
+import { useAppMode } from '@/lib/hooks/useAppMode';
 
 /**
  * Ambient VU meter that reacts to the first actively-playing video on the page.
  * Shown as a thin bar at the top edge when audio is actually playing.
+ * Skipped in Operator mode (dense / keyboard-first workflow).
  *
  * Implementation notes:
  *   - `createMediaElementSource` can only be called ONCE per media element,
@@ -12,6 +14,7 @@ import { useEffect, useState, useRef } from 'react';
  *     cheap and avoids mutation-observer complexity.
  */
 export default function AudioVuMeter() {
+  const { isOperator } = useAppMode();
   const [level, setLevel] = useState(0);
   const [active, setActive] = useState(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -111,7 +114,7 @@ export default function AudioVuMeter() {
     };
   }, []);
 
-  if (!active) return null;
+  if (!active || isOperator) return null;
 
   const width = Math.min(100, level * 300); // amplify
 

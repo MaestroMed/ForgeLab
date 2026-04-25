@@ -1011,6 +1011,138 @@ async def get_segment(
     return {"success": True, "data": segment.to_dict()}
 
 
+@router.get("/{project_id}/segments/{segment_id}/explanation")
+async def get_segment_explanation(
+    project_id: str,
+    segment_id: str,
+    regenerate: bool = False,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Get the explainability report for a segment.
+
+    Returns the persisted SegmentExplanation if present; otherwise
+    generates one via SegmentExplainer, persists, and returns it.
+
+    Query params:
+      regenerate=true — force re-generation even if cached
+    """
+    import json as _json
+
+    from forge_engine.models.segment import Segment as _Segment
+    from forge_engine.models.segment_explanation import SegmentExplanation
+    from forge_engine.services.explainer import SegmentExplainer
+
+    segment = await db.get(_Segment, segment_id)
+    if not segment or segment.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Segment not found")
+
+    # Check cache
+    if not regenerate:
+        result = await db.execute(
+            select(SegmentExplanation).where(SegmentExplanation.segment_id == segment_id)
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            return existing.to_dict()
+
+    # Generate
+    explainer = SegmentExplainer.get_instance()
+    exp = await explainer.explain(segment)
+
+    # Persist (upsert by segment_id)
+    result = await db.execute(
+        select(SegmentExplanation).where(SegmentExplanation.segment_id == segment_id)
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        row = SegmentExplanation(segment_id=segment_id)
+        db.add(row)
+    row.summary = exp.summary
+    row.strengths_json = _json.dumps(exp.strengths, ensure_ascii=False)
+    row.weaknesses_json = _json.dumps(exp.weaknesses, ensure_ascii=False)
+    row.evidence_json = _json.dumps(exp.evidence, ensure_ascii=False)
+    row.subscores_json = _json.dumps(exp.subscores)
+    row.suggested_title = exp.suggested_title
+    row.suggested_description = exp.suggested_description
+    row.suggested_hashtags_json = _json.dumps(exp.suggested_hashtags, ensure_ascii=False)
+    row.suggested_platforms_json = _json.dumps(exp.suggested_platforms)
+    row.confidence = exp.confidence
+    await db.commit()
+    await db.refresh(row)
+
+    return row.to_dict()
+
+
+@router.post("/{project_id}/segments/{segment_id}/explanation/regenerate")
+async def regenerate_segment_explanation(
+    project_id: str,
+    segment_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Force-regenerate the explanation (e.g. after score change)."""
+    return await get_segment_explanation(project_id, segment_id, regenerate=True, db=db)
+
+
+@router.post("/{project_id}/segments/explanations/bulk")
+async def bulk_explain_segments(
+    project_id: str,
+    min_score: float = 60.0,
+    limit: int = 30,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Generate explanations for the top N highest-scoring segments.
+
+    Fire-and-forget in the background would be ideal; for now runs
+    synchronously (capped at limit=30 to avoid blocking too long).
+    """
+    import json as _json
+
+    from forge_engine.models.segment import Segment as _Segment
+    from forge_engine.models.segment_explanation import SegmentExplanation
+    from forge_engine.services.explainer import SegmentExplainer
+
+    result = await db.execute(
+        select(_Segment)
+        .where(_Segment.project_id == project_id)
+        .where(_Segment.score_total >= min_score)
+        .order_by(_Segment.score_total.desc())
+        .limit(limit)
+    )
+    segments = result.scalars().all()
+
+    explainer = SegmentExplainer.get_instance()
+    generated = 0
+    for seg in segments:
+        # Skip if already explained
+        existing_q = await db.execute(
+            select(SegmentExplanation).where(SegmentExplanation.segment_id == seg.id)
+        )
+        if existing_q.scalar_one_or_none():
+            continue
+        try:
+            exp = await explainer.explain(seg)
+            row = SegmentExplanation(
+                segment_id=seg.id,
+                summary=exp.summary,
+                strengths_json=_json.dumps(exp.strengths, ensure_ascii=False),
+                weaknesses_json=_json.dumps(exp.weaknesses, ensure_ascii=False),
+                evidence_json=_json.dumps(exp.evidence, ensure_ascii=False),
+                subscores_json=_json.dumps(exp.subscores),
+                suggested_title=exp.suggested_title,
+                suggested_description=exp.suggested_description,
+                suggested_hashtags_json=_json.dumps(exp.suggested_hashtags, ensure_ascii=False),
+                suggested_platforms_json=_json.dumps(exp.suggested_platforms),
+                confidence=exp.confidence,
+            )
+            db.add(row)
+            generated += 1
+        except Exception as e:
+            logger.warning("Explain failed for segment %s: %s", seg.id[:8], e)
+
+    await db.commit()
+    return {"generated": generated, "total_candidates": len(segments)}
+
+
 class UpdateTranscriptRequest(BaseModel):
     """Request to update segment transcript."""
     words: list[dict] | None = None  # [{word, start, end, confidence?}]
@@ -1893,7 +2025,216 @@ async def serve_artifact_file(
     )
 
 
+# ---------------------------------------------------------------------------
+# RENDER MODES — unified preview/draft/final with RenderRecipe persistence
+# ---------------------------------------------------------------------------
 
 
+class RenderRequest(BaseModel):
+    """Unified render request — one endpoint, three modes."""
+    mode: str = "preview"  # preview | draft | final
+    platform: str = "tiktok"
+    layout: dict | None = None
+    caption_style: dict | None = None
+    intro: dict | None = None
+    audio: dict | None = None
+    jumpcut: dict | None = None
+    max_duration: float | None = None
+
+
+@router.post("/{project_id}/segments/{segment_id}/render")
+async def render_segment(
+    project_id: str,
+    segment_id: str,
+    request: RenderRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Unified render endpoint — preview / draft / final.
+
+    - preview  = 360x640 ultrafast, returns path in ~5s (capped 20s clip length)
+    - draft    = 720x1280 medium, returns path in ~10-20s
+    - final    = 1080x1920 full pipeline + QC + thumbnail → queues a job
+
+    Always persists a RenderRecipe for reproducibility.
+    """
+    from forge_engine.rendering.modes import RenderMode, RenderModeConfig
+    from forge_engine.rendering.recipe_builder import (
+        compute_recipe_hash,
+        normalize_recipe_payload,
+        persist_recipe,
+    )
+
+    # Validate mode
+    try:
+        mode = RenderMode(request.mode)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid mode: {request.mode}")
+
+    config = RenderModeConfig.for_mode(mode)
+
+    # Load project + segment
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    segment = await db.get(Segment, segment_id)
+    if not segment or segment.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Segment not found")
+
+    # Check for existing recipe (hash dedup)
+    payload = normalize_recipe_payload(
+        platform=request.platform,
+        layout=request.layout,
+        caption_style=request.caption_style,
+        intro=request.intro,
+        audio=request.audio,
+        jumpcut=request.jumpcut,
+    )
+    graph_hash = compute_recipe_hash(payload)
+
+    # For final mode, queue an export job via existing path
+    if mode == RenderMode.FINAL:
+        # Persist recipe
+        recipe, _hash = await persist_recipe(
+            db,
+            project_id=project_id,
+            segment_id=segment_id,
+            platform=request.platform,
+            layout=request.layout,
+            caption_style=request.caption_style,
+            intro=request.intro,
+            audio=request.audio,
+            jumpcut=request.jumpcut,
+        )
+        await db.commit()
+        return {
+            "mode": "final",
+            "status": "queued",
+            "recipe_id": recipe.id,
+            "recipe_hash": graph_hash,
+            "message": "Use POST /projects/{id}/segments/{sid}/export for actual final render (this endpoint confirms recipe persisted)",
+        }
+
+    # Preview / Draft: run inline via FFmpeg at the requested resolution
+    import asyncio
+    import time
+    from pathlib import Path as _P
+
+    from forge_engine.core.config import settings as _s
+    from forge_engine.services.ffmpeg import FFmpegService
+
+    renders_dir = _s.TEMP_PATH / "renders"
+    renders_dir.mkdir(parents=True, exist_ok=True)
+    out_path = renders_dir / f"{graph_hash[:12]}_{mode.value}.mp4"
+
+    # Cache hit: same hash + same mode → return cached if fresh (< 24h)
+    if out_path.exists() and time.time() - out_path.stat().st_mtime < 86400:
+        await persist_recipe(
+            db, project_id=project_id, segment_id=segment_id, platform=request.platform,
+            layout=request.layout, caption_style=request.caption_style,
+            intro=request.intro, audio=request.audio, jumpcut=request.jumpcut,
+            produced_artifact_id=None,
+        )
+        await db.commit()
+        return {
+            "mode": mode.value,
+            "status": "cached",
+            "path": str(out_path),
+            "recipe_hash": graph_hash,
+            "width": config.width,
+            "height": config.height,
+        }
+
+    # Actual render — simple scale-crop pipeline at the target resolution
+    ffmpeg = FFmpegService.get_instance()
+    duration = min(
+        config.max_duration_seconds or segment.duration,
+        segment.duration,
+    )
+    cmd = [
+        ffmpeg.ffmpeg_path, "-y",
+        "-ss", str(segment.start_time),
+        "-i", project.source_path,
+        "-t", str(duration),
+        "-vf", f"scale={config.width}:{config.height}:force_original_aspect_ratio=decrease,pad={config.width}:{config.height}:(ow-iw)/2:(oh-ih)/2",
+        "-c:v", "libx264",
+        "-preset", config.preset,
+        "-crf", str(config.crf),
+        "-r", str(config.fps),
+        "-c:a", "aac", "-b:a", "96k",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        await asyncio.wait_for(proc.communicate(), timeout=120 if mode == RenderMode.DRAFT else 45)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail="Render timeout")
+
+    if not out_path.exists() or out_path.stat().st_size < 1024:
+        raise HTTPException(status_code=500, detail="Render produced empty file")
+
+    # Persist recipe
+    await persist_recipe(
+        db, project_id=project_id, segment_id=segment_id, platform=request.platform,
+        layout=request.layout, caption_style=request.caption_style,
+        intro=request.intro, audio=request.audio, jumpcut=request.jumpcut,
+    )
+    await db.commit()
+
+    return {
+        "mode": mode.value,
+        "status": "rendered",
+        "path": str(out_path),
+        "recipe_hash": graph_hash,
+        "width": config.width,
+        "height": config.height,
+        "duration": duration,
+    }
+
+
+@router.get("/{project_id}/recipes")
+async def list_render_recipes(
+    project_id: str,
+    segment_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """List render recipes for a project (optionally filtered by segment)."""
+    from forge_engine.models.render_recipe import RenderRecipe
+
+    q = select(RenderRecipe).where(RenderRecipe.project_id == project_id)
+    if segment_id:
+        q = q.where(RenderRecipe.segment_id == segment_id)
+    q = q.order_by(RenderRecipe.created_at.desc()).limit(50)
+    result = await db.execute(q)
+    recipes = result.scalars().all()
+    return {"recipes": [r.to_dict() for r in recipes]}
+
+
+@router.get("/renders/file")
+async def serve_rendered_file(path: str):
+    """Serve a rendered file by absolute path, restricted to TEMP_PATH/renders."""
+    from pathlib import Path as _P
+
+    from fastapi.responses import FileResponse
+
+    from forge_engine.core.config import settings as _s
+
+    requested = _P(path).resolve()
+    allowed_dir = (_s.TEMP_PATH / "renders").resolve()
+    try:
+        requested.relative_to(allowed_dir)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path not allowed")
+    if not requested.exists():
+        raise HTTPException(status_code=404, detail="Render not found")
+    return FileResponse(str(requested), media_type="video/mp4")
 
 

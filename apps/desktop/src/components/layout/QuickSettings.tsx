@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Volume2, VolumeX, Settings, ChevronRight } from 'lucide-react';
+import { X, Volume2, VolumeX, Settings, ChevronRight, Sparkles, Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { isSfxEnabled, setSfxEnabled } from '@/lib/sfx';
+import { useAppMode } from '@/lib/hooks/useAppMode';
 
 /**
  * Right-edge slide-in drawer exposing the most-used settings (sound, shortcut
@@ -12,19 +13,27 @@ export default function QuickSettings() {
   const [open, setOpen] = useState(false);
   const [sfxOn, setSfxOn] = useState(true);
   const navigate = useNavigate();
+  const { mode, isOperator, toggle: toggleMode } = useAppMode();
 
   useEffect(() => {
     setSfxOn(isSfxEnabled());
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+      const target = e.target as HTMLElement;
+      const isTyping = target.matches('input, textarea, [contenteditable], select');
+      if ((e.metaKey || e.ctrlKey) && e.key === ',' && !isTyping) {
         e.preventDefault();
         setOpen((o) => !o);
+      }
+      // Ctrl/Cmd + . → toggle creator/operator mode globally (no drawer needed)
+      if ((e.metaKey || e.ctrlKey) && e.key === '.' && !isTyping) {
+        e.preventDefault();
+        toggleMode();
       }
       if (e.key === 'Escape' && open) setOpen(false);
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [open]);
+  }, [open, toggleMode]);
 
   const toggleSfx = () => {
     const next = !sfxOn;
@@ -65,6 +74,38 @@ export default function QuickSettings() {
             </div>
 
             <div className="p-5 space-y-5">
+              {/* Mode (creator vs operator) */}
+              <div>
+                <h3 className="text-[10px] uppercase tracking-wider text-white/40 mb-3">
+                  Mode
+                </h3>
+                <button
+                  onClick={toggleMode}
+                  className="w-full flex items-center justify-between p-3 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 transition-colors text-left"
+                >
+                  <div className="flex items-start gap-2">
+                    {isOperator ? (
+                      <Zap className="w-4 h-4 text-viral-medium mt-0.5 flex-shrink-0" />
+                    ) : (
+                      <Sparkles className="w-4 h-4 text-viral-medium mt-0.5 flex-shrink-0" />
+                    )}
+                    <div>
+                      <div className="text-sm font-medium">
+                        {mode === 'creator' ? 'Creator' : 'Operator'}
+                      </div>
+                      <div className="text-[10px] text-white/50 mt-0.5">
+                        {mode === 'creator'
+                          ? 'Animations, SFX, ambient'
+                          : 'Dense, keyboard-first, zero-ceremony'}
+                      </div>
+                    </div>
+                  </div>
+                  <kbd className="text-[10px] px-1.5 py-0.5 bg-white/10 rounded border border-white/10 font-mono">
+                    ⌘.
+                  </kbd>
+                </button>
+              </div>
+
               {/* Sound */}
               <div>
                 <h3 className="text-[10px] uppercase tracking-wider text-white/40 mb-3">Son</h3>

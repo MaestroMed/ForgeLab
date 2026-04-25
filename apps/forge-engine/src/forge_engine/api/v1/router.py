@@ -69,6 +69,10 @@ api_router.include_router(whitelabel_router, prefix="/enterprise", tags=["enterp
 from forge_engine.api.v1.endpoints.pipeline import router as pipeline_router
 api_router.include_router(pipeline_router, prefix="/pipeline", tags=["pipeline"])
 
+# FORGE LAB 2.0 — restricted review sessions for mobile PWA
+from forge_engine.api.v1.endpoints.review_sessions import router as review_sessions_router
+api_router.include_router(review_sessions_router, tags=["Review Sessions"])
+
 
 
 
